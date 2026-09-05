@@ -17,7 +17,7 @@ final class MenuPages {
         }
         return switch (route) {
             case PAUSE_CONSOLE -> page(route, "COFFEE GB", "", "", "",
-                    List.of("PLAY TIME", "00:00", "NO BATTERY SAVE"),
+                    List.of("PLAY TIME 00:00", "NO BATTERY SAVE"),
                     items(
                             button("save-state", "SAVE STATE"),
                             button("load-state", "LOAD STATE"),
@@ -112,9 +112,9 @@ final class MenuPages {
                             button("storage", "NO BROAD STORAGE ACCESS"),
                             button("live-camera", "CAMERA ONLY WHEN ENABLED"),
                             button("source-notices", "SOURCE & THIRD-PARTY NOTICES")));
-            case CONFIRM_ACTION -> page(route, "COFFEE GB", "CONFIRM ACTION", "", "RESET GAME",
+            case CONFIRM_ACTION -> page(route, "COFFEE GB", "RESET GAME?", "", "RESET GAME",
                     List.of("UNSAVED PROGRESS MAY BE LOST"),
-                    items(button("confirm", "CONFIRM"),
+                    items(button("confirm", "RESET GAME"),
                             button("cancel", "CANCEL")), 1, DEFAULT_HINTS,
                     "cancel", MenuPreview.empty());
         };
@@ -128,17 +128,17 @@ final class MenuPages {
         String context = load ? "LOAD STATES" : "SAVE STATES";
         return page(MenuRoute.SAVE_STATES, "COFFEE GB", context, "", "", List.of(),
                 items(
-                        button("slot-0", "SLOT 0"),
-                        button("slot-1", "SLOT 1"),
-                        button("slot-2", "SLOT 2"),
-                        button("slot-3", "SLOT 3"),
-                        button("slot-4", "SLOT 4"),
-                        button("slot-5", "SLOT 5"),
-                        button("slot-6", "SLOT 6"),
-                        button("slot-7", "SLOT 7"),
-                        button("slot-8", "SLOT 8"),
-                        button("slot-9", "SLOT 9")),
-                1, List.of("D-PAD MOVE", "A " + (load ? "LOAD" : "SAVE"), "B BACK"),
+                        button("slot-0", "SLOT 0", "EMPTY"),
+                        button("slot-1", "SLOT 1", "EMPTY"),
+                        button("slot-2", "SLOT 2", "EMPTY"),
+                        button("slot-3", "SLOT 3", "EMPTY"),
+                        button("slot-4", "SLOT 4", "EMPTY"),
+                        button("slot-5", "SLOT 5", "EMPTY"),
+                        button("slot-6", "SLOT 6", "EMPTY"),
+                        button("slot-7", "SLOT 7", "EMPTY"),
+                        button("slot-8", "SLOT 8", "EMPTY"),
+                        button("slot-9", "SLOT 9", "EMPTY")),
+                1, List.of("D-PAD MOVE", load ? "" : "A SAVE", "B BACK"),
                 "slot-0", MenuPreview.empty());
     }
 

@@ -882,7 +882,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         AndroidStateSlot selected = stateSlot(slot);
         MenuPreview preview = selected == null ? MenuPreview.empty() : selected.preview();
         List<String> sideLines = stateSavedAtLines(selected);
-        if (presentation.preview() == preview && presentation.sideLines().equals(sideLines)) {
+        if (presentation.preview() == preview && presentation.sideLines().equals(sideLines)
+                && presentation.footerHints().get(1).equals(statePrimaryHint(selected))) {
             return false;
         }
         String focusId = focused.id();
@@ -2775,12 +2776,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuPageSpec statePage(MenuPreview preview, String preferredFocus) {
         List<MenuPageSpec.Item> items = stateMenuItems(stateSlots);
         String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
+        AndroidStateSlot selected = stateSlot(preferredFocus == null
+                ? StateRef.MIN_SLOT : parseSlot(preferredFocus.replace("slot:", "")));
         return new MenuPageSpec(MenuRoute.SAVE_STATES, "COFFEE GB", mode + " STATES", "", "",
-                stateSavedAtLines(stateSlot(preferredFocus == null
-                        ? StateRef.MIN_SLOT : parseSlot(preferredFocus.replace("slot:", "")))),
+                stateSavedAtLines(selected),
                 items, 1,
-                List.of("D-PAD MOVE", "A " + mode, "B BACK"),
+                List.of("D-PAD MOVE", statePrimaryHint(selected), "B BACK"),
                 preferredFocus == null ? "slot:" + StateRef.MIN_SLOT : preferredFocus, preview);
+    }
+
+    private String statePrimaryHint(AndroidStateSlot selected) {
+        if (stateMenuMode == StateMenuMode.SAVE) {
+            return "A SAVE";
+        }
+        return selected != null && selected.loadable() ? "A LOAD" : "";
     }
 
     private MenuPageSpec recentGamesPage() {
@@ -2824,7 +2833,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             // The reusable button detail distinguishes a persisted state from an empty but still
             // focusable slot without requiring a save-state-specific asset.
             items.add(MenuPageSpec.Item.button("slot:" + index, "SLOT " + index,
-                    used ? "SAVED" : "", true));
+                    used ? "SAVED" : "EMPTY", true));
         }
         return List.copyOf(items);
     }

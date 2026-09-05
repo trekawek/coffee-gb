@@ -32,12 +32,109 @@ public class MenuControllerTest {
         assertEquals("recent-games-status", empty.items().get(0).id());
         assertEquals("NO RECENT GAMES", empty.items().get(0).label());
         assertEquals(List.of("", "", "B BACK"), empty.footerHints());
+        assertEquals(List.of("GO BACK AND CHOOSE OPEN ROM"), empty.sideLines());
 
         MenuPageSpec unavailable = MenuPageSpec.recentGames(List.of(
                 new MenuPageSpec.RecentGame("missing", "MISSING.GB", "LAST WEEK", false,
                         MenuPreview.empty())), null);
         assertEquals("recent-games-status", unavailable.preferredFocusId());
         assertEquals("NO READABLE RECENT GAMES", unavailable.items().get(1).label());
+    }
+
+    @Test
+    public void unavailableRecentSelectionFallsBackToAnEnabledEntryAndItsPreview() {
+        MenuPreview preview = MenuPreview.ready(1, 1, new int[] {0xff123456});
+        MenuPageSpec.RecentGame missing = new MenuPageSpec.RecentGame(
+                "missing", "MISSING.GB", "LAST WEEK", false, MenuPreview.empty());
+        MenuPageSpec spec = MenuPageSpec.recentGames(List.of(missing,
+                new MenuPageSpec.RecentGame("available", "AVAILABLE.GB", "TODAY", true,
+                        preview)), "missing");
+
+        assertEquals("available", spec.preferredFocusId());
+        assertEquals(preview, spec.preview());
+        assertEquals(List.of("LAST PLAYED: TODAY"), spec.sideLines());
+
+        MenuPageSpec unavailable = MenuPageSpec.recentGames(List.of(missing), "missing");
+        assertEquals("recent-games-status", unavailable.preferredFocusId());
+        assertEquals(List.of("", "", "B BACK"), unavailable.footerHints());
+    }
+
+    @Test
+    public void footerFollowsTheFocusedControlAndPreservesExplicitActionHints() {
+        MenuController controller = new MenuController(new Events());
+        controller.show(MenuRoute.AUDIO);
+        assertEquals(List.of("L/R ADJUST", "", "B BACK"),
+                controller.presentation().footerHints());
+
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
+        assertEquals(List.of("D-PAD MOVE", "A TOGGLE", "B BACK"),
+                controller.presentation().footerHints());
+
+        controller.show(MenuRoute.SYSTEM);
+        assertEquals(List.of("D-PAD MOVE", "A OPEN", "B BACK"),
+                controller.presentation().footerHints());
+        controller.show(MenuRoute.OPTION_PICKER);
+        assertEquals(List.of("D-PAD MOVE", "A SELECT", "B BACK"),
+                controller.presentation().footerHints());
+        controller.show(MenuRoute.SAVE_STATES);
+        assertEquals(List.of("D-PAD MOVE", "A SAVE", "B BACK"),
+                controller.presentation().footerHints());
+    }
+
+    @Test
+    public void pointerActivatesTheClickedRowAndPreservesParentFocus() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.show(MenuRoute.SETTINGS);
+        controller.push(MenuRoute.SETTINGS);
+
+        assertTrue(controller.activateTarget(new MenuPointerTarget(
+                MenuRoute.SETTINGS, "audio", MenuKey.A)));
+
+        assertEquals(List.of("audio:false"), events.items);
+        assertEquals("audio", controller.snapshot().frames().get(1).focusedItemId());
+        assertEquals("system", controller.snapshot().frames().get(0).focusedItemId());
+        assertTrue(controller.activateTarget(new MenuPointerTarget(
+                MenuRoute.SETTINGS, null, MenuKey.B)));
+        assertEquals(1, controller.snapshot().frames().size());
+    }
+
+    @Test
+    public void pointerIgnoresHiddenStaleDisabledAndRemovedRows() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        MenuPointerTarget audio = new MenuPointerTarget(MenuRoute.SETTINGS, "audio", MenuKey.A);
+        assertFalse(controller.activateTarget(audio));
+        controller.show(MenuRoute.AUDIO);
+        assertFalse(controller.activateTarget(audio));
+        controller.setPage(page(MenuRoute.SETTINGS, 1, List.of(
+                item("system", "SYSTEM", true, null),
+                item("audio", "AUDIO", false, null))));
+        controller.show(MenuRoute.SETTINGS);
+        assertFalse(controller.activateTarget(audio));
+        assertFalse(controller.activateTarget(new MenuPointerTarget(
+                MenuRoute.SETTINGS, "missing", MenuKey.A)));
+        assertEquals("system", controller.snapshot().frames().get(0).focusedItemId());
+        assertTrue(events.items.isEmpty());
+    }
+
+    @Test
+    public void pointerSliderFocusAndAdjustmentUseSeparateActions() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.show(MenuRoute.AUDIO);
+        controller.activateTarget(new MenuPointerTarget(MenuRoute.AUDIO, "mute-audio", MenuKey.A));
+        events.items.clear();
+
+        assertTrue(controller.activateTarget(new MenuPointerTarget(
+                MenuRoute.AUDIO, "volume", MenuKey.A)));
+        assertEquals("volume", controller.snapshot().frames().get(0).focusedItemId());
+        assertTrue(events.items.isEmpty());
+        assertTrue(events.adjustments.isEmpty());
+        assertTrue(controller.activateTarget(new MenuPointerTarget(
+                MenuRoute.AUDIO, "volume", MenuKey.RIGHT)));
+        assertEquals(List.of("volume:1"), events.adjustments);
     }
 
     @Test
@@ -359,16 +456,20 @@ public class MenuControllerTest {
         controller.setRootDismissAllowed(false);
         controller.show(MenuRoute.LIBRARY);
 
+        assertEquals(List.of("D-PAD MOVE", "A CHOOSE", ""),
+                controller.presentation().footerHints());
         assertTrue(controller.dispatchBackEdge());
         assertTrue(controller.visible());
         assertEquals(MenuRoute.LIBRARY, controller.route());
 
         controller.push(MenuRoute.SETTINGS);
+        assertEquals("B BACK", controller.presentation().footerHints().get(2));
         assertTrue(controller.dispatchBackEdge());
         assertTrue(controller.visible());
         assertEquals(MenuRoute.LIBRARY, controller.route());
 
         controller.setRootDismissAllowed(true);
+        assertEquals("B BACK", controller.presentation().footerHints().get(2));
         assertTrue(controller.dispatchBackEdge());
         assertFalse(controller.visible());
     }
@@ -451,7 +552,7 @@ public class MenuControllerTest {
     }
 
     @Test
-    public void statePageVariantsUseExactCopyAndOnlyFourPrimarySlotRows() {
+    public void statePageVariantsKeepTenSlotsAndOnlyOfferSaveForEmptySlots() {
         MenuPage save = MenuPages.statePage(false);
         MenuPage load = MenuPages.statePage(true);
 
@@ -465,27 +566,28 @@ public class MenuControllerTest {
         assertEquals("COFFEE GB", load.title());
         assertEquals("LOAD STATES", load.context());
         assertEquals("", load.headerAction());
-        assertEquals(List.of("D-PAD MOVE", "A LOAD", "B BACK"), load.footerHints());
+        assertEquals(List.of("D-PAD MOVE", "", "B BACK"), load.footerHints());
 
         List<String> expectedSlots = List.of("slot-0", "slot-1", "slot-2", "slot-3",
                 "slot-4", "slot-5", "slot-6", "slot-7", "slot-8", "slot-9");
         assertEquals(expectedSlots, save.items().stream().map(MenuItem::id).toList());
         assertEquals(expectedSlots, load.items().stream().map(MenuItem::id).toList());
         assertTrue(save.items().stream().allMatch(item -> item.enabled()
-                && item.detail().isEmpty() && item.secondaryId() == null));
+                && item.detail().equals("EMPTY") && item.secondaryId() == null));
         assertTrue(load.items().stream().allMatch(item -> item.enabled()
-                && item.detail().isEmpty() && item.secondaryId() == null));
+                && item.detail().equals("EMPTY") && item.secondaryId() == null));
     }
 
     @Test
     public void confirmationDefaultsUseTheSingleVerticalRailAndBReturnsToParent() {
         MenuPage confirmation = MenuPages.forRoute(MenuRoute.CONFIRM_ACTION);
         assertEquals(1, confirmation.columns());
-        assertEquals("CONFIRM ACTION", confirmation.context());
+        assertEquals("RESET GAME?", confirmation.context());
         assertEquals(List.of("UNSAVED PROGRESS MAY BE LOST"), confirmation.sideLines());
         assertEquals("", confirmation.headerAction());
         assertEquals(List.of("confirm", "cancel"),
                 confirmation.items().stream().map(MenuItem::id).toList());
+        assertEquals("RESET GAME", confirmation.items().get(0).label());
         assertTrue(confirmation.items().stream().allMatch(item -> item.detail().isEmpty()));
         assertEquals("cancel", confirmation.items().get(confirmation.initialFocusIndex()).id());
 

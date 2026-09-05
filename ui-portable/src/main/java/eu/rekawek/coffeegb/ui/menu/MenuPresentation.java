@@ -110,7 +110,30 @@ public final class MenuPresentation {
     }
 
     public List<String> footerHints() {
-        return footerHints;
+        if (!visible || focusedIndex < 0 || footerHints.size() < 3
+                || !"A CHOOSE".equals(footerHints.get(1))) {
+            return footerHints;
+        }
+        Item focused = items.get(focusedIndex);
+        return switch (focused.widgetType()) {
+            case SLIDER -> List.of("L/R ADJUST", "", footerHints.get(2));
+            case CHECKBOX -> List.of(footerHints.get(0),
+                    route == MenuRoute.OPTION_PICKER ? "A SELECT" : "A TOGGLE",
+                    footerHints.get(2));
+            case DROPDOWN -> List.of(footerHints.get(0), "A OPEN", footerHints.get(2));
+            case BUTTON -> footerHints;
+        };
+    }
+
+    /** Removes a root Back hint when the host has no underlying surface to return to. */
+    MenuPresentation withoutBackHint() {
+        if (!visible || footerHints.size() < 3 || footerHints.get(2).isEmpty()) {
+            return this;
+        }
+        ArrayList<String> hints = new ArrayList<>(footerHints);
+        hints.set(2, "");
+        return new MenuPresentation(visible, route, title, context, headerAction, sideHeading,
+                sideLines, items, focusedIndex, columns, hints, preview, layout, pagination);
     }
 
     public MenuPreview preview() {

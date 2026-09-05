@@ -4,11 +4,13 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import eu.rekawek.coffeegb.swing.io.DesktopMenuInputCapture
 import eu.rekawek.coffeegb.swing.io.DesktopMenuKeyboardInput
+import eu.rekawek.coffeegb.swing.io.DesktopMenuPointerInput
 import eu.rekawek.coffeegb.ui.menu.MenuController
 import eu.rekawek.coffeegb.ui.menu.MenuKey
 import eu.rekawek.coffeegb.ui.menu.MenuPageLayout
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec
 import eu.rekawek.coffeegb.ui.menu.MenuPagination
+import eu.rekawek.coffeegb.ui.menu.MenuPointerTarget
 import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
@@ -17,6 +19,7 @@ import eu.rekawek.coffeegb.ui.menu.MenuWidgetType
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import eu.rekawek.coffeegb.ui.menu.artwork.Proposal3MenuCompositor
 import java.util.EnumSet
+import java.util.Optional
 import java.nio.file.Path
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -56,7 +59,8 @@ internal class SwingProposal3Menu(
     private val capturePausePreview: () -> MenuPreview = { MenuPreview.empty() },
     private val romFileBrowser: DesktopRomFileBrowser = DesktopRomFileBrowser(),
     private val fileBrowserExecutor: Executor = FILE_BROWSER_EXECUTOR,
-) : DesktopMenuInputCapture, DesktopMenuKeyboardInput, DesktopArchiveSelectionHost {
+) : DesktopMenuInputCapture, DesktopMenuKeyboardInput, DesktopMenuPointerInput,
+    DesktopArchiveSelectionHost {
 
   private enum class StateMenuMode { SAVE, LOAD }
 
@@ -306,6 +310,17 @@ internal class SwingProposal3Menu(
       if (!visible() || romDialogOpen.get()) break
     }
     return true
+  }
+
+  override fun targetAt(sourceX: Int, sourceY: Int): Optional<MenuPointerTarget> {
+    if (romDialogOpen.get()) return Optional.empty()
+    return Proposal3MenuCompositor.hitTest(controller.presentation(), sourceX, sourceY)
+  }
+
+  override fun activateTarget(target: MenuPointerTarget): Boolean {
+    if (romDialogOpen.get()) return true
+    refreshPrinterPageBeforeInput()
+    return controller.activateTarget(target)
   }
 
   override fun onKeyDown(key: MenuKey, repeat: Boolean): Boolean {
@@ -562,8 +577,7 @@ internal class SwingProposal3Menu(
             "",
             snapshot.romTitle(),
             listOf(
-                "PLAY TIME",
-                snapshot.formattedPlayTime(),
+                "PLAY TIME ${snapshot.formattedPlayTime()}",
                 if (snapshot.batterySaveActive()) "BATTERY SAVE ACTIVE" else "NO BATTERY SAVE",
             ),
             listOf(
@@ -593,7 +607,7 @@ internal class SwingProposal3Menu(
               MenuPageSpec.Item.button(
                   "slot-$slot",
                   "SLOT $slot",
-                  if (catalog.firstOrNull { it.index == slot }?.loadable == true) "SAVED" else "",
+                  if (catalog.firstOrNull { it.index == slot }?.loadable == true) "SAVED" else "EMPTY",
                   true,
               )
             }
@@ -612,7 +626,11 @@ internal class SwingProposal3Menu(
             preferredFocus = focused,
             headerAction = "",
             preview = preview,
-            footerHints = listOf("D-PAD MOVE", "A $mode", "B BACK"),
+            footerHints = listOf(
+                "D-PAD MOVE",
+                if (stateMenuMode == StateMenuMode.SAVE || focusedSlot?.loadable == true) "A $mode" else "",
+                "B BACK",
+            ),
         )
       }
 
@@ -987,11 +1005,11 @@ internal class SwingProposal3Menu(
         requireNotNull(action) { "Confirmation route requires a pending action" }
         val actionLabel = action.confirmationLabel()
         page(
-            "CONFIRM ACTION",
+            "$actionLabel?",
             actionLabel,
             listOf("UNSAVED PROGRESS MAY BE LOST"),
             listOf(
-                MenuPageSpec.Item.button("confirm", "CONFIRM", "", true),
+                MenuPageSpec.Item.button("confirm", actionLabel, "", true),
                 MenuPageSpec.Item.button("cancel", "CANCEL", "", true),
             ),
             preferredFocus = "cancel",
@@ -1672,7 +1690,11 @@ internal class SwingProposal3Menu(
       val desiredSideLines = portableStateSavedAt(focusedSlot?.savedAt)
           ?.let { listOf(it) }
           ?: emptyList()
-      if (presentation.preview() !== desiredPreview || presentation.sideLines() != desiredSideLines) {
+      val desiredAction =
+          if (stateMenuMode == StateMenuMode.SAVE) "A SAVE"
+          else if (focusedSlot?.loadable == true) "A LOAD" else ""
+      if (presentation.preview() !== desiredPreview || presentation.sideLines() != desiredSideLines ||
+          presentation.footerHints().getOrNull(1) != desiredAction) {
         controller.setPage(pageFor(MenuRoute.SAVE_STATES, commands.menuState()))
         return
       }
@@ -1684,7 +1706,7 @@ internal class SwingProposal3Menu(
           focusedId?.removePrefix("recent:")?.toIntOrNull()?.let { commands.recentGames().getOrNull(it) }
       val desiredPreview = selected?.let(::recentPreview) ?: MenuPreview.empty()
       val desiredSideLines =
-          if (selected == null) emptyList()
+          if (selected == null) listOf("GO BACK AND CHOOSE OPEN ROM")
           else listOf("LAST PLAYED: ${recentLastPlayed(selected)}")
       if (presentation.preview() !== desiredPreview || presentation.sideLines() != desiredSideLines) {
         controller.setPage(pageFor(MenuRoute.RECENT_GAMES, commands.menuState()))

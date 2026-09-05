@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuKey;
 import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
 import eu.rekawek.coffeegb.ui.menu.MenuPagination;
@@ -28,6 +29,70 @@ public class Proposal3MenuCompositorTest {
     private static final int HEIGHT = MenuArtworkCatalog.PACKAGED_HEIGHT;
     private static final List<String> FOOTER =
             List.of("D-PAD MOVE", "A CHOOSE", "B BACK");
+
+    @Test
+    public void pointersResolvePaintedItemsAndScrollAnchorsButNeverEmptyRowsOrDividers() {
+        MenuPresentation shortList = presentation(MenuRoute.SETTINGS, "SETTINGS", "", List.of(),
+                List.of(button("first", "FIRST"),
+                        MenuPageSpec.Item.button("disabled", "DISABLED", "", false)),
+                "first", MenuPreview.empty());
+        assertEquals("first", Proposal3MenuCompositor.hitTest(shortList, 500, 150)
+                .orElseThrow().itemId());
+        for (int[] point : List.of(new int[]{500, 193}, new int[]{500, 220},
+                new int[]{500, 300}, new int[]{420, 150}, new int[]{920, 150})) {
+            assertTrue(Proposal3MenuCompositor.hitTest(shortList, point[0], point[1]).isEmpty());
+        }
+
+        MenuPresentation start = presentation(MenuRoute.SAVE_STATES, "SAVE STATES", "", List.of(),
+                buttons(13, 0), "item-0", MenuPreview.empty());
+        var down = Proposal3MenuCompositor.hitTest(start, 660, 600).orElseThrow();
+        assertEquals("item-5", down.itemId());
+        assertEquals(MenuKey.DOWN, down.key());
+        MenuPresentation end = presentation(MenuRoute.SAVE_STATES, "SAVE STATES", "", List.of(),
+                buttons(13, 0), "item-12", MenuPreview.empty());
+        var up = Proposal3MenuCompositor.hitTest(end, 660, 150).orElseThrow();
+        assertEquals("item-7", up.itemId());
+        assertEquals(MenuKey.UP, up.key());
+
+        List<MenuPageSpec.Item> unavailableEdge = new ArrayList<>(buttons(13, 0));
+        unavailableEdge.set(5, MenuPageSpec.Item.button("item-5", "UNAVAILABLE", "", false));
+        MenuPresentation disabled = presentation(MenuRoute.RECENT_GAMES, "RECENT", "", List.of(),
+                unavailableEdge, "item-0", MenuPreview.empty());
+        assertEquals("scrolling must not anchor on an unavailable row", "item-4",
+                Proposal3MenuCompositor.hitTest(disabled, 660, 600).orElseThrow().itemId());
+    }
+
+    @Test
+    public void pointersUseFullWidthRowsAndOnlyAdvertisedFooterActions() {
+        MenuPresentation wide = fullWidthPresentation(List.of(button("rom", "GAME.GBC")),
+                "rom", MenuPagination.singlePage());
+        assertEquals("rom", Proposal3MenuCompositor.hitTest(wide, 40, 150)
+                .orElseThrow().itemId());
+        MenuPresentation firstPage = fullWidthPresentation(List.of(button("rom", "GAME.GBC")),
+                "rom", new MenuPagination(0, 3));
+        assertTrue(Proposal3MenuCompositor.hitTest(firstPage, 70, 690).isEmpty());
+        assertEquals(MenuKey.RIGHT, Proposal3MenuCompositor.hitTest(firstPage, 290, 690)
+                .orElseThrow().key());
+        MenuPresentation lastPage = fullWidthPresentation(List.of(button("rom", "GAME.GBC")),
+                "rom", new MenuPagination(2, 3));
+        assertEquals(MenuKey.LEFT, Proposal3MenuCompositor.hitTest(lastPage, 70, 690)
+                .orElseThrow().key());
+        assertTrue(Proposal3MenuCompositor.hitTest(lastPage, 290, 690).isEmpty());
+        MenuController controller = new MenuController(new NoopListener());
+        controller.show(MenuRoute.AUDIO);
+        assertTrue("A is inert for a slider", Proposal3MenuCompositor.hitTest(
+                controller.presentation(), 480, 690).isEmpty());
+        assertEquals(MenuKey.LEFT, Proposal3MenuCompositor.hitTest(
+                controller.presentation(), 630, 150).orElseThrow().key());
+        assertEquals(MenuKey.RIGHT, Proposal3MenuCompositor.hitTest(
+                controller.presentation(), 800, 150).orElseThrow().key());
+        controller.setRootDismissAllowed(false);
+        controller.show(MenuRoute.LIBRARY);
+        assertTrue("root Back is unavailable", Proposal3MenuCompositor.hitTest(
+                controller.presentation(), 760, 690).isEmpty());
+        controller.hide();
+        assertTrue(Proposal3MenuCompositor.hitTest(controller.presentation(), 500, 150).isEmpty());
+    }
 
     @Test
     public void everyRouteProducesOneCanonical924By736Frame() {
@@ -281,13 +346,13 @@ public class Proposal3MenuCompositorTest {
         MenuRect value = new MenuRect(row.x() + 376, row.y(), 88, row.height());
         assertTrue("100% was rendered as an ellipsis",
                 differences(oneHundred, ellipsis, value) > 0);
-        MenuRect field = new MenuRect(row.right() - 20 - 262, row.y() + 10, 262,
-                row.height() - 20);
+        MenuRect field = new MenuRect(row.x() + 38, row.y() + 36,
+                row.width() - 58, 36);
         assertTrue("FAST-FORWARD was rendered as an ellipsis",
                 differences(dropdown, dropdownEllipsis, field) > 0);
 
         int fieldRight = row.right() - 20;
-        int fieldCenterY = row.y() + 10 + (row.height() - 20) / 2;
+        int fieldCenterY = row.y() + 54;
         assertEquals("dropdown chevron touched the field border", MenuRaster.PAPER,
                 dropdown[(fieldCenterY - 2) * WIDTH + fieldRight - 4]);
         assertEquals(MenuRaster.INK,

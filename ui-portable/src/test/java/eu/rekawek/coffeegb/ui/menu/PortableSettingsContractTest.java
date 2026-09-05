@@ -49,7 +49,8 @@ public class PortableSettingsContractTest {
         Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
         assertEquals("medium glyph advance must match the packaged atlas recipe", 19,
                 atlas.advance(Proposal3GlyphAtlas.Role.MEDIUM, 'A'));
-        assertEquals("medium space advance must match the packaged atlas recipe", 8,
+        // The source recipe's 8-pixel spaces are widened at runtime for readable word gaps.
+        assertEquals("medium spaces must use a full glyph advance in the menu", 19,
                 atlas.advance(Proposal3GlyphAtlas.Role.MEDIUM, ' '));
     }
 

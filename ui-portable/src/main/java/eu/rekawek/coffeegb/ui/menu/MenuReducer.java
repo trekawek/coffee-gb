@@ -175,6 +175,23 @@ final class MenuReducer {
         return MenuState.withStack(stack);
     }
 
+    /** Focuses one enabled row on the current page without changing any parent-page focus. */
+    static MenuState focus(MenuState state, String itemId) {
+        if (state == null || itemId == null) {
+            throw new IllegalArgumentException("state and item id are required");
+        }
+        if (!state.visible()) {
+            return state;
+        }
+        int next = state.page().enabledIndex(itemId);
+        if (next < 0 || next == state.focusedIndex()) {
+            return state;
+        }
+        ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
+        stack.set(stack.size() - 1, new MenuState.Frame(state.page(), next));
+        return MenuState.withStack(stack);
+    }
+
     private static int nextEnabledIndex(MenuPage page, int current, MenuCommand.Direction direction) {
         if (page.columns() == 1 && (direction == MenuCommand.Direction.LEFT
                 || direction == MenuCommand.Direction.RIGHT)) {

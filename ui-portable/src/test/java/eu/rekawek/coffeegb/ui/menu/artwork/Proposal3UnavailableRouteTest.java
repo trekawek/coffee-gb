@@ -54,7 +54,8 @@ public class Proposal3UnavailableRouteTest {
         MenuRect secondRow = MenuScreenTemplate.optionRow(1);
         assertTrue("explicit action did not occupy the second reusable row",
                 differences(status, action, secondRow) > 0);
-        assertEqualOutside(status, action, secondRow);
+        assertEqualOutside(status, action, new MenuRect(secondRow.x(), secondRow.y(),
+                secondRow.width(), secondRow.height() + MenuScreenTemplate.OPTION_DIVIDER_HEIGHT));
     }
 
     private static MenuPresentation statusOnly(MenuRoute route) {

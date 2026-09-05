@@ -34,3 +34,12 @@ SHA-256: b99d64929933538a958881be776ef3ffa7b79cde7b96d501c4b9c00de90aad02
 SemiBold atlas: 768x192
 Cell: 48x48; glyph advance: 27; space advance: 9
 SHA-256: a895052d22f63c87d72dd64fb693f11d48c679538013aec3ffeea8ed278c5ef5
+
+Runtime typography adjustment
+-----------------------------
+
+The metrics above describe the source rasterization recipe. The menu compositor
+uses a full glyph advance for spaces to keep word boundaries readable despite
+the bitmap glyphs' overhang: Small 11, Notice 15, Medium 19, Display 20, and
+SemiBold 27 pixels. This adjustment applies consistently to painting and text
+measurement in Proposal3GlyphAtlas; it does not change the packaged PNGs.

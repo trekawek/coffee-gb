@@ -42,6 +42,9 @@ font size.
 All four types use the same row bounds and `Proposal3GlyphAtlas.Role.MEDIUM` item typography.
 Checkboxes use the typed `Item.checkbox(id, label, checked, enabled)` state; their display text is
 only the label, so hosts do not encode or render `ON`/`OFF` strings.
+Long labels can use two lines within the same row. Dropdowns use a second line when the label and
+value would otherwise collide. Unused slots have no dividers, distinguishing blank space from
+actual controls.
 `Proposal3WidgetSkins` supplies only three route-neutral surface textures:
 
 ```
@@ -113,6 +116,8 @@ The selected-output digest and checked-in result are the stable provenance recor
 The Small, Notice, Medium, Display, and SemiBold bitmap atlases under `proposal3/overlay/` come from
 the project's licensed ByteBounce source. The TTF is build-time-only and does not ship. Source and
 atlas digests plus role metrics are recorded in `overlay/ByteBounce-licensed-source.txt`.
+Runtime word spaces use a full glyph advance for readability; this does not alter the source atlas
+recipe or the PNGs.
 
 Regenerate them with:
 
@@ -147,6 +152,14 @@ cross-products and deterministic floor rounding. It centers the content, assigns
 pixels to the right/bottom bars, and rejects letterbox pixels plus half-open right/bottom edges
 during inverse input mapping. Desktop and Android use this same placement rather than reflowing
 the template.
+
+`Proposal3MenuCompositor.hitTest` shares the renderer's visible-slot geometry. Desktop clicks and
+Android taps inverse-map through `MenuViewport`, then use `MenuPointerGesture` to activate only
+when press and release resolve to the same target. Footer targets follow their current hints;
+unavailable actions, separators, and blank rows have no target. Slider track clicks adjust one
+step toward the pointer. Keyboard and gamepad navigation remain available.
+
+See [the UX review](../doc/ui-ux-review.md) for findings, changes, sources, and remaining limits.
 
 Useful verification commands:
 
