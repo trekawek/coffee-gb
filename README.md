@@ -71,7 +71,7 @@ more details. Pause, save states, and rewind are unavailable during netplay.
 ## Compatibility
 
 Compatibility is a defining feature of Coffee GB. Its test profiles exercise
-**5,696 automated verdicts from 16 suite families**, covering all popular Game
+**5,858 automated verdicts from 17 suite families**, covering all popular Game
 Boy and Game Boy Color test suites, and every verdict passes. Coffee GB also
 earns the **maximum score** in
 [GBEmulatorShootout](https://tomek.rekawek.eu/GBEmulatorShootout/).
@@ -99,9 +99,10 @@ Mealybug Tearoom tests.
 | [CasualPokePlayer test ROMs](https://github.com/CasualPokePlayer/test-roms) | 4 | 4 / 4 are pixel-perfect |
 | [Mealybug Tearoom](https://github.com/mattcurrie/mealybug-tearoom-tests) | 24 | 24 / 24 are pixel-perfect |
 | [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 482 | 482 / 482 machine-readable verdicts pass; 31 additional diagnostics have no automated verdict |
+| [DocBoy Test Suite](https://github.com/Docheinstein/docboy-test-suite) | 162 | 162 / 162 selected machine-readable DMG, CGB, and CGB-in-DMG-mode verdicts pass |
 | [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 221 / 221 selected hardware-reference verdicts match exactly |
 | [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 17 / 17 pass verdicts match |
-| **Total** | **5,696** | **5,696 / 5,696 automated verdicts pass** |
+| **Total** | **5,858** | **5,858 / 5,858 automated verdicts pass** |
 
 \* Blargg's aggregate and individual checks overlap by design.
 
@@ -109,7 +110,7 @@ Every automated case must produce its documented pass value, match its selected
 external hardware reference, or satisfy its upstream image oracle. The source
 revisions, archive membership, hardware models, and ROM revisions used by these
 profiles are fixed for reproducibility. GBMicrotest's 31 non-verdict diagnostics
-are tracked separately and are not included in the 5,696 automated verdicts.
+are tracked separately and are not included in the 5,858 automated verdicts.
 
 </details>
 

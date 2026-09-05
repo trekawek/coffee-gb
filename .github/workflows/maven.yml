@@ -72,6 +72,8 @@ jobs:
             profiles: test-mealybug
           - name: GBMicrotest
             profiles: test-gbmicrotest
+          - name: DocBoy
+            profiles: test-docboy
           - name: Misc.-GB-Tests
             profiles: test-misc-gb
 
