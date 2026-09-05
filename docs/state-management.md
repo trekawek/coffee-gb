@@ -181,8 +181,9 @@ To play one, open the matching ROM and choose **Game > Input Recording > Load In
 and validates the selected bounded `.cgbreplay` off the Swing and emulation threads, autosaves the
 currently open session, then presents the recording in an isolated, read-only session. Live inputs,
 battery saves, peripherals, managed states, and rewind are disabled during playback. Playback pauses
-at the final matching checkpoint; close or reopen the game to return to normal play. CLI playback is
-also documented in [headless-cli.md](headless-cli.md).
+at the final matching checkpoint. If playback completes or a checkpoint diverges, **Reset** or
+reopen the game to replace the isolated replay machine with a normal, running session. CLI playback
+is also documented in [headless-cli.md](headless-cli.md).
 
 Replay v1 represents one forward input timeline. Rewind is therefore disabled while a recording is
 arming or active; it becomes available again after stopping. Pausing suspends capture without adding

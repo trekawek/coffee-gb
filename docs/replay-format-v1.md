@@ -98,6 +98,11 @@ An application pause may retain a recorder because it executes no emulated ticks
 wall time must be frozen across that interval, and a final checkpoint taken while paused must be
 normalized to the running RTC state expected after its last recorded tick.
 
+Fast-forward bootstrap ticks are part of a boot-reference replay timeline. Interactive playback
+must advance that bootstrap through `ReplayPlayer`, just as recording advances it through
+`ReplayRecorder`; advancing the machine directly would leave the player's tick counter behind the
+machine and shift every later checkpoint.
+
 ## Input timing
 
 Replay ticks are zero-based executed master-tick indices. Input and checkpoint ticks are limited to
