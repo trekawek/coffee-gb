@@ -291,7 +291,7 @@ class DesktopActionsTest {
             stateBrowserAvailable = true,
             inputRecordingPhase = ReplayRecordingPhase.IDLE,
         ))
-    assertEquals("Start Input Recording…", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
+    assertEquals("Start Input Recording", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
     assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
     assertFalse(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
     assertTrue(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
