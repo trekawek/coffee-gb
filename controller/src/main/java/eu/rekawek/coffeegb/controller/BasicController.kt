@@ -5458,6 +5458,12 @@ class BasicController private constructor(
             context?.workspace?.activeGameDirectory(),
             stateUnavailableReason,
         ))
+    // A clean-boot recorder starts before the new session is published so it owns boot tick zero.
+    // Publish its status again after the session event, otherwise the desktop still scopes the
+    // original status to the just-replaced session and cannot enable Stop.
+    replayRecording
+        ?.takeIf { it.sessionId == stateSessionId }
+        ?.let { postReplayRecordingStatus(ReplayRecordingPhase.RECORDING) }
     if (allowAutosaveResume &&
         context != null &&
         properties.saves.resumePolicy !=
