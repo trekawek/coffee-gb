@@ -413,6 +413,13 @@ internal class SwingMenu(
     manageStates.mnemonic = KeyEvent.VK_M
     gameMenu.add(manageStates)
 
+    val inputRecording = JMenu("Input Recording")
+    inputRecording.mnemonic = KeyEvent.VK_I
+    inputRecording.add(JMenuItem(desktopActions[DesktopCommand.INPUT_RECORDING]))
+    inputRecording.add(JMenuItem(desktopActions[DesktopCommand.STOP_INPUT_RECORDING]))
+    inputRecording.add(JMenuItem(desktopActions[DesktopCommand.LOAD_INPUT_RECORDING]))
+    gameMenu.add(inputRecording)
+
     gameMenu.addSeparator()
     val cheats = JMenuItem("Cheats…")
     cheats.accessibleContext.accessibleDescription =
@@ -610,10 +617,7 @@ internal class SwingMenu(
     val screenshot = JMenuItem(desktopActions[DesktopCommand.SCREENSHOT])
     screenshot.mnemonic = KeyEvent.VK_T
     screenMenu.insert(screenshot, 1)
-    screenMenu.insert(JMenuItem(desktopActions[DesktopCommand.INPUT_RECORDING]), 2)
-    screenMenu.insert(JMenuItem(desktopActions[DesktopCommand.STOP_INPUT_RECORDING]), 3)
-    screenMenu.insert(JMenuItem(desktopActions[DesktopCommand.LOAD_INPUT_RECORDING]), 4)
-    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 5)
+    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 2)
     screenMenu.addSeparator()
     screenMenu.add(
         JMenuItem("More Display Settings…").apply {

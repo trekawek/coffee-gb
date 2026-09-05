@@ -589,11 +589,11 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
       DesktopCommand.SCREENSHOT ->
           DesktopActionMetadata("Screenshot", "Save a screenshot of the current game")
       DesktopCommand.INPUT_RECORDING ->
-          DesktopActionMetadata("Start Input Recording…", "Record controller input for deterministic replay")
+          DesktopActionMetadata("Start Input Recording", "Record controller input for deterministic replay")
       DesktopCommand.STOP_INPUT_RECORDING ->
           DesktopActionMetadata("Stop Input Recording", "Stop and save the active input recording")
       DesktopCommand.LOAD_INPUT_RECORDING ->
-          DesktopActionMetadata("Load Input Recording…", "Play a deterministic CGBR input recording")
+          DesktopActionMetadata("Load Input Recording", "Play a deterministic CGBR input recording")
       DesktopCommand.SHOW_COMMAND_BAR ->
           DesktopActionMetadata("Show Command Bar", "Show the game command bar in a window")
     }

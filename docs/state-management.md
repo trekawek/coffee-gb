@@ -160,7 +160,7 @@ contains no ROM title, filename, path, or hash.
 
 ## Input recording and rewind
 
-Choose **Screen > Start Input Recording…** (or press <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>)
+Choose **Game > Input Recording > Start Input Recording** (or press <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>)
 to create a deterministic `.cgbreplay` controller-input recording. The dialog deliberately starts
 with no selected mode:
 
@@ -172,11 +172,11 @@ with no selected mode:
   cartridge save state. That clean session continues to avoid reading or writing the ordinary
   battery/autosave files until the game is loaded normally again.
 
-**Screen > Stop Input Recording** is enabled while capture is arming or active. The recorder writes the finished artifact
+**Game > Input Recording > Stop Input Recording** is enabled while capture is arming or active. The recorder writes the finished artifact
 away from both the emulation and Swing threads to `replays/` as
 `coffee-gb-YYYYMMDD-HHmmss-SSS[-N].cgbreplay`; collisions never overwrite an existing file.
 
-To play one, open the matching ROM and choose **Screen > Load Input Recording…**. Coffee GB reads
+To play one, open the matching ROM and choose **Game > Input Recording > Load Input Recording**. Coffee GB reads
 and validates the selected bounded `.cgbreplay` off the Swing and emulation threads, autosaves the
 currently open session, then presents the recording in an isolated, read-only session. Live inputs,
 battery saves, peripherals, managed states, and rewind are disabled during playback. Playback pauses
