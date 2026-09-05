@@ -93,7 +93,10 @@ or boot-ROM bytes, filesystem paths, host names, user names, network credentials
 Playback clones only immutable ROM and hardware choices. It replaces live controls with
 `ReplayInputSource`, wall time with `VirtualTimeSource`, serial and infrared with empty endpoints,
 and battery persistence with disabled/null storage. Replay v1 has no pause/reset/external-I/O event,
-so recording code must end or discard a recording before any such lifecycle boundary.
+so recording code must end or discard a recording before reset or external-I/O lifecycle boundaries.
+An application pause may retain a recorder because it executes no emulated ticks; cartridge RTC
+wall time must be frozen across that interval, and a final checkpoint taken while paused must be
+normalized to the running RTC state expected after its last recorded tick.
 
 ## Input timing
 
