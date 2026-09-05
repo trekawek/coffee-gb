@@ -413,11 +413,8 @@ internal class SwingMenu(
     manageStates.mnemonic = KeyEvent.VK_M
     gameMenu.add(manageStates)
 
-    val inputRecording = JMenu("Input Recording")
+    val inputRecording = JMenuItem(desktopActions[DesktopCommand.INPUT_RECORDING])
     inputRecording.mnemonic = KeyEvent.VK_I
-    inputRecording.add(JMenuItem(desktopActions[DesktopCommand.INPUT_RECORDING]))
-    inputRecording.add(JMenuItem(desktopActions[DesktopCommand.STOP_INPUT_RECORDING]))
-    inputRecording.add(JMenuItem(desktopActions[DesktopCommand.LOAD_INPUT_RECORDING]))
     gameMenu.add(inputRecording)
 
     gameMenu.addSeparator()

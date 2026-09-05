@@ -24,6 +24,7 @@ import eu.rekawek.coffeegb.controller.replay.ReplayMetadata
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackFailedEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackLoadRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStopRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStatus
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStatusEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlayer
@@ -635,6 +636,7 @@ class BasicController private constructor(
     eventQueue.register<ReplayRecordingRetrySaveEvent> { retryReplayArtifactSave(it) }
     eventQueue.register<ReplayRecordingDiscardEvent> { discardReplayArtifact(it) }
     eventQueue.register<ReplayPlaybackLoadRequestEvent> { requestReplayPlayback(it) }
+    eventQueue.register<ReplayPlaybackStopRequestEvent> { stopReplayPlayback(it) }
     eventQueue.register<ReplayRecordingCloseBarrierEvent> { event ->
       try {
         finishReplayRecording("Coffee GB is closing")
@@ -1343,6 +1345,7 @@ class BasicController private constructor(
           event is ReplayRecordingStartRequestEvent ||
           event is ReplayRecordingStopRequestEvent ||
           event is ReplayPlaybackLoadRequestEvent ||
+          event is ReplayPlaybackStopRequestEvent ||
           event is StatePrepareCloseRequestEvent ||
           event is StateSkipCloseAutosaveRequestEvent ||
           event is StateResumeDecisionEvent ||
@@ -2958,13 +2961,53 @@ class BasicController private constructor(
     postReplayPlaybackStatus(ReplayPlaybackPhase.IDLE, message, pending.sessionId)
   }
 
+  /**
+   * Stops the tape transport without forgetting which file the desktop selected. A pending load
+   * is cancelled in place; an installed replay machine is replaced with the same ROM's ordinary,
+   * interactive clean start so no paused or input-isolated state can leak into normal play.
+   */
+  private fun stopReplayPlayback(event: ReplayPlaybackStopRequestEvent) {
+    val pending = pendingReplayPlayback
+    if (pending != null) {
+      if (event.expectedSessionId != pending.sessionId &&
+          event.expectedSessionId != stateSessionId) {
+        return
+      }
+      pendingReplayPlayback = null
+      cancelPendingRomSwitch(restorePause = false)
+      cancelLoadJob()
+      discardReplacement(restorePause = false)
+      restorePauseStateAfterLoading()
+      postReplayPlaybackStatus(
+          ReplayPlaybackPhase.IDLE,
+          "Input playback stopped.",
+          pending.sessionId,
+      )
+      return
+    }
+
+    if (!replayPlaybackSession || event.expectedSessionId != stateSessionId) return
+    val image = session?.config?.rom?.image ?: return
+    endReplayPlayback("Input playback stopped.", stateSessionId)
+    requestLoad(
+        properties,
+        Controller.LoadRomEvent(
+            image = image,
+            persistenceStore = currentPersistenceStore,
+            allowAutosaveResume = false,
+        ),
+        clearPatches = false,
+        resumeAfterLoad = true,
+    )
+  }
+
   /** Drops the controller-side timeline wrapper; the normal session replacement owns machine close. */
-  private fun endReplayPlayback(message: String) {
+  private fun endReplayPlayback(message: String, sessionId: Long? = null) {
     val active = replayPlayback
     if (active == null && !replayPlaybackCompleted) return
     replayPlayback = null
     replayPlaybackCompleted = false
-    postReplayPlaybackStatus(ReplayPlaybackPhase.IDLE, message, active?.sessionId)
+    postReplayPlaybackStatus(ReplayPlaybackPhase.IDLE, message, active?.sessionId ?: sessionId)
   }
 
   /** Prevents an isolated replay from silently becoming a non-interactive live session. */

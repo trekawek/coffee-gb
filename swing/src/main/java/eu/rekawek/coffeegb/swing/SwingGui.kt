@@ -116,6 +116,8 @@ class SwingGui private constructor(
 
   private lateinit var stateUxController: StateUxDesktopController
 
+  private lateinit var inputRecordingWindow: InputRecordingWindow
+
   private lateinit var debuggerController: DesktopDebuggerController
 
   private lateinit var netplayWindow: NetplayWindowHost
@@ -170,6 +172,7 @@ class SwingGui private constructor(
           runDesktopEdtStep(debuggerController::close)
           runDesktopEdtStep(netplayWindow::close)
           runDesktopEdtStep(mobileAdapterWindow::close)
+          runDesktopEdtStep(inputRecordingWindow::close)
           runDesktopEdtStep(stateUxController::close)
           recentGamePreviewLoader.close()
           console?.stop()
@@ -323,6 +326,15 @@ class SwingGui private constructor(
             },
             dialogFactory = desktopDialogFactory,
         )
+    inputRecordingWindow =
+        InputRecordingWindow(
+            owner = mainWindow,
+            chooseReplay = stateUxController::chooseInputRecording,
+            playReplay = stateUxController::playInputRecording,
+            setPlaybackPaused = stateUxController::setInputPlaybackPaused,
+            stopTransport = stateUxController::stopInputRecording,
+            startRecording = stateUxController::startInputRecording,
+        )
     debuggerController =
         DesktopDebuggerController(
             mainWindow,
@@ -388,6 +400,7 @@ class SwingGui private constructor(
           { runDesktopEdtStep(debuggerController::close) },
           { runDesktopEdtStep(netplayWindow::close) },
           { runDesktopEdtStep(mobileAdapterWindow::close) },
+          { runDesktopEdtStep(inputRecordingWindow::close) },
           {
             if (::desktopUiStateController.isInitialized) {
               runDesktopEdtStep(desktopUiStateController::close)
@@ -438,7 +451,7 @@ class SwingGui private constructor(
                 },
                 setFullscreen = displayController::setFullscreen,
                 screenshot = stateUxController::takeScreenshot,
-                inputRecording = stateUxController::startInputRecording,
+                inputRecording = inputRecordingWindow::show,
                 stopInputRecording = stateUxController::stopInputRecording,
                 loadInputRecording = stateUxController::loadInputRecording,
                 setCommandBarVisible = ::setCommandBarVisible,
@@ -545,7 +558,10 @@ class SwingGui private constructor(
                               "System appearance is active for this launch.")
                     },
             ),
-            desktopMainPanel::render,
+            { presentation ->
+              desktopMainPanel.render(presentation)
+              inputRecordingWindow.render(presentation.commands)
+            },
         )
     desktopPlaybackState = DesktopPlaybackState(desktopUiCoordinator::paused)
     desktopUiCoordinator.publish()

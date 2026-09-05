@@ -274,7 +274,7 @@ class DesktopActionsTest {
   }
 
   @Test
-  fun `input recording exposes separate start stop and playback commands`() {
+  fun `input recording window command remains reachable throughout tape activity`() {
     val calls = mutableListOf<String>()
     val registry =
         DesktopActionRegistry(
@@ -291,7 +291,7 @@ class DesktopActionsTest {
             stateBrowserAvailable = true,
             inputRecordingPhase = ReplayRecordingPhase.IDLE,
         ))
-    assertEquals("Start Input Recording", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
+    assertEquals("Input Recording", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
     assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
     assertFalse(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
     assertTrue(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
@@ -303,7 +303,7 @@ class DesktopActionsTest {
             inputRecordingPhase = ReplayRecordingPhase.RECORDING,
             sessionBusy = true,
         ))
-    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
     assertTrue(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
     assertFalse(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
     registry[DesktopCommand.STOP_INPUT_RECORDING].actionPerformed(event())
@@ -313,7 +313,7 @@ class DesktopActionsTest {
             gameLoaded = true,
             inputRecordingPhase = ReplayRecordingPhase.SAVING,
         ))
-    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
     assertFalse(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
 
     registry.update(
@@ -322,7 +322,7 @@ class DesktopActionsTest {
             stateBrowserAvailable = true,
             inputPlaybackPhase = ReplayPlaybackPhase.PLAYING,
         ))
-    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
     assertFalse(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
     assertEquals(listOf("start-recording", "stop-recording"), calls)
 

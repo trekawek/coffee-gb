@@ -513,13 +513,7 @@ internal class DesktopActionRegistry(
         DesktopCommand.OPEN_SAVE_FOLDER,
         DesktopCommand.SCREENSHOT -> state.stateBrowserAvailable && !state.sessionBusy
         DesktopCommand.INPUT_RECORDING ->
-            when (state.inputRecordingPhase) {
-              ReplayRecordingPhase.IDLE ->
-                  state.stateBrowserAvailable &&
-                      state.inputPlaybackPhase == ReplayPlaybackPhase.IDLE &&
-                      !state.sessionBusy
-              else -> false
-            }
+            state.gameLoaded
         DesktopCommand.STOP_INPUT_RECORDING ->
             (state.inputRecordingPhase == ReplayRecordingPhase.ARMING ||
                 state.inputRecordingPhase == ReplayRecordingPhase.RECORDING) &&
@@ -588,7 +582,7 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
       DesktopCommand.SCREENSHOT ->
           DesktopActionMetadata("Screenshot", "Save a screenshot of the current game")
       DesktopCommand.INPUT_RECORDING ->
-          DesktopActionMetadata("Start Input Recording", "Record controller input for deterministic replay")
+          DesktopActionMetadata("Input Recording", "Open input recording and playback controls")
       DesktopCommand.STOP_INPUT_RECORDING ->
           DesktopActionMetadata("Stop Input Recording", "Stop and save the active input recording")
       DesktopCommand.LOAD_INPUT_RECORDING ->

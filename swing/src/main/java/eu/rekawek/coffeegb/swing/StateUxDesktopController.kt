@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingFailedEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingDiscardEvent
@@ -13,6 +14,7 @@ import eu.rekawek.coffeegb.controller.replay.ReplayRecordingRetrySaveEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackFailedEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackLoadRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStopRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStatusEvent
 import eu.rekawek.coffeegb.controller.state.StateBrowserCatalog
 import eu.rekawek.coffeegb.controller.state.StateBrowserEntry
@@ -68,7 +70,6 @@ import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
-import javax.swing.ButtonGroup
 import javax.swing.ImageIcon
 import javax.swing.JButton
 import javax.swing.JCheckBox
@@ -79,7 +80,6 @@ import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.JOptionPane
 import javax.swing.JPanel
-import javax.swing.JRadioButton
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTable
@@ -421,7 +421,7 @@ internal class StateUxDesktopController(
             StateUserError(
                 event.summary,
                 event.detail,
-                "Reset or reopen the game to return to normal play, then select another recording.",
+                "Press Stop in Input Recording to return to normal play, then select another recording.",
             ),
         )
       }
@@ -479,125 +479,129 @@ internal class StateUxDesktopController(
     eventBus.post(StateScreenshotRequestEvent(nextRequestId(), expectedSessionId, image))
   }
 
-  fun startInputRecording() {
+  fun startInputRecording(mode: ReplayRecordingMode) {
     requireEdt("Input recording request")
     if (closed) return
     when {
       inputPlaybackPhase != ReplayPlaybackPhase.IDLE ->
-          onDesktopStatus("Input playback is active. Close or reopen the game before recording again.", null)
-      inputRecordingPhase == ReplayRecordingPhase.IDLE -> requestInputRecordingStart()
+          onDesktopStatus("Stop input playback before recording again.", null)
+      inputRecordingPhase == ReplayRecordingPhase.IDLE -> requestInputRecordingStart(mode)
       inputRecordingPhase == ReplayRecordingPhase.SAVING ->
           onDesktopStatus("Input recording is being saved. Please wait.", null)
       inputRecordingPhase == ReplayRecordingPhase.UNSAVED ->
           onDesktopStatus("Input recording needs saving before another recording can start.", null)
-      else -> onDesktopStatus("Input recording is already active. Use Stop Input Recording.", null)
+      else -> onDesktopStatus("Input recording is already active. Press Stop to save it.", null)
     }
   }
 
+  /** Stops whichever tape transport currently owns the emulator. */
   fun stopInputRecording() {
-    requireEdt("Input recording stop request")
+    requireEdt("Input recording transport stop request")
     if (closed) return
-    if (inputRecordingPhase != ReplayRecordingPhase.ARMING &&
-        inputRecordingPhase != ReplayRecordingPhase.RECORDING) {
-      onDesktopStatus("No input recording is active.", null)
-      return
-    }
     val session = currentSession ?: return
-    eventBus.post(ReplayRecordingStopRequestEvent(nextRequestId(), session.sessionId))
+    when {
+      inputRecordingPhase == ReplayRecordingPhase.ARMING ||
+          inputRecordingPhase == ReplayRecordingPhase.RECORDING ->
+          eventBus.post(ReplayRecordingStopRequestEvent(nextRequestId(), session.sessionId))
+      inputPlaybackPhase != ReplayPlaybackPhase.IDLE ->
+          eventBus.post(ReplayPlaybackStopRequestEvent(nextRequestId(), session.sessionId))
+      else -> onDesktopStatus("No input recording or playback is active.", null)
+    }
   }
 
+  /** Legacy command bridge: select a tape and immediately play it. */
   fun loadInputRecording() {
+    chooseInputRecording()?.let(::playInputRecording)
+  }
+
+  /** Opens the tape chooser without starting playback. */
+  fun chooseInputRecording(): Path? {
+    requireEdt("Input recording file selection")
+    if (closed || inputPlaybackPhase != ReplayPlaybackPhase.IDLE ||
+        inputRecordingPhase != ReplayRecordingPhase.IDLE || !requireAvailableSession()) return null
+    val session = checkNotNull(currentSession)
+    val initialDirectory =
+        session.gameDirectory?.resolve("replays")?.takeIf { java.nio.file.Files.isDirectory(it) }
+            ?: session.gameDirectory
+    val chooser =
+        JFileChooser(initialDirectory?.toFile()).apply {
+          dialogTitle = "Load Input Recording"
+          fileSelectionMode = JFileChooser.FILES_ONLY
+          isAcceptAllFileFilterUsed = false
+          addChoosableFileFilter(
+              FileNameExtensionFilter(
+                  "Coffee GB input recordings (*.cgbreplay)",
+                  "cgbreplay",
+              ))
+        }
+    if (chooser.showOpenDialog(owner) != JFileChooser.APPROVE_OPTION) return null
+    val selected = chooser.selectedFile?.toPath() ?: return null
+    return selected.takeIf { isCurrent(session.sessionId) }
+  }
+
+  /** Starts the already-selected tape from its beginning. */
+  fun playInputRecording(path: Path) {
     requireEdt("Input recording playback request")
     if (closed || inputPlaybackPhase != ReplayPlaybackPhase.IDLE ||
-        inputRecordingPhase != ReplayRecordingPhase.IDLE || !requireAvailableSession()) {
-      return
-    }
+        inputRecordingPhase != ReplayRecordingPhase.IDLE || !requireAvailableSession()) return
     val session = checkNotNull(currentSession)
-    val initialDirectory = session.gameDirectory?.resolve("replays")?.takeIf { java.nio.file.Files.isDirectory(it) }
-        ?: session.gameDirectory
-    val chooser = JFileChooser(initialDirectory?.toFile()).apply {
-      dialogTitle = "Load Input Recording"
-      fileSelectionMode = JFileChooser.FILES_ONLY
-      isAcceptAllFileFilterUsed = false
-      addChoosableFileFilter(FileNameExtensionFilter("Coffee GB input recordings (*.cgbreplay)", "cgbreplay"))
-    }
-    if (chooser.showOpenDialog(owner) != JFileChooser.APPROVE_OPTION) return
-    val selected = chooser.selectedFile?.toPath() ?: return
-    if (!isCurrent(session.sessionId)) return
-    eventBus.post(ReplayPlaybackLoadRequestEvent(nextRequestId(), session.sessionId, selected))
+    eventBus.post(ReplayPlaybackLoadRequestEvent(nextRequestId(), session.sessionId, path))
   }
 
-  private fun requestInputRecordingStart() {
+  fun setInputPlaybackPaused(paused: Boolean) {
+    requireEdt("Input playback pause request")
+    if (closed || inputPlaybackPhase != ReplayPlaybackPhase.PLAYING) return
+    eventBus.post(
+        if (paused) Controller.PauseEmulationEvent() else Controller.ResumeEmulationEvent())
+  }
+
+  private fun requestInputRecordingStart(mode: ReplayRecordingMode) {
     if (!requireAvailableSession()) return
     val expectedSessionId = checkNotNull(currentSession).sessionId
-    val choice = showInputRecordingModeDialog() ?: return
+    if (mode == ReplayRecordingMode.CURRENT_SESSION && !confirmCurrentSessionRecording()) return
     if (!isCurrent(expectedSessionId)) return
     eventBus.post(
         ReplayRecordingStartRequestEvent(
             nextRequestId(),
             expectedSessionId,
-            choice,
-            includeSensitiveInitialState = choice == ReplayRecordingMode.CURRENT_SESSION,
+            mode,
+            includeSensitiveInitialState = mode == ReplayRecordingMode.CURRENT_SESSION,
         ))
   }
 
-  /** No option is preselected: choosing the privacy-sensitive mode is always deliberate. */
-  private fun showInputRecordingModeDialog(): ReplayRecordingMode? {
-    val current = JRadioButton("From current moment")
-    val cleanBoot = JRadioButton("Restart from clean boot")
+  /** Current-session tapes embed memory and cartridge data, so the red button confirms consent. */
+  private fun confirmCurrentSessionRecording(): Boolean {
     val consent =
         JCheckBox(
             "I understand this file includes the current emulator and cartridge save state.",
-        ).apply { isEnabled = false }
-    ButtonGroup().apply {
-      add(current)
-      add(cleanBoot)
-    }
-    current.addActionListener { consent.isEnabled = true }
-    cleanBoot.addActionListener {
-      consent.isSelected = false
-      consent.isEnabled = false
-    }
+        )
     val panel =
         JPanel().apply {
           layout = BoxLayout(this, BoxLayout.Y_AXIS)
-          add(JLabel("Choose how to begin input recording:"))
+          add(JLabel("Record from the current moment?"))
           add(Box.createVerticalStrut(10))
-          add(current)
           add(
               JLabel(
-                  "  Continues now. The replay includes emulator memory and cartridge RAM/save data, but never ROM bytes or paths."))
+                  "The replay includes emulator memory and cartridge RAM/save data, " +
+                      "but never ROM bytes or paths."))
+          add(Box.createVerticalStrut(6))
           add(consent)
-          add(Box.createVerticalStrut(10))
-          add(cleanBoot)
-          add(
-              JLabel(
-                  "  Restarts in a battery-isolated clean boot. The replay and session contain no save state."))
         }
     val result =
         JOptionPane.showOptionDialog(
             owner,
             panel,
-            "Start Input Recording",
+            "Record from Current Moment",
             JOptionPane.DEFAULT_OPTION,
             JOptionPane.QUESTION_MESSAGE,
             null,
-            arrayOf("Start Recording", "Cancel"),
-            "Cancel",
+            arrayOf("🔴", "✖️"),
+            "✖️",
         )
-    if (result != 0) return null
-    return when {
-      current.isSelected && consent.isSelected -> ReplayRecordingMode.CURRENT_SESSION
-      cleanBoot.isSelected -> ReplayRecordingMode.CLEAN_BOOT
-      current.isSelected -> {
-        onDesktopStatus("Confirm the current-session data notice before recording.", null)
-        null
-      }
-      else -> {
-        onDesktopStatus("Choose a recording mode before starting.", null)
-        null
-      }
+    if (result == 0 && !consent.isSelected) {
+      onDesktopStatus("Confirm the current-session data notice before recording.", null)
     }
+    return result == 0 && consent.isSelected
   }
 
   fun saveSlot(slot: Int) {
