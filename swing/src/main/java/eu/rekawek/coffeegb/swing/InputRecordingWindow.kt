@@ -1,0 +1,176 @@
+package eu.rekawek.coffeegb.swing
+
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingMode
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
+import java.awt.Dialog
+import java.awt.Dimension
+import java.awt.FlowLayout
+import java.awt.Window
+import java.awt.event.KeyEvent
+import java.nio.file.Path
+import javax.swing.AbstractAction
+import javax.swing.BorderFactory
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JDialog
+import javax.swing.JPanel
+import javax.swing.KeyStroke
+import javax.swing.SwingUtilities
+import javax.swing.WindowConstants
+
+internal data class InputRecordingControlState(
+    val ejectEnabled: Boolean,
+    val playPauseEnabled: Boolean,
+    val stopEnabled: Boolean,
+    val recordEnabled: Boolean,
+    val resetRecordEnabled: Boolean,
+)
+
+internal fun inputRecordingControlState(
+    presentation: DesktopCommandPresentation,
+    replaySelected: Boolean,
+): InputRecordingControlState {
+  val transportIdle =
+      presentation.inputRecordingPhase == ReplayRecordingPhase.IDLE &&
+          presentation.inputPlaybackPhase == ReplayPlaybackPhase.IDLE
+  val ordinarySessionReady =
+      presentation.gameLoaded &&
+          presentation.stateCommandsAvailable &&
+          !presentation.sessionBusy
+  val playbackControllable =
+      presentation.gameLoaded &&
+          presentation.inputPlaybackPhase == ReplayPlaybackPhase.PLAYING &&
+          !presentation.sessionBusy
+  val recordingActive =
+      presentation.inputRecordingPhase == ReplayRecordingPhase.ARMING ||
+          presentation.inputRecordingPhase == ReplayRecordingPhase.RECORDING
+  val playbackActive = presentation.inputPlaybackPhase != ReplayPlaybackPhase.IDLE
+  return InputRecordingControlState(
+      ejectEnabled = ordinarySessionReady && transportIdle,
+      playPauseEnabled =
+          playbackControllable || (ordinarySessionReady && transportIdle && replaySelected),
+      stopEnabled = presentation.gameLoaded && (recordingActive || playbackActive),
+      recordEnabled = ordinarySessionReady && transportIdle && !presentation.paused,
+      resetRecordEnabled = ordinarySessionReady && transportIdle,
+  )
+}
+
+/** Modeless, emoji-only tape controls for deterministic input capture and playback. */
+internal class InputRecordingWindow(
+    owner: Window,
+    private val chooseReplay: () -> Path?,
+    private val playReplay: (Path) -> Unit,
+    private val setPlaybackPaused: (Boolean) -> Unit,
+    private val stopTransport: () -> Unit,
+    private val startRecording: (ReplayRecordingMode) -> Unit,
+) : AutoCloseable {
+  private val eject = tapeButton("⏏️", "Load input recording")
+  private val playPause = tapeButton("⏯️", "Play input recording")
+  private val stop = tapeButton("⏹️", "Stop input recording or playback")
+  private val record = tapeButton("🔴", "Record from current moment")
+  private val resetRecord = tapeButton("🔄️ 🔴", "Reset and record from boot", 82)
+  private val dialog =
+      JDialog(owner, BASE_TITLE, Dialog.ModalityType.MODELESS).apply {
+        defaultCloseOperation = WindowConstants.HIDE_ON_CLOSE
+        contentPane =
+            JPanel(FlowLayout(FlowLayout.CENTER, 8, 8)).apply {
+              border = BorderFactory.createEmptyBorder(4, 4, 4, 4)
+              add(eject)
+              add(playPause)
+              add(stop)
+              add(record)
+              add(resetRecord)
+            }
+        rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+            .put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "hide")
+        rootPane.actionMap.put(
+            "hide",
+            object : AbstractAction() {
+              override fun actionPerformed(event: java.awt.event.ActionEvent) {
+                isVisible = false
+              }
+            },
+        )
+        isResizable = false
+        pack()
+      }
+
+  private var selectedReplay: Path? = null
+  private var presentation = DesktopCommandPresentation()
+  private var shown = false
+
+  init {
+    requireEdt("Input recording window construction")
+    eject.addActionListener {
+      chooseReplay()?.let { selected ->
+        selectedReplay = selected
+        render(presentation)
+      }
+    }
+    playPause.addActionListener {
+      when (presentation.inputPlaybackPhase) {
+        ReplayPlaybackPhase.IDLE -> selectedReplay?.let(playReplay)
+        ReplayPlaybackPhase.PLAYING -> setPlaybackPaused(!presentation.paused)
+        ReplayPlaybackPhase.LOADING,
+        ReplayPlaybackPhase.COMPLETED -> Unit
+      }
+    }
+    stop.addActionListener { stopTransport() }
+    record.addActionListener { startRecording(ReplayRecordingMode.CURRENT_SESSION) }
+    resetRecord.addActionListener { startRecording(ReplayRecordingMode.CLEAN_BOOT) }
+    render(presentation)
+  }
+
+  fun show() {
+    requireEdt("Input recording window opening")
+    if (!shown) {
+      dialog.setLocationRelativeTo(dialog.owner)
+      shown = true
+    }
+    dialog.isVisible = true
+    dialog.toFront()
+  }
+
+  fun render(next: DesktopCommandPresentation) {
+    requireEdt("Input recording window update")
+    presentation = next
+    val controls = inputRecordingControlState(next, selectedReplay != null)
+    eject.isEnabled = controls.ejectEnabled
+    playPause.isEnabled = controls.playPauseEnabled
+    stop.isEnabled = controls.stopEnabled
+    record.isEnabled = controls.recordEnabled
+    resetRecord.isEnabled = controls.resetRecordEnabled
+    playPause.toolTipText =
+        when {
+          next.inputPlaybackPhase != ReplayPlaybackPhase.PLAYING ->
+              "Play input recording from beginning"
+          next.paused -> "Resume input playback"
+          else -> "Pause input playback"
+        }
+    dialog.title = selectedReplay?.fileName?.let { "$BASE_TITLE — $it" } ?: BASE_TITLE
+  }
+
+  override fun close() {
+    requireEdt("Input recording window closing")
+    dialog.dispose()
+  }
+
+  private companion object {
+    const val BASE_TITLE = "Input Recording"
+
+    fun tapeButton(emoji: String, accessibleName: String, width: Int = 54): JButton =
+        JButton(emoji).apply {
+          preferredSize = Dimension(width, 46)
+          minimumSize = preferredSize
+          toolTipText = accessibleName
+          accessibleContext.accessibleName = accessibleName
+        }
+
+    fun requireEdt(operation: String) {
+      check(SwingUtilities.isEventDispatchThread()) {
+        "$operation must run on the Event Dispatch Thread"
+      }
+    }
+  }
+}

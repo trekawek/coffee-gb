@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.controller.replay.ReplayCodec
 import eu.rekawek.coffeegb.controller.replay.ReplayInitialMode
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackLoadRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStopRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStatusEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingMode
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
@@ -167,6 +168,8 @@ class BasicControllerInputRecordingTest {
               includeSensitiveInitialState = false,
           ))
       val recording = await(statuses) { it.phase == ReplayRecordingPhase.RECORDING }
+      // Leave enough post-boot tape for Stop to be exercised while playback is still active.
+      Thread.sleep(350)
       eventBus.post(Controller.RewindEvent(true))
       assertTrue(
           await(statuses) { it.message?.contains("Rewind is unavailable") == true }.tickCount > 0L)
@@ -196,6 +199,30 @@ class BasicControllerInputRecordingTest {
               assertNotNull(recording.sessionId),
               artifact.path,
           ))
+      val playing = await(playback) { it.phase == ReplayPlaybackPhase.PLAYING }
+
+      // Tape Stop must replace the input-isolated replay machine with a normal, running session
+      // while the desktop retains the selected file for another Play from the beginning.
+      started.clear()
+      playbackStates.clear()
+      sessions.clear()
+      eventBus.post(
+          ReplayPlaybackStopRequestEvent(
+              4,
+              assertNotNull(playing.sessionId),
+          ))
+      assertEquals(
+          ReplayPlaybackPhase.IDLE,
+          await(playback) { it.phase == ReplayPlaybackPhase.IDLE }.phase,
+      )
+      val restoredGeneration =
+          assertNotNull(await(started) { it.sessionGeneration != null }.sessionGeneration)
+      val restoredSession = await(sessions) { it.available }
+      assertFalse(
+          await(playbackStates) { it.sessionGeneration == restoredGeneration }.paused)
+
+      playback.clear()
+      eventBus.post(ReplayPlaybackLoadRequestEvent(5, restoredSession.sessionId, artifact.path))
       assertEquals(
           ReplayPlaybackPhase.PLAYING,
           await(playback) { it.phase == ReplayPlaybackPhase.PLAYING }.phase,
@@ -204,16 +231,6 @@ class BasicControllerInputRecordingTest {
           ReplayPlaybackPhase.COMPLETED,
           await(playback) { it.phase == ReplayPlaybackPhase.COMPLETED }.phase,
       )
-
-      // Reset is the recovery route after either completion or checkpoint divergence. It must
-      // replace the input-isolated replay machine with a normal, running session.
-      started.clear()
-      playbackStates.clear()
-      eventBus.post(Controller.ResetEmulationEvent())
-      val resetGeneration =
-          assertNotNull(await(started) { it.sessionGeneration != null }.sessionGeneration)
-      await(playbackStates) { it.sessionGeneration == resetGeneration }
-      assertFalse(await(playbackStates) { it.sessionGeneration == resetGeneration }.paused)
     } finally {
       controller.close()
       eventBus.close()

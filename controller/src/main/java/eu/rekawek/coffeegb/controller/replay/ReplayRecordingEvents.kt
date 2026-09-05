@@ -89,6 +89,17 @@ data class ReplayPlaybackLoadRequestEvent(
   }
 }
 
+/** Stops loading or presenting a replay while retaining the selected file in the desktop UI. */
+data class ReplayPlaybackStopRequestEvent(
+    val requestId: Long,
+    val expectedSessionId: Long,
+) : Event {
+  init {
+    require(requestId > 0) { "Replay playback request ID must be positive" }
+    require(expectedSessionId > 0) { "Replay playback session ID must be positive" }
+  }
+}
+
 /** Authoritative replay-playback state, scoped to the normal game session that initiated it. */
 data class ReplayPlaybackStatusEvent(
     val sessionId: Long?,
