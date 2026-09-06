@@ -75,6 +75,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private final boolean earlyCgbLyReadEdge;
 
+    private final boolean yugiohEarlyDaysCardVramWrites;
+
     // Construction-time capability supplied by Gameboy.  This is deliberately a positive,
     // profile-filtered permission rather than a raw execution mode: only normal-speed DMG/MGB,
     // SGB/SGB2, ordinary CGB compatibility, and native CGB/CGB0 sessions without history/replay
@@ -311,13 +313,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                boolean mealybugDmgBlob, boolean earlyCgbLyReadEdge) {
         this(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode,
                 mealybugDmgBlob, earlyCgbLyReadEdge,
-                ExecutionMode.ACCURACY, null, false);
+                false, ExecutionMode.ACCURACY, null, false);
     }
 
     public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer,
                StatRegister statRegister, boolean gbc,
                eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
                boolean mealybugDmgBlob, boolean earlyCgbLyReadEdge,
+               boolean yugiohEarlyDaysCardVramWrites,
                ExecutionMode executionMode, HardwareProfile hardwareProfile,
                boolean debugHistoryReplay) {
         this.statRegister = statRegister;
@@ -328,6 +331,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.gbc = gbc;
         this.speedMode = speedMode;
         this.earlyCgbLyReadEdge = earlyCgbLyReadEdge;
+        this.yugiohEarlyDaysCardVramWrites = yugiohEarlyDaysCardVramWrites;
         this.performanceSteadyTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && (hardwareProfile == HardwareProfileRegistry.DMG
@@ -547,7 +551,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         if (!shouldDelayPpuWrite(address, value)) {
             cancelPendingPpuWrites(address);
-            setByteImmediately(address, value);
+            setByteImmediately(address, value, true);
             return;
         }
 
@@ -559,12 +563,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // value also preserves the DMG's separate write-strobe effects (notably the
         // immediate WX "just changed" pulse) while the synchronized value is pending.
         int immediateValue = (value & ~mask) | (current & mask);
-        setByteImmediately(address, immediateValue);
+        setByteImmediately(address, immediateValue, true);
         pendingPpuWrites.add(new PendingPpuWriteRuntime(
                 address, value, mask, getPpuWriteDelayDots(address)));
     }
 
     private void setByteImmediately(int address, int value) {
+        setByteImmediately(address, value, false);
+    }
+
+    private void setByteImmediately(int address, int value, boolean fromCpu) {
         if (address == LYC.getAddress()) {
             statRegister.onLycWrite(r.get(LYC), value);
         }
@@ -600,7 +608,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         if (videoRam0.accepts(address)) {
             lastCpuVramWriteTick = ticksInLine;
-            if (isVramAvailableForCpu(true)) {
+            if (isVramAvailableForCpu(true)
+                    || (fromCpu && yugiohEarlyDaysCardVramWrites
+                    && address < 0x8500)) {
                 selectedVideoRam().setByte(address, value);
             }
             return;
