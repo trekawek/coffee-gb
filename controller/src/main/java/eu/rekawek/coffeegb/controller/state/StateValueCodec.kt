@@ -333,10 +333,10 @@ internal object StateValueCodec {
   }
 
   /**
-   * StateFile v1/v2 are byte-stable formats.  The PERFORMANCE fields appended to these two
-   * records are transient/defaultable, so released files with their historical prefixes remain
-   * valid and must be retained at their original arity for exact re-encoding.  Restore-time
-   * normalization supplies the omitted values before constructing the live Java record.
+   * StateFile v1/v2 are byte-stable formats. Appended transient/defaultable fields and inactive
+   * accessory state leave released files with their historical prefixes valid. Those prefixes
+   * must be retained at their original arity for exact re-encoding; restore-time normalization
+   * supplies omitted values before constructing the live Java record.
    */
   private fun acceptedFieldInventories(
       type: Class<*>,
@@ -348,6 +348,8 @@ internal object StateValueCodec {
           listOf(names, names.dropLast(2))
       "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" ->
           listOf(names, names.dropLast(3), names.dropLast(4))
+      "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortState" ->
+          listOf(names, names.dropLast(1))
       else -> listOf(names)
     }
   }

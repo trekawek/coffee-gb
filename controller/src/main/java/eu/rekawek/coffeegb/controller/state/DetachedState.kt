@@ -939,6 +939,10 @@ internal object DetachedStateAdapter {
 }
 
 internal object StateGraph {
+  private const val INFRARED_PORT_STATE =
+      "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortState"
+  private const val TV_REMOTE_STATE = "eu.rekawek.coffeegb.core.ir.TvRemote\$TvRemoteState"
+
   private val recordIds by lazy {
     StateTypeRegistry.recordClasses.withIndex().associate { (index, type) -> type to index + 1 }
   }
@@ -981,9 +985,9 @@ internal object StateGraph {
 
   /**
    * Returns the stable wire/hash view of one record without changing the detached value itself.
-   * PERFORMANCE appends only defaultable execution metadata to the historical Sound/GPU records;
-   * when those fields are at their legacy defaults, omit them for canonical encoding and replay
-   * hashing. Non-default metadata, and already-decoded historical prefixes, remain untouched.
+   * New execution metadata and inactive accessory state are append-only. When those fields are at
+   * their historical defaults, omit them for canonical encoding and replay hashing. Non-default
+   * metadata, and already-decoded historical prefixes, remain untouched.
    */
   internal fun canonicalRecordFields(value: RecordState): List<StateField> {
     val fields = value.fields
@@ -1014,6 +1018,14 @@ internal object StateGraph {
             fields.last().value == Int32State(0)) {
           val counter = fields[fields.lastIndex - 3].value
           if (counter == Int32State(-1)) fields.dropLast(4) else fields.dropLast(3)
+        } else {
+          fields
+        }
+      }
+      INFRARED_PORT_STATE -> {
+        if (fields.lastOrNull()?.name == "tvRemoteMemento" &&
+            fields.last().value == idleTvRemoteState()) {
+          fields.dropLast(1)
         } else {
           fields
         }
@@ -1071,6 +1083,12 @@ internal object StateGraph {
       }
     }
 
+    if (typeName == INFRARED_PORT_STATE &&
+        value.fields.size == names.size - 1 &&
+        value.fields.map(StateField::name) == names.dropLast(1)) {
+      return value.fields + StateField("tvRemoteMemento", idleTvRemoteState())
+    }
+
     val gpuType = typeName == "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState"
     if (!gpuType) {
       return value.fields
@@ -1099,6 +1117,20 @@ internal object StateGraph {
       )
     }
     return value.fields
+  }
+
+  private fun idleTvRemoteState(): RecordState {
+    val typeId = StateTypeRegistry.recordClassNames.indexOf(TV_REMOTE_STATE) + 1
+    check(typeId > 0) { "TV remote state is not registered" }
+    return RecordState(
+        typeId,
+        listOf(
+            StateField("armed", BooleanState(false)),
+            StateField("running", BooleanState(false)),
+            StateField("index", Int32State(0)),
+            StateField("remaining", Int32State(0)),
+        ),
+    )
   }
 
   private class Capture(private val admittedRecordIds: Map<Class<*>, Int>) {
