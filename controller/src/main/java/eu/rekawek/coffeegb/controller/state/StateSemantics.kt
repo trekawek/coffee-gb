@@ -485,6 +485,26 @@ internal object StateSemantics {
               }
             }
           })
+      put("eu.rekawek.coffeegb.core.ir.TvRemote\$TvRemoteState",
+          constrained("The fixed NEC envelope has one armed, running, completed, or idle position.") {
+            val armed = it.boolean("armed")
+            val running = it.boolean("running")
+            val index = it.int("index")
+            val remaining = it.int("remaining")
+            it.require(!(armed && running), "cannot be both armed and running")
+            it.range("index", 0, TV_REMOTE_SCHEDULE_SIZE)
+            it.range("remaining", -1, TV_REMOTE_LEADER_BURST_CYCLES)
+            when {
+              armed -> it.require(index == 0 && remaining == 0,
+                  "has an invalid armed pulse position")
+              running -> it.require(index < TV_REMOTE_SCHEDULE_SIZE && remaining > 0,
+                  "has an invalid running pulse position")
+              index == 0 -> it.require(remaining == 0,
+                  "has an invalid idle pulse position")
+              else -> it.require(index == TV_REMOTE_SCHEDULE_SIZE && remaining <= 0,
+                  "has an invalid completed pulse position")
+            }
+          })
 
       // DMA/PPU queues, phase indices, and delayed-write collections.
       put("eu.rekawek.coffeegb.core.memory.Dma\$DmaState",
@@ -1866,6 +1886,8 @@ internal object StateSemantics {
   private const val SGB_DISPLAY_FADE_MASK = 0xff
   private const val SGB_DISPLAY_STATE_ALLOWED_BITS = 0x1ff
   private const val FULL_CHANGER_SCHEDULE_SIZE = 36
+  private const val TV_REMOTE_SCHEDULE_SIZE = 67
+  private const val TV_REMOTE_LEADER_BURST_CYCLES = 37_749
   private const val BARCODE_FRAME_SIZE = 30
   private const val MOBILE_PACKET_DATA_BYTES = 254
   private const val MOBILE_PACKET_BYTES = 262

@@ -22,7 +22,8 @@ import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
  * DMG-compatibility mode (reads 0xFF), matching the other CGB-only registers.
  *
  * <p>Received light comes from a pluggable external device. Supported sources are another
- * linked Game Boy and the {@link FullChanger} (Zok Zok Heroes).
+ * linked Game Boy, the {@link FullChanger} (Zok Zok Heroes), and a generic
+ * {@link TvRemote}.
  */
 public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPort> {
 
@@ -35,6 +36,10 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     private final FullChanger fullChanger = new FullChanger();
 
     private transient boolean fullChangerActive;
+
+    private final TvRemote tvRemote = new TvRemote();
+
+    private transient boolean tvRemoteActive;
 
     private transient InfraredEndpoint endpoint = InfraredEndpoint.NULL_ENDPOINT;
 
@@ -70,6 +75,12 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
             fullChanger.transform(e.characterId());
             fullChangerActive = true;
         }, FullChanger.TransformEvent.class);
+        eventBus.register(e -> {
+            if (gbc && !speedMode.isDmgCompat()) {
+                tvRemote.sendSignal();
+                tvRemoteActive = true;
+            }
+        }, TvRemote.SendSignalEvent.class);
     }
 
     /** Connects RP bit 4 to the CGB link port's serial-input pin. */
@@ -92,6 +103,9 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
             // double speed so a game sees the same delays regardless of its speed setting
             fullChangerActive = fullChanger.tick(speedMode.getSpeedMode());
         }
+        if (tvRemoteActive) {
+            tvRemoteActive = tvRemote.tick(speedMode.getSpeedMode());
+        }
         if (debugHooks != null) {
             notifyDebugSignalChange();
         }
@@ -99,12 +113,13 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
 
     /**
      * Returns the exact idle CGB IR span. External infrared endpoints, non-quiet serial inputs,
-     * and the FullChanger are deliberately fail-closed: their callbacks or pulse edges must
-     * remain visible in the scalar ordering.
+     * and emulated infrared accessories are deliberately fail-closed: their callbacks or pulse
+     * edges must remain visible in the scalar ordering.
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
                 || fullChangerActive
+                || tvRemoteActive
                 || endpoint != InfraredEndpoint.NULL_ENDPOINT
                 || !serialEndpoint.canTickPerformanceQuietSpan(requested)
                 || debugHooks != null) {
@@ -117,6 +132,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     public int performanceSettledHaltSpanLimit(int requested) {
         if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
                 || fullChangerActive
+                || tvRemoteActive
                 || endpoint != InfraredEndpoint.NULL_ENDPOINT
                 || !serialEndpoint.canTickPerformanceQuietSpan(requested)
                 || debugHooks != null) {
@@ -137,7 +153,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         if (ticks <= 0) {
             return;
         }
-        // The packet preflight proves an inactive FullChanger, null IR endpoint, and quiet serial
+        // The packet preflight proves inactive IR accessories, a null endpoint, and quiet serial
         // input. There is no arithmetic state to advance, so the trusted commit is a no-op.
     }
 
@@ -147,6 +163,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
                 && speedMode.getSpeedMode() == 2
                 && requested > 0
                 && !fullChangerActive
+                && !tvRemoteActive
                 && endpoint == InfraredEndpoint.NULL_ENDPOINT
                 && serialEndpoint.canTickPerformanceQuietSpan(requested)
                 && debugHooks == null;
@@ -154,7 +171,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
 
     /** The idle epoch has no IR state to advance. */
     public void tickPerformanceEpochIdle(int ticks) {
-        // Intentionally empty: the null endpoint and inactive FullChanger were preflighted.
+        // Intentionally empty: the null endpoint and inactive IR accessories were preflighted.
     }
 
     @Override
@@ -177,6 +194,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         // an armed device starts transmitting at a poll of the register, so the polling
         // loop observes the first pulse from its beginning
         fullChanger.onRpRead();
+        tvRemote.onRpRead();
         notifyDebugSignalChange();
         // Bits 2, 3 and 5 are pulled high. Bit 4 is not unused on CGB hardware: it
         // exposes link-port pin 4 as a raw digital input for software UARTs.
@@ -189,21 +207,21 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         // light source. In the normal $C0 receive mode it is active-low only
         // while infrared light is present.
         if (readMode == 0x80
-                || (readMode == 0xc0 && (fullChanger.isLightOn() || endpoint.isLightOn()))) {
+                || (readMode == 0xc0 && receivedLight())) {
             result &= ~0x02;
         }
         return result;
     }
 
     /**
-     * Captures RP and its physical inputs without calling {@code FullChanger.onRpRead()}.
-     * Ordinary FF56 reads intentionally arm/advance some infrared peripherals.
+     * Captures RP and its physical inputs without polling emulated infrared accessories.
+     * Ordinary FF56 reads intentionally start an armed accessory transmission.
      */
     public DebugHardwareInspection.Infrared captureDebugInfraredInspection(boolean available) {
         if (!available) {
             return new DebugHardwareInspection.Infrared(false, -1, false, false, false);
         }
-        boolean receivedLight = fullChanger.isLightOn() || endpoint.isLightOn();
+        boolean receivedLight = receivedLight();
         boolean serialInputHigh = serialEndpoint.isSerialInputHigh();
         int result = rp | 0x2c | 0x02;
         if (serialInputHigh) {
@@ -219,12 +237,13 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
 
     @Override
     public ComponentState<InfraredPort> captureState() {
-        return new InfraredPortState(rp, fullChanger.captureState());
+        return new InfraredPortState(rp, fullChanger.captureState(), tvRemote.captureState());
     }
 
     @Override
     public ComponentState<InfraredPort> captureState(MachineStateCapture capture) {
-        return new InfraredPortState(rp, fullChanger.captureState(capture));
+        return new InfraredPortState(
+                rp, fullChanger.captureState(capture), tvRemote.captureState(capture));
     }
 
     @Override
@@ -236,6 +255,8 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         endpoint.setLightOn((rp & 0x01) != 0);
         fullChanger.restoreState(mem.fullChangerMemento);
         fullChangerActive = fullChanger.isActive();
+        tvRemote.restoreState(mem.tvRemoteMemento);
+        tvRemoteActive = tvRemote.isActive();
         alignDebugSignal();
     }
 
@@ -267,16 +288,25 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
 
     private int getDebugSignal() {
         int localOutput = rp & 0x01;
-        int receivedLight = fullChanger.isLightOn() || endpoint.isLightOn() ? 0x02 : 0;
+        int receivedLight = receivedLight() ? 0x02 : 0;
         return localOutput | receivedLight;
     }
 
-    private record InfraredPortState(int rp, ComponentState<FullChanger> fullChangerMemento)
+    private boolean receivedLight() {
+        return fullChanger.isLightOn() || tvRemote.isLightOn() || endpoint.isLightOn();
+    }
+
+    private record InfraredPortState(
+            int rp,
+            ComponentState<FullChanger> fullChangerMemento,
+            ComponentState<TvRemote> tvRemoteMemento)
             implements ComponentState<InfraredPort> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */
-    private record InfraredPortMemento(int rp, Memento<FullChanger> fullChangerMemento)
+    private record InfraredPortMemento(
+            int rp,
+            Memento<FullChanger> fullChangerMemento)
             implements Memento<InfraredPort> {
     }
 }

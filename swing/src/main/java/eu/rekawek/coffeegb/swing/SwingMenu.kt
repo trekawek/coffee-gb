@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatDatabase
 import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.ir.FullChanger
+import eu.rekawek.coffeegb.core.ir.TvRemote
 import eu.rekawek.coffeegb.swing.io.DesktopCameraSource
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
 import java.awt.Component
@@ -534,6 +535,14 @@ internal class SwingMenu(
           },
       )
     }
+
+    val tvRemote = JMenuItem("Send TV Remote Signal")
+    tvRemote.accessibleContext.accessibleDescription =
+        "Send a generic NEC television-remote signal to the Game Boy Color infrared sensor"
+    peripheralsMenu.add(tvRemote)
+    tvRemote.isEnabled = false
+    enableWhenEmulationActive(tvRemote)
+    tvRemote.addActionListener { eventBus.post(TvRemote.SendSignalEvent()) }
 
     val scanBarcode = JMenuItem("Barcode Boy…")
     scanBarcode.accessibleContext.accessibleDescription =

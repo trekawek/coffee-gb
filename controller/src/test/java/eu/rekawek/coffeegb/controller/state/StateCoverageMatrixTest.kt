@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.ir.InfraredPort
+import eu.rekawek.coffeegb.core.ir.TvRemote
 import eu.rekawek.coffeegb.core.state.MachineStateCapture
 import eu.rekawek.coffeegb.core.state.ComponentState
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController
@@ -445,6 +446,24 @@ class StateCoverageMatrixTest {
       infrared.getByte(0xff56)
       assertEquals(completedContinuation, continueInfrared(infrared, 600))
       assertEquals(completedExpected, StateGraph.capture(infrared.captureState()))
+
+      irBus.post(TvRemote.SendSignalEvent())
+      infrared.setByte(0xff56, 0xc0)
+      infrared.getByte(0xff56)
+      repeat(5_000) { infrared.tick() }
+      val activeRemote = StateGraph.capture(infrared.captureState())
+      val remote = activeRemote.record(TV_REMOTE_MEMENTO)
+      assertTrue(!remote.bool("armed"))
+      assertTrue(remote.bool("running"))
+      StateSemantics.validate(StateGraph.restore(activeRemote))
+
+      val expectedRemoteTrace = continueInfrared(infrared, 50_000)
+      val expectedRemote = StateGraph.capture(infrared.captureState())
+      @Suppress("UNCHECKED_CAST")
+      infrared.restoreState(
+          StateGraph.restore(activeRemote) as ComponentState<InfraredPort>)
+      assertEquals(expectedRemoteTrace, continueInfrared(infrared, 50_000))
+      assertEquals(expectedRemote, StateGraph.capture(infrared.captureState()))
     }
   }
 
@@ -852,6 +871,7 @@ class StateCoverageMatrixTest {
         "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
     const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState"
     const val FULL_CHANGER_MEMENTO = "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState"
+    const val TV_REMOTE_MEMENTO = "eu.rekawek.coffeegb.core.ir.TvRemote\$TvRemoteState"
     val DEFAULT_MAPPER_PROBES = listOf(0x0100, 0x4000, 0x7000, 0x7fe1, 0xa000, 0xa001)
 
     val EXPECTED_MAPPER_FAMILIES =
