@@ -2,11 +2,44 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
+import java.nio.file.Path
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class InputRecordingWindowTest {
+  @Test
+  fun `loading a replay selects and immediately plays it`() {
+    val selection = InputReplaySelection()
+    val selected = Path.of("loaded.cgbreplay")
+    val actions = mutableListOf<String>()
+
+    assertTrue(
+        selection.loadAndPlay(
+            selected,
+            onSelected = { actions += "selected" },
+            playReplay = { actions += "played:$it" },
+        ))
+
+    assertEquals(selected, selection.path)
+    assertEquals(listOf("selected", "played:$selected"), actions)
+  }
+
+  @Test
+  fun `saved recording replaces the previously loaded replay without starting playback`() {
+    val selection = InputReplaySelection()
+    val loaded = Path.of("loaded.cgbreplay")
+    val recorded = Path.of("recorded.cgbreplay")
+    val played = mutableListOf<Path>()
+    selection.loadAndPlay(loaded, onSelected = {}, playReplay = played::add)
+
+    selection.selectRecorded(recorded)
+
+    assertEquals(recorded, selection.path)
+    assertEquals(listOf(loaded), played)
+  }
+
   @Test
   fun `idle transport enables tape selection and both recording modes`() {
     val presentation =
