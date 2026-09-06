@@ -496,6 +496,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         videoRam0.setByte(address, value);
     }
 
+    /**
+     * Writes the selected physical VRAM bank through the CGB DMA destination bus.
+     * Unlike CPU writes, an already-granted transfer retains ownership if its block
+     * completion crosses into mode 3.
+     */
+    public void writeSelectedVideoRamForHdma(int address, int value) {
+        materializeSteadyTiming();
+        selectedVideoRam().setByte(address, value);
+    }
+
     /** Core HDMA helper that reads the selected physical bank without exposing its RAM object. */
     public int readSelectedVideoRamForCore(int address) {
         materializeSteadyTiming();

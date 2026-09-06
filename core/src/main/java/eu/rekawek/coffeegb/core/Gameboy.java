@@ -367,7 +367,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 executionMode, hardwareProfile, configuration.debugHistoryReplay);
         mmu.setGpu(gpu);
         statRegister.init(gpu);
-        hdma = new Hdma(getAddressSpace(), speedMode);
+        hdma = new Hdma(getAddressSpace(), speedMode, gpu::writeSelectedVideoRamForHdma);
         gpu.setHdma(hdma);
         sound = new Sound(timer, speedMode, gbc, clockSpec, executionMode);
         joypad = new Joypad(interruptManager, sgbBus, sgb, configuration.playerInputSource);

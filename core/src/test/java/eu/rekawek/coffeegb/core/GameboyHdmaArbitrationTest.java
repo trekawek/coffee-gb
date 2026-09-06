@@ -198,6 +198,43 @@ public class GameboyHdmaArbitrationTest {
         }
     }
 
+    @Test
+    public void vramDmaDestinationBypassesCpuMode3Lock() throws IOException {
+        byte[] rom = new byte[0x8000];
+        rom[0x143] = (byte) 0x80;
+        try (Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(rom))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setGameboyType(GameboyType.CGB)
+                .setSupportBatterySave(false)
+                .build()) {
+            AddressSpace bus = gameboy.getAddressSpace();
+            for (int i = 0; i < 0x10; i++) {
+                bus.setByte(0xc100 + i, 0xa0 + i);
+            }
+
+            int guard = 2000;
+            while (guard-- > 0 && (gameboy.getGpu().getMode() != Mode.PixelTransfer
+                    || gameboy.getGpu().getTicksInLine() < 100)) {
+                gameboy.tick();
+            }
+            assertTrue(guard > 0);
+
+            bus.setByte(0xff51, 0xc1);
+            bus.setByte(0xff52, 0);
+            bus.setByte(0xff53, 0);
+            bus.setByte(0xff54, 0);
+            bus.setByte(0xff55, 0);
+            while (gameboy.getHdma().isTransferInProgress()) {
+                gameboy.getHdma().tick();
+            }
+
+            assertEquals(Mode.PixelTransfer, gameboy.getGpu().getMode());
+            for (int i = 0; i < 0x10; i++) {
+                assertEquals(0xa0 + i, gameboy.getGpu().getVideoRam0().getByte(0x8000 + i));
+            }
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
 
         private final Gameboy gameboy;
