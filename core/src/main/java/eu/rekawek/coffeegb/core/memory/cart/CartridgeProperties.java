@@ -79,7 +79,8 @@ public final class CartridgeProperties {
         SHIKINJOU_LINK_ROLE_PATCH,
         VOLLEY_FIRE_LINK_ROLE_PATCH,
         HARVEST_MOON_LINK_ROLE_PATCH,
-        IKARI_YOUSAI_2_LINK_ROLE_PATCH
+        IKARI_YOUSAI_2_LINK_ROLE_PATCH,
+        YUGIOH_EARLY_DAYS_CARD_VRAM_WRITES
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -212,6 +213,9 @@ public final class CartridgeProperties {
             features("Jantaku Boy four-player transition workaround",
                     CartridgeProperties::isJantakuBoyFourPlayer,
                     Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH),
+            features("Yu-Gi-Oh Early Days card tile upload",
+                    CartridgeProperties::isYugiohEarlyDaysCollection,
+                    Feature.YUGIOH_EARLY_DAYS_CARD_VRAM_WRITES),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -836,6 +840,24 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0148) == 0x02
                 && info.byteAt(0x0149) == 0x00
                 && matches(info.data, 0x0395, fourPlayerWait);
+    }
+
+    private static boolean isYugiohEarlyDaysCollection(RomInfo info) {
+        // The localized Early Days image is expanded from the original 1 MiB release to
+        // 2 MiB. Header metadata is sufficient to keep its phase-sensitive card upload
+        // workaround away from both the original cartridge and unrelated MBC1 games.
+        return info.data.length == 0x200000
+                && info.title().startsWith("YUGI")
+                && info.hasValidLogo()
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0144) == 'A'
+                && info.byteAt(0x0145) == '4'
+                && info.byteAt(0x0146) == 0x03
+                && info.rawType() == 0x03
+                && info.byteAt(0x0148) == 0x06
+                && info.byteAt(0x0149) == 0x02
+                && info.byteAt(0x014a) == 0x00
+                && info.byteAt(0x014c) == 0x00;
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
