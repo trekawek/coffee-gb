@@ -17,6 +17,12 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
 
+    @FunctionalInterface
+    public interface VramWriter {
+
+        void setByte(int address, int value);
+    }
+
     private enum HaltHdmaState {
         LOW,
         HIGH,
@@ -66,6 +72,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     private final AddressSpace addressSpace;
 
     private final SpeedMode speedMode;
+
+    private final VramWriter vramWriter;
 
     private Mode gpuMode;
 
@@ -169,8 +177,13 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     public Hdma(AddressSpace addressSpace, SpeedMode speedMode) {
+        this(addressSpace, speedMode, addressSpace::setByte);
+    }
+
+    public Hdma(AddressSpace addressSpace, SpeedMode speedMode, VramWriter vramWriter) {
         this.addressSpace = addressSpace;
         this.speedMode = speedMode;
+        this.vramWriter = vramWriter;
     }
 
     public long getPpuBusGeneration() {
@@ -227,7 +240,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         // be visible per byte for HDMA/OAM-DMA bus sharing.
         for (int j = 0; j < 0x10; j++) {
             int destinationAddress = 0x8000 | ((dst + j) & 0x1fff);
-            addressSpace.setByte(destinationAddress, blockData[j]);
+            vramWriter.setByte(destinationAddress, blockData[j]);
             if (debugMemoryHooks) {
                 notifyMemoryAccess(
                         DebugAddressSpace.VIDEO_RAM,
