@@ -68,11 +68,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
-import javax.swing.Box
-import javax.swing.BoxLayout
 import javax.swing.ImageIcon
 import javax.swing.JButton
-import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JFileChooser
@@ -118,6 +115,7 @@ internal class StateUxDesktopController(
     private val onInputRecordingPhase: (ReplayRecordingPhase) -> Unit = {},
     private val onInputPlaybackPhase: (ReplayPlaybackPhase) -> Unit = {},
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
+    private val onInputRecordingSaved: (Path) -> Unit = {},
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
   private val requestIds = AtomicLong()
@@ -345,6 +343,7 @@ internal class StateUxDesktopController(
         if (closed) return@onEdt
         inputRecordingPhase = ReplayRecordingPhase.IDLE
         onInputRecordingPhase(ReplayRecordingPhase.IDLE)
+        onInputRecordingSaved(event.path)
         onDesktopStatus(
             "Input recording saved as ${event.path.fileName}. Use Open Save Folder to reveal it.",
             DesktopCommand.OPEN_SAVE_FOLDER,
@@ -558,7 +557,6 @@ internal class StateUxDesktopController(
   private fun requestInputRecordingStart(mode: ReplayRecordingMode) {
     if (!requireAvailableSession()) return
     val expectedSessionId = checkNotNull(currentSession).sessionId
-    if (mode == ReplayRecordingMode.CURRENT_SESSION && !confirmCurrentSessionRecording()) return
     if (!isCurrent(expectedSessionId)) return
     eventBus.post(
         ReplayRecordingStartRequestEvent(
@@ -567,41 +565,6 @@ internal class StateUxDesktopController(
             mode,
             includeSensitiveInitialState = mode == ReplayRecordingMode.CURRENT_SESSION,
         ))
-  }
-
-  /** Current-session tapes embed memory and cartridge data, so the red button confirms consent. */
-  private fun confirmCurrentSessionRecording(): Boolean {
-    val consent =
-        JCheckBox(
-            "I understand this file includes the current emulator and cartridge save state.",
-        )
-    val panel =
-        JPanel().apply {
-          layout = BoxLayout(this, BoxLayout.Y_AXIS)
-          add(JLabel("Record from the current moment?"))
-          add(Box.createVerticalStrut(10))
-          add(
-              JLabel(
-                  "The replay includes emulator memory and cartridge RAM/save data, " +
-                      "but never ROM bytes or paths."))
-          add(Box.createVerticalStrut(6))
-          add(consent)
-        }
-    val result =
-        JOptionPane.showOptionDialog(
-            owner,
-            panel,
-            "Record from Current Moment",
-            JOptionPane.DEFAULT_OPTION,
-            JOptionPane.QUESTION_MESSAGE,
-            null,
-            arrayOf("🔴", "✖️"),
-            "✖️",
-        )
-    if (result == 0 && !consent.isSelected) {
-      onDesktopStatus("Confirm the current-session data notice before recording.", null)
-    }
-    return result == 0 && consent.isSelected
   }
 
   fun saveSlot(slot: Int) {

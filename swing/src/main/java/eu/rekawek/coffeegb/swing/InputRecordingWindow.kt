@@ -56,9 +56,30 @@ internal fun inputRecordingControlState(
   )
 }
 
+internal class InputReplaySelection {
+  var path: Path? = null
+    private set
+
+  fun loadAndPlay(
+      selected: Path?,
+      onSelected: () -> Unit,
+      playReplay: (Path) -> Unit,
+  ): Boolean {
+    val replay = selected ?: return false
+    path = replay
+    onSelected()
+    playReplay(replay)
+    return true
+  }
+
+  fun selectRecorded(replay: Path) {
+    path = replay
+  }
+}
+
 /** Modeless, emoji-only tape controls for deterministic input capture and playback. */
 internal class InputRecordingWindow(
-    owner: Window,
+    private val owner: Window,
     private val chooseReplay: () -> Path?,
     private val playReplay: (Path) -> Unit,
     private val setPlaybackPaused: (Boolean) -> Unit,
@@ -96,29 +117,30 @@ internal class InputRecordingWindow(
         pack()
       }
 
-  private var selectedReplay: Path? = null
+  private val replaySelection = InputReplaySelection()
   private var presentation = DesktopCommandPresentation()
   private var shown = false
 
   init {
     requireEdt("Input recording window construction")
-    eject.addActionListener {
-      chooseReplay()?.let { selected ->
-        selectedReplay = selected
-        render(presentation)
-      }
+    eject.onTapeAction {
+      replaySelection.loadAndPlay(
+          chooseReplay(),
+          onSelected = { render(presentation) },
+          playReplay = playReplay,
+      )
     }
-    playPause.addActionListener {
+    playPause.onTapeAction {
       when (presentation.inputPlaybackPhase) {
-        ReplayPlaybackPhase.IDLE -> selectedReplay?.let(playReplay)
+        ReplayPlaybackPhase.IDLE -> replaySelection.path?.let(playReplay)
         ReplayPlaybackPhase.PLAYING -> setPlaybackPaused(!presentation.paused)
         ReplayPlaybackPhase.LOADING,
         ReplayPlaybackPhase.COMPLETED -> Unit
       }
     }
-    stop.addActionListener { stopTransport() }
-    record.addActionListener { startRecording(ReplayRecordingMode.CURRENT_SESSION) }
-    resetRecord.addActionListener { startRecording(ReplayRecordingMode.CLEAN_BOOT) }
+    stop.onTapeAction(stopTransport)
+    record.onTapeAction { startRecording(ReplayRecordingMode.CURRENT_SESSION) }
+    resetRecord.onTapeAction { startRecording(ReplayRecordingMode.CLEAN_BOOT) }
     render(presentation)
   }
 
@@ -135,7 +157,7 @@ internal class InputRecordingWindow(
   fun render(next: DesktopCommandPresentation) {
     requireEdt("Input recording window update")
     presentation = next
-    val controls = inputRecordingControlState(next, selectedReplay != null)
+    val controls = inputRecordingControlState(next, replaySelection.path != null)
     eject.isEnabled = controls.ejectEnabled
     playPause.isEnabled = controls.playPauseEnabled
     stop.isEnabled = controls.stopEnabled
@@ -148,12 +170,37 @@ internal class InputRecordingWindow(
           next.paused -> "Resume input playback"
           else -> "Pause input playback"
         }
-    dialog.title = selectedReplay?.fileName?.let { "$BASE_TITLE — $it" } ?: BASE_TITLE
+    dialog.title = replaySelection.path?.fileName?.let { "$BASE_TITLE — $it" } ?: BASE_TITLE
+  }
+
+  fun selectRecordedReplay(path: Path) {
+    requireEdt("Recorded input replay selection")
+    replaySelection.selectRecorded(path)
+    render(presentation)
   }
 
   override fun close() {
     requireEdt("Input recording window closing")
     dialog.dispose()
+  }
+
+  private fun JButton.onTapeAction(action: () -> Unit) {
+    addActionListener {
+      try {
+        action()
+      } finally {
+        restoreEmulatorFocus()
+      }
+    }
+  }
+
+  private fun restoreEmulatorFocus() {
+    SwingUtilities.invokeLater {
+      if (owner.isDisplayable) {
+        owner.toFront()
+        owner.requestFocus()
+      }
+    }
   }
 
   private companion object {

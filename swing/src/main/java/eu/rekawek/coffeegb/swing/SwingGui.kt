@@ -324,6 +324,11 @@ class SwingGui private constructor(
                 desktopUiCoordinator.inputPlayback(phase)
               }
             },
+            onInputRecordingSaved = { path ->
+              if (::inputRecordingWindow.isInitialized) {
+                inputRecordingWindow.selectRecordedReplay(path)
+              }
+            },
             dialogFactory = desktopDialogFactory,
         )
     inputRecordingWindow =
