@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntUnaryOperator;
 
 public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponent<SerialEndpoint> {
 
@@ -19,6 +20,9 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
     private int bitIndex = 7;
 
     private int linkPlayerIndex = -1;
+
+    /** Transient wiring to the peer's serial shift register, installed during Gameboy init. */
+    private transient IntUnaryOperator externalClockReceiver;
 
     /** Pairs two endpoints before session installation; this is not a concurrent hot-plug API. */
     public void init(Peer2PeerSerialEndpoint peer) {
@@ -68,11 +72,18 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
         if (peer == null) {
             return -1;
         }
+        // New peer transfers deliver external clock edges synchronously. Retain this drain only
+        // so a released snapshot containing an old deferred edge can still finish its byte.
         if (bitsReceived.get() == 0) {
             return -1;
         }
         bitsReceived.decrementAndGet();
         return shift();
+    }
+
+    @Override
+    public void setExternalClockReceiver(IntUnaryOperator receiver) {
+        externalClockReceiver = receiver;
     }
 
     @Override
@@ -97,12 +108,29 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
         return shift();
     }
 
+    @Override
+    public int exchangeBit(int outgoingBit) {
+        if (peer == null) {
+            return 1;
+        }
+        IntUnaryOperator receiver = peer.externalClockReceiver;
+        if (receiver == null) {
+            // Preserve the legacy deferred exchange for direct endpoint users and old snapshots.
+            return sendBit();
+        }
+        return receiver.applyAsInt(outgoingBit & 1);
+    }
+
     private int shift() {
         var bit = BitUtils.getBit(peer.sb, bitIndex) ? 1 : 0;
+        advanceBitIndex();
+        return bit;
+    }
+
+    private void advanceBitIndex() {
         if (--bitIndex == -1) {
             bitIndex = 7;
         }
-        return bit;
     }
 
     @Override
