@@ -59,7 +59,10 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
     public void init(SerialEndpoint serialEndpoint) {
+        this.serialEndpoint.setExternalTransfer(false);
+        this.serialEndpoint.setExternalClockReceiver(null);
         this.serialEndpoint = serialEndpoint;
+        serialEndpoint.setExternalClockReceiver(this::exchangeExternalClockBit);
     }
 
     /** True when the raw SC register has armed a transfer using this port's clock. */
@@ -280,7 +283,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
             // lead in addition to Gambatte's four-clock peripheral window.
             int acknowledgeWindow = gbc ? 8 : 3;
             if (clocksToCompletion <= acknowledgeWindow) {
-                shiftBit(serialEndpoint.sendBit());
+                shiftInternalBit();
             }
         }
 
@@ -308,7 +311,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (precedingStageHigh) {
             serialClockSignal = !serialClockSignal;
             if (!serialClockSignal) {
-                shiftBit(serialEndpoint.sendBit());
+                shiftInternalBit();
             }
         }
     }
@@ -330,7 +333,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
             if (oldPhase == flipClocks - 1) {
                 serialClockSignal = !serialClockSignal;
                 if (!serialClockSignal) {
-                    shiftBit(serialEndpoint.sendBit());
+                    shiftInternalBit();
                 }
             }
         }
@@ -354,6 +357,22 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
             interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Serial);
             LOG.atDebug().log("[{}] Received sb = {}", this.hashCode(), Integer.toBinaryString(sb));
         }
+    }
+
+    private void shiftInternalBit() {
+        shiftBit(serialEndpoint.exchangeBit((sb >>> 7) & 1));
+    }
+
+    private int exchangeExternalClockBit(int incomingBit) {
+        if ((sc & 0x80) == 0) {
+            return 0;
+        }
+        if ((sc & 0x01) != 0) {
+            return 1;
+        }
+        int outgoingBit = (sb >>> 7) & 1;
+        shiftBit(incomingBit);
+        return outgoingBit;
     }
 
     private boolean isColorMode() {

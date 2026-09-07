@@ -16,6 +16,41 @@ import org.junit.Test
 class LinkedFrameStepperTest {
 
   @Test
+  fun mirroredCgbFastInternalMastersStopWhenOnePeerBecomesTheListener() {
+    val electionRom =
+        StateCodecTestSupport.rom(cgb = true).also { bytes ->
+          // LD A,$82; LDH ($02),A; LD A,$01; LDH ($80),A; JR -2
+          // The marker distinguishes the listener transition from an oversized fixed lead.
+          byteArrayOf(
+                  0x3e,
+                  0x82.toByte(),
+                  0xe0.toByte(),
+                  0x02,
+                  0x3e,
+                  0x01,
+                  0xe0.toByte(),
+                  0x80.toByte(),
+                  0x18,
+                  0xfe.toByte(),
+              )
+              .copyInto(bytes, destinationOffset = 0x100)
+        }
+    PairFixture(GameboyType.CGB, electionRom).use { fixture ->
+      fixture.armBoth(0x83)
+
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.INTERNAL_CLOCK_COLLISION,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+      assertTrue(fixture.first.gameboy.isInternalClockTransferActive)
+      assertTrue(fixture.second.gameboy.isExternalClockTransferActive)
+      assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
+      assertTrue(dividerDelta(fixture.second, fixture.first) > 0)
+      assertEquals(0, fixture.second.gameboy.addressSpace.getByte(0xff80))
+    }
+  }
+
+  @Test
   fun mirroredInternalMastersReceiveOneDeterministicP2PhaseEscape() {
     PairFixture().use { fixture ->
       fixture.armBoth(0x81)
@@ -164,7 +199,10 @@ class LinkedFrameStepperTest {
     return (aheadDivider - behindDivider) and 0xffff
   }
 
-  private class PairFixture(hardware: GameboyType = GameboyType.DMG) : AutoCloseable {
+  private class PairFixture(
+      hardware: GameboyType = GameboyType.DMG,
+      rom: ByteArray = StateCodecTestSupport.rom(cgb = hardware == GameboyType.CGB),
+  ) : AutoCloseable {
     val firstEndpoint = Peer2PeerSerialEndpoint()
     val secondEndpoint = Peer2PeerSerialEndpoint()
     val first: Session
@@ -176,12 +214,12 @@ class LinkedFrameStepperTest {
       firstEndpoint.init(secondEndpoint)
       val firstConfig =
           StateCodecTestSupport.configuration(
-              bytes = StateCodecTestSupport.rom(cgb = hardware == GameboyType.CGB),
+              bytes = rom.clone(),
               hardware = hardware,
           )
       val secondConfig =
           StateCodecTestSupport.configuration(
-              bytes = StateCodecTestSupport.rom(cgb = hardware == GameboyType.CGB),
+              bytes = rom.clone(),
               hardware = hardware,
           )
       first = Session(firstConfig, EventBusImpl(null, null, false), null, firstEndpoint)

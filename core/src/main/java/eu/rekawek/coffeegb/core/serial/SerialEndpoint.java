@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.core.serial;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
+import java.util.function.IntUnaryOperator;
+
 public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
 
     /** Stable zero-based player index for an in-process link, or {@code -1}. */
@@ -102,6 +104,14 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
     }
 
     /**
+     * Binds the owning serial port's external-clock exchange. In-process peer cables invoke this
+     * function synchronously on the clock master's falling edge; it returns the current outgoing
+     * data bit before shifting the supplied incoming bit. Device endpoints may ignore it.
+     */
+    default void setExternalClockReceiver(IntUnaryOperator receiver) {
+    }
+
+    /**
      * Returns the received byte.
      */
     default int recvByte() {
@@ -117,6 +127,14 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
      * Sends following SB bit. Returns the received bit.
      */
     int sendBit();
+
+    /**
+     * Exchanges one bit while this Game Boy supplies the clock. Endpoints which do not model an
+     * in-process peer retain the legacy {@link #sendBit()} contract.
+     */
+    default int exchangeBit(int outgoingBit) {
+        return sendBit();
+    }
 
     /**
      * Sends the SB bit and returns the received byte.

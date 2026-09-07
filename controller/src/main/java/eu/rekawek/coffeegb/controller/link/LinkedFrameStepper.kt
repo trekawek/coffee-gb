@@ -75,6 +75,11 @@ internal object LinkedFrameStepper {
             first.heldButtons == second.heldButtons
     if (!sameTimingPhase && !mirroredFastInputActivation) return null
 
+    val mirroredFastInternalTransfer =
+        bothInternal &&
+            first.gameboy.isFastSerialClockSelectedForActiveTransfer &&
+            second.gameboy.isFastSerialClockSelectedForActiveTransfer
+
     return when {
       bothInternal -> {
         val ticks =
@@ -82,10 +87,13 @@ internal object LinkedFrameStepper {
                 clockSpec.controllerTicksPerFrame().toLong(),
                 INTERNAL_COLLISION_ESCAPE_FRAMES.toLong(),
             )
-        advanceUnilaterally(second, ticks)
+        val advanced =
+            advanceUnilaterally(second, ticks) {
+              mirroredFastInternalTransfer && second.gameboy.isExternalClockTransferActive
+            }
         LOG.atDebug().log(
             "Resolved mirrored internal-clock link election with a {}-tick P2 lead",
-            ticks,
+            advanced,
         )
         SymmetryBreak.INTERNAL_CLOCK_COLLISION
       }
