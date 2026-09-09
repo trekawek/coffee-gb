@@ -381,32 +381,43 @@ public final class PerformanceScanlineIntegrationTest {
     }
 
     @Test
-    public void cgbLcdcSizeAndTileHistoryFailClosedUntilNineDotsDrain() throws Exception {
-        try (Gameboy gameboy = nativeCgbSession()) {
-            settleNativeDoubleSpeed(gameboy);
-            gameboy.getGpu().setPerformanceScanlineEnabled(true);
-            int guard = 0;
-            while (gameboy.getGpu().getMode() != Mode.VBlank && guard++ < 456 * 155) {
-                gameboy.tick();
-            }
-            assertTrue("native CGB setup did not reach VBlank", guard < 456 * 155);
-            for (int i = 0; i < 79; i++) {
-                gameboy.tick();
-            }
-            assertTrue(gameboy.getGpu().performanceEpochSpanLimit(1) > 0);
-            int lcdc = gameboy.getGpu().getByte(0xff40);
-            gameboy.getGpu().setByte(0xff40, lcdc ^ 0x14);
-            assertEquals("recent LCDC.2/.4 history was admitted",
-                    0, gameboy.getGpu().performanceEpochSpanLimit(1));
-            var checkpoint = gameboy.captureState();
-            gameboy.restoreState(checkpoint);
-            assertEquals("restored LCDC history was admitted",
-                    0, gameboy.getGpu().performanceEpochSpanLimit(1));
+    public void cgbVblankLcdcHistoryAdmitsAndRestoresNineDotDrain() throws Exception {
+        try (Gameboy scalar = nativeCgbSession();
+                Gameboy candidate = nativeCgbSession()) {
+            reachVblankDot(scalar, 79, true);
+            reachVblankDot(candidate, 79, true);
+            scalar.getGpu().setPerformanceScanlineEnabled(false);
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+            assertDeepStateEquals("native CGB VBlank dot-79 setup",
+                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+            assertTrue("native CGB VBlank dot 79 is admitted",
+                    candidate.getGpu().performanceEpochSpanLimit(1) > 0);
+
+            int lcdc = candidate.getGpu().getByte(0xff40);
+            scalar.getGpu().setByte(0xff40, lcdc ^ 0x14);
+            candidate.getGpu().setByte(0xff40, lcdc ^ 0x14);
+            assertTrue("recent LCDC.2/.4 history remains a valid VBlank span",
+                    candidate.getGpu().performanceEpochSpanLimit(9) >= 9);
+            var checkpoint = candidate.captureState();
+            candidate.restoreState(checkpoint);
+            assertTrue("restored LCDC history remains a valid VBlank span",
+                    candidate.getGpu().performanceEpochSpanLimit(9) >= 9);
+            assertDeepStateEquals("restored VBlank LCDC history",
+                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+
             for (int i = 0; i < 9; i++) {
-                gameboy.tick();
+                scalar.getGpu().tick();
             }
-            assertTrue("LCDC history did not re-admit after its drain",
-                    gameboy.getGpu().performanceEpochSpanLimit(1) > 0);
+            candidate.getGpu().advancePerformanceEpochQuietSpanTrusted(9, false, false);
+            assertDeepStateEquals("nine-dot VBlank LCDC history drain",
+                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+
+            for (int i = 0; i < 8; i++) {
+                scalar.getGpu().tick();
+                candidate.getGpu().tick();
+                assertDeepStateEquals("VBlank LCDC continuation " + i,
+                        scalar.getGpu().captureState(), candidate.getGpu().captureState());
+            }
         }
     }
 

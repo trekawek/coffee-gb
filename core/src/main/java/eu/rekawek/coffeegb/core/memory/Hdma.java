@@ -799,9 +799,13 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
      * That edge is deliberately left to the scalar scheduler by the GPU epoch horizons.
      */
     public boolean isPerformanceArmedHblankWaitStable() {
+        return isPerformanceArmedHblankWaitStable(false);
+    }
+
+    private boolean isPerformanceArmedHblankWaitStable(boolean halted) {
         return speedMode.isGbc()
                 && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 2
+                && (speedMode.getSpeedMode() == 1 || speedMode.getSpeedMode() == 2)
                 && transferInProgress
                 && hblankTransfer
                 && lcdEnabled
@@ -816,7 +820,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 && !speedSwitchStartedWithoutRequest
                 && !pauseOamDmaForSpeedSwitchBurst
                 && wakeRequestArbitration == WakeRequestArbitration.NONE
-                && !cpuHalted
+                && cpuHalted == halted
                 && !haltEnteredThisTick
                 && !requestOverlappedCpuWrite
                 && !interruptEntryWonArbitration
@@ -826,22 +830,58 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 && sourceBusSample == null;
     }
 
+    /** Both native CGB clocks may borrow a wait with no active request or bus owner. */
+    public boolean isPerformanceRunningEpochStable() {
+        return isPerformanceInactiveRequestClockStable() || isPerformanceArmedHblankWaitStable();
+    }
+
+    /** HALT remains frozen until an actual GPU request/wake event, which the owner fences. */
+    public boolean isPerformanceSettledHaltClockStable() {
+        return isPerformanceInactiveRequestClockStable()
+                || isPerformanceArmedHblankWaitStable(true);
+    }
+
+    public void advancePerformanceRunningEpochClockTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceRunningEpochStable()) {
+            throw new IllegalStateException("HDMA running wait is not stable");
+        }
+        if (isPerformanceInactiveRequestClockStable()) {
+            advancePerformanceInactiveRequestClockTrusted(ticks);
+        }
+    }
+
+    public void advancePerformanceSettledHaltClockTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceSettledHaltClockStable()) {
+            throw new IllegalStateException("HDMA halted wait is not stable");
+        }
+        if (isPerformanceInactiveRequestClockStable()) {
+            advancePerformanceInactiveRequestClockTrusted(ticks);
+        }
+    }
+
     /**
-     * Whether the native-CGB x2 scheduler has a structurally stable, already-owned HBlank data
+     * Whether the native-CGB scheduler has a structurally stable, already-owned HBlank data
      * interior. The source may be either one side-effect-free WRAM block or one ROM block whose
      * immutable physical mapping still has to be proven by a bounded
      * {@link PerformanceRomAccess} lease. The atomic tick-32 VRAM commit remains scalar.
      */
     public boolean isPerformanceNativeCgbOwnedHblankDataStructurallyStable() {
+        return hblankTransfer && isPerformanceNativeCgbOwnedDataStructurallyStable();
+    }
+
+    /**
+     * Common HBlank/GDMA source interior at either native CPU speed. Request arbitration and
+     * startup have already finished; the CPU is held until the separately scalar block commit.
+     * GDMA may run with the LCD off or in any mode whose GPU owner supplies a quiet horizon.
+     */
+    public boolean isPerformanceNativeCgbOwnedDataStructurallyStable() {
         return transferInProgress
-                && hblankTransfer
                 && tick >= 0 && tick < 31
                 && speedMode.isGbc()
                 && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 2
-                && lcdEnabled
-                && gpuMode == Mode.HBlank
-                && gpuLine >= 0 && gpuLine < 144
+                && (speedMode.getSpeedMode() == 1 || speedMode.getSpeedMode() == 2)
+                && (!hblankTransfer || lcdEnabled && gpuMode == Mode.HBlank
+                        && gpuLine >= 0 && gpuLine < 144)
                 && hblankRequestTicks == 0
                 && hblankRequestAge > 0
                 && nextHblankRequestTicks < 0
@@ -877,6 +917,19 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     public boolean requiresPerformanceNativeCgbOwnedHblankRomAccess() {
         return isPerformanceNativeCgbOwnedHblankDataStructurallyStable()
                 && isPerformanceOwnedRomSource();
+    }
+
+    /** Whether the common owned-data packet must borrow an immutable ROM mapping. */
+    public boolean requiresPerformanceNativeCgbOwnedRomAccess() {
+        return isPerformanceNativeCgbOwnedDataStructurallyStable()
+                && isPerformanceOwnedRomSource();
+    }
+
+    /** Source proof shared by HBlank and general DMA; no speculative source reads occur. */
+    public boolean isPerformanceNativeCgbOwnedDataStable(PerformanceRomAccess romAccess) {
+        return isPerformanceNativeCgbOwnedDataStructurallyStable()
+                && (isPerformanceOwnedHblankWramSource()
+                || hasCompletePerformanceOwnedPhysicalRomBlock(romAccess));
     }
 
     /** WRAM plus an exactly mapped immutable-ROM tier for the native-CGB owner. */
@@ -931,6 +984,15 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         return requested >= remainingDataTicks ? remainingDataTicks : 0;
     }
 
+    /**
+     * Bounded partial source prefix, ending no later than tick 31. Each odd data slot performs
+     * its real source read once, so callers may split at any peripheral horizon or user budget.
+     */
+    public int performanceNativeCgbOwnedDataSpanLimit(int requested, PerformanceRomAccess romAccess) {
+        return requested > 0 && isPerformanceNativeCgbOwnedDataStable(romAccess)
+                ? Math.min(requested, 31 - tick) : 0;
+    }
+
     /** Applies one preflighted WRAM-source data prefix without publishing transient bus samples. */
     public void advancePerformanceNativeCgbOwnedHblankDataTrusted(int ticks) {
         advancePerformanceNativeCgbOwnedHblankDataTrusted(ticks, null);
@@ -946,6 +1008,14 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 || performanceNativeCgbOwnedHblankDataSpanLimit(ticks, romAccess) != ticks) {
             throw new IllegalStateException(
                     "HDMA burst is not stable for a native-CGB PERFORMANCE data span");
+        }
+        advancePerformanceNativeCgbOwnedDataTrusted(ticks, romAccess);
+    }
+
+    /** Advances one preflighted HBlank/GDMA source prefix, leaving VRAM publication scalar. */
+    public void advancePerformanceNativeCgbOwnedDataTrusted(int ticks, PerformanceRomAccess romAccess) {
+        if (ticks <= 0 || performanceNativeCgbOwnedDataSpanLimit(ticks, romAccess) != ticks) {
+            throw new IllegalStateException("HDMA does not own a stable PERFORMANCE source prefix");
         }
         boolean physicalRomSource = isPerformanceOwnedRomSource();
         int endTick = tick + ticks;
@@ -968,8 +1038,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
 
     /** Stable HDMA clock contract used only by the native-CGB x2 running epoch. */
     public boolean isPerformanceNativeCgbRunningEpochStable() {
-        return isPerformanceInactiveRequestClockStable()
-                || isPerformanceArmedHblankWaitStable();
+        return isPerformanceRunningEpochStable();
     }
 
     /**
@@ -1022,7 +1091,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
 
     /** Whether an inactive OAM-search packet may use the generic request-clock transaction. */
     public boolean isPerformanceOamSearchPhaseClockStable() {
-        return gpuMode == Mode.OamSearch && isPerformanceInactiveRequestClockStable();
+        return gpuMode == Mode.OamSearch && (isPerformanceRunningEpochStable()
+                || isPerformanceSettledHaltClockStable());
     }
 
     /** OAM-search compatibility wrapper which retains its mode-specific trusted contract. */
@@ -1031,7 +1101,11 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             throw new IllegalStateException(
                     "HDMA request clock is not stable for an OAM-search PERFORMANCE span");
         }
-        advancePerformanceInactiveRequestClockTrusted(ticks);
+        if (cpuHalted) {
+            advancePerformanceSettledHaltClockTrusted(ticks);
+        } else {
+            advancePerformanceRunningEpochClockTrusted(ticks);
+        }
     }
 
     /** Captures the retained HDMA latches and current block progress without bus reads. */

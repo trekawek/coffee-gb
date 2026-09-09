@@ -135,6 +135,28 @@ public class AndroidPerformanceBoostTest {
     }
 
     @Test
+    public void soakCanCloseAndRestoreHintsAtALiveWorkBoundary() {
+        FakeHintPlatform platform = new FakeHintPlatform(31, 73);
+        AndroidPerformanceBoost boost = new AndroidPerformanceBoost(platform);
+        boost.onSessionStarted(ExecutionMode.PERFORMANCE);
+        boost.onPlaybackStateChanged(false);
+        assertTrue(boost.hasActiveSession());
+        boost.onSessionStarted(ExecutionMode.ACCURACY);
+        assertFalse(boost.hasActiveSession());
+        boost.onWorkStarted();
+        platform.nowNanos += 1000;
+        boost.onWorkCompleted();
+        assertTrue(platform.sessions.get(0).durations.isEmpty());
+        boost.onSessionStarted(ExecutionMode.PERFORMANCE);
+        boost.onPlaybackStateChanged(false);
+        assertTrue(boost.hasActiveSession());
+        boost.onWorkStarted();
+        platform.nowNanos += 2500;
+        boost.onWorkCompleted();
+        assertEquals(List.of(2500L), platform.sessions.get(1).durations);
+    }
+
+    @Test
     public void hardwareProfileSelectsTheMatchingControllerCadenceTarget() {
         assertTargetDuration(ClockSpec.LEGACY, 11_111_111L);
         assertTargetDuration(ClockSpec.SGB, 10_898_963L);

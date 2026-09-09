@@ -18,6 +18,17 @@ import java.util.Arrays;
 
 public class Mbc1 implements MemoryController {
 
+    @Override
+    public boolean isPerformanceRamAccessSafe() {
+        return getClass() == Mbc1.class && debugHooks == null;
+    }
+
+    @Override
+    public boolean isPerformanceRomPeekSafe() {
+        // Subclasses may transform reads or implement handshakes; they must opt in separately.
+        return getClass() == Mbc1.class;
+    }
+
     private static final Logger LOG = LoggerFactory.getLogger(Mbc1.class);
 
     private final int romBanks;

@@ -112,33 +112,22 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     }
 
     /**
-     * Returns the exact idle CGB IR span. External infrared endpoints, non-quiet serial inputs,
-     * and emulated infrared accessories are deliberately fail-closed: their callbacks or pulse
-     * edges must remain visible in the scalar ordering.
+     * Returns the exact normal-speed interval before an IR light or serial-input pin transition.
+     * Accessories may count down inside a constant pulse; actual edges remain scalar.
      */
     public int performanceQuietSpanLimit(int requested) {
-        if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
-                || fullChangerActive
-                || tvRemoteActive
-                || endpoint != InfraredEndpoint.NULL_ENDPOINT
-                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
-                || debugHooks != null) {
+        if (speedMode.getSpeedMode() != 1) {
             return 0;
         }
-        return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+        return performanceEventHorizon(Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN));
     }
 
-    /** Same exact idle proof for a settled normal-speed HALT packet, without the three-dot cap. */
+    /** Same exact event horizon for a settled normal-speed HALT packet, without the three-dot cap. */
     public int performanceSettledHaltSpanLimit(int requested) {
-        if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
-                || fullChangerActive
-                || tvRemoteActive
-                || endpoint != InfraredEndpoint.NULL_ENDPOINT
-                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
-                || debugHooks != null) {
+        if (speedMode.getSpeedMode() != 1) {
             return 0;
         }
-        return requested;
+        return performanceEventHorizon(requested);
     }
 
     public boolean canTickPerformanceQuietSpan(int ticks) {
@@ -146,32 +135,62 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     }
 
     public boolean tickPerformanceQuietSpan(int ticks) {
-        return canTickPerformanceQuietSpan(ticks);
+        if (!canTickPerformanceQuietSpan(ticks)) {
+            return false;
+        }
+        tickPerformanceEventSpanTrusted(ticks);
+        return true;
     }
 
     public void tickPerformanceQuietSpanTrusted(int ticks) {
-        if (ticks <= 0) {
-            return;
-        }
-        // The packet preflight proves inactive IR accessories, a null endpoint, and quiet serial
-        // input. There is no arithmetic state to advance, so the trusted commit is a no-op.
+        tickPerformanceEventSpanTrusted(ticks);
     }
 
-    /** True when the native-CGB epoch may treat IR as an idle no-op. */
+    /** Compatibility guard for a fixed-x2 epoch inside the IR event horizon. */
     public boolean performanceEpochIdle(int requested) {
         return gbc
                 && speedMode.getSpeedMode() == 2
                 && requested > 0
-                && !fullChangerActive
-                && !tvRemoteActive
-                && endpoint == InfraredEndpoint.NULL_ENDPOINT
-                && serialEndpoint.canTickPerformanceQuietSpan(requested)
-                && debugHooks == null;
+                && performanceEventHorizon(requested) >= requested;
     }
 
-    /** The idle epoch has no IR state to advance. */
+    /** Advances a preflighted epoch without crossing an IR pulse boundary. */
     public void tickPerformanceEpochIdle(int ticks) {
-        // Intentionally empty: the null endpoint and inactive IR accessories were preflighted.
+        tickPerformanceEventSpanTrusted(ticks);
+    }
+
+    /** State-only master-tick horizon shared by normal and double-speed schedulers. */
+    public int performanceEventHorizon(int requested) {
+        if (requested <= 0 || !gbc || debugHooks != null) {
+            return 0;
+        }
+        int span = Math.min(requested, endpoint.performanceQuietSpanLimit(requested));
+        if (span <= 0) {
+            return 0;
+        }
+        span = Math.min(span, serialEndpoint.performanceInputPinSpanLimit(span));
+        int speed = speedMode.getSpeedMode();
+        if (fullChangerActive) {
+            span = fullChanger.performanceSpanLimit(span, speed);
+        }
+        if (tvRemoteActive) {
+            span = tvRemote.performanceSpanLimit(span, speed);
+        }
+        return Math.max(0, span);
+    }
+
+    /** Arithmetic countdown only; callbacks and light transitions belong to the next scalar tick. */
+    public void tickPerformanceEventSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        int speed = speedMode.getSpeedMode();
+        if (fullChangerActive) {
+            fullChanger.tickPerformanceSpanTrusted(ticks, speed);
+        }
+        if (tvRemoteActive) {
+            tvRemote.tickPerformanceSpanTrusted(ticks, speed);
+        }
     }
 
     @Override

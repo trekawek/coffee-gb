@@ -530,7 +530,7 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
-    public void ownedHdmaBlockRequiresAnOrdinaryFrozenDoubleSpeedOpcode() {
+    public void ownedHdmaBlockRequiresAnOrdinaryDecodedNativeCgbOpcode() {
         Harness ordinary = new Harness(true);
         ordinary.enableDoubleSpeed();
         ordinary.memory.setByte(PROGRAM, 0x06); // LD B,d8
@@ -538,7 +538,9 @@ public class CpuPpuInterruptTimingTest {
 
         assertTrue(ordinary.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
         ordinary.cpu.releaseHdmaPrefetchedOpcode();
-        assertFalse(ordinary.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
+        assertTrue(ordinary.cpu.isInstructionRetiringForHdma());
+        assertTrue("the decoded CPU remains inert if DMA independently owns the next dot",
+                ordinary.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
 
         Harness prefetchedStop = new Harness(true);
         prefetchedStop.enableDoubleSpeed();

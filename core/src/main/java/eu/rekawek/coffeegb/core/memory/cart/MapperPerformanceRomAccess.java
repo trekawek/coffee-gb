@@ -34,4 +34,14 @@ final class MapperPerformanceRomAccess implements PerformanceRomAccess {
                 ? mapper.getByte(cpuAddress)
                 : -1;
     }
+
+    @Override
+    public boolean canAccessRam() {
+        return mapper.isPerformanceRamAccessSafe();
+    }
+
+    @Override
+    public int peekCpuByte(int cpuAddress) {
+        return mapper.isPerformanceRomPeekSafe() ? readCpuByte(cpuAddress) : -1;
+    }
 }

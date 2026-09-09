@@ -1019,7 +1019,7 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
-    public void anyPendingEnabledInterruptRejectsEpochBeforeHaltBugDecode() {
+    public void imeDisabledPendingInterruptRetiresHaltWithOneAuthoritativeFetch() {
         CountingMemory memory = new CountingMemory();
         memory.bytes[0] = 0x76; // HALT
         InterruptManager interrupts = new InterruptManager(true);
@@ -1027,9 +1027,13 @@ public final class CpuPerformanceEpochTest {
         interrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
         Cpu cpu = new Cpu(memory, interrupts, null, doubleSpeed(), new Display(false));
 
-        assertFalse(cpu.performanceEpochEntryEligible());
-        assertEquals(0, cpu.runPerformanceEpoch(54));
-        assertEquals(0, cpu.getRegisters().getPC());
+        assertTrue(cpu.performanceEpochEntryEligible());
+        assertEquals(2, cpu.runPerformanceEpoch(54));
+        assertEquals(1, cpu.getRegisters().getPC());
+        assertEquals(Cpu.State.OPCODE, cpu.getState());
+        assertEquals(1, memory.reads[0]);
+        assertEquals(1, memory.reads[1]);
+        assertFalse("HALT-bug continuation remains scalar", cpu.performanceEpochEntryEligible());
     }
 
     @Test
@@ -1040,6 +1044,7 @@ public final class CpuPerformanceEpochTest {
         interrupts.setByte(0xffff, 1);
         interrupts.requestPhasedInterruptAfterInstruction(
                 InterruptManager.InterruptType.VBlank);
+        interrupts.enableInterrupts(false);
         Cpu cpu = new Cpu(memory, interrupts, null, doubleSpeed(), new Display(false));
 
         assertFalse(cpu.performanceEpochEntryEligible());
@@ -1048,7 +1053,7 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
-    public void nativeCgbNormalSpeedLeavesUnknownRomFetchScalarUnderRawPendingInterrupt()
+    public void nativeCgbNormalSpeedReadsUnknownRomOnceUnderRawPendingInterrupt()
             throws Exception {
         ParityMemory directMemory = new ParityMemory();
         ParityMemory scalarMemory = new ParityMemory();
@@ -1065,7 +1070,7 @@ public final class CpuPerformanceEpochTest {
 
         assertTrue(direct.performanceNativeCgbNormalSpeedEpochEntryEligible());
         int elapsed = direct.runNativeCgbNormalSpeedPerformanceEpoch(54);
-        assertEquals(3, elapsed);
+        assertEquals(54, elapsed);
         for (int tick = 0; tick < elapsed; tick++) {
             scalar.tick();
         }
@@ -1074,16 +1079,17 @@ public final class CpuPerformanceEpochTest {
         assertDeepEquals("interrupts", scalarInterrupts.captureState(),
                 directInterrupts.captureState());
         assertArrayEquals(scalarMemory.bytes, directMemory.bytes);
-        assertEquals("unknown ROM opcode was speculatively read", 0, directMemory.reads);
+        assertEquals("unknown ROM opcode must be read exactly once", scalarMemory.reads,
+                directMemory.reads);
     }
 
     @Test
-    public void strictSgbEntryRejectsRawPendingInterrupts() {
+    public void sgbEntryDistinguishesImeMaskedAndEnabledPendingInterrupts() {
         CpuPair masked = newSgbPair(0x00);
         masked.directInterrupts.setByte(0xffff, 1);
         masked.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
-        assertFalse(masked.direct.performanceNormalSpeedEpochEntryEligible(false));
-        assertEquals(0, masked.direct.runSgbPerformanceEpoch(54));
+        assertTrue(masked.direct.performanceNormalSpeedEpochEntryEligible(false));
+        assertEquals(54, masked.direct.runSgbPerformanceEpoch(54));
 
         CpuPair enabled = newSgbPair(0x00);
         enabled.directInterrupts.setByte(0xffff, 1);
@@ -1132,14 +1138,14 @@ public final class CpuPerformanceEpochTest {
         CountingMemory retiMemory = new CountingMemory();
         retiMemory.bytes[0] = (byte) 0xd9; // RETI
         Cpu reti = normalSpeedNativeCpu(retiMemory, pendingVBlank());
-        assertEquals(3, reti.runNativeCgbNormalSpeedPerformanceEpoch(4));
-        assertEquals(Cpu.State.OPCODE, reti.getState());
-        assertEquals("RETI fetch must remain scalar", 0,
+        assertEquals(4, reti.runNativeCgbNormalSpeedPerformanceEpoch(4));
+        assertTrue(reti.getState() != Cpu.State.OPCODE);
+        assertEquals("RETI retirement must remain scalar", 0,
                 reti.runNativeCgbNormalSpeedPerformanceEpoch(54));
     }
 
     @Test
-    public void nativeCgbNormalSpeedFencesHaltAndIoUnderImeDisabledRawPendingInterrupt()
+    public void nativeCgbNormalSpeedTerminatesAtHaltAndFencesIoUnderMaskedInterrupt()
             throws Exception {
         CountingMemory haltMemory = new CountingMemory();
         haltMemory.bytes[0] = 0x76; // HALT
@@ -1151,14 +1157,14 @@ public final class CpuPerformanceEpochTest {
         haltInterrupts.setByte(0xffff, 1);
         haltInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
         assertTrue(halt.performanceNativeCgbNormalSpeedEpochEntryEligible());
-        var haltState = halt.captureState();
-        var haltInterruptState = haltInterrupts.captureState();
-        assertEquals("HALT-bug decode must stay on the zero-dot scalar boundary", 0,
+        assertEquals("actual HALT decode must terminate the epoch", 1,
                 halt.runNativeCgbNormalSpeedPerformanceEpoch(54));
-        assertDeepEquals("zero-dot HALT CPU", haltState, halt.captureState());
-        assertDeepEquals("zero-dot HALT interrupts", haltInterruptState,
-                haltInterrupts.captureState());
-        assertEquals(0, halt.getRegisters().getPC());
+        assertEquals(1, halt.getRegisters().getPC());
+        assertEquals(Cpu.State.OPCODE, halt.getState());
+        assertEquals(1, haltMemory.reads[0]);
+        assertEquals(1, haltMemory.reads[1]);
+        assertFalse("HALT-bug continuation must stay scalar",
+                halt.performanceNativeCgbNormalSpeedEpochEntryEligible());
 
         CountingMemory ioMemory = new CountingMemory();
         ioMemory.bytes[0] = (byte) 0xf0; // LDH A,(FF44)

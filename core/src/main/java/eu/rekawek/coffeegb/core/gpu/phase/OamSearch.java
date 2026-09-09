@@ -282,6 +282,65 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
                 readerPosition, spriteHeight, true, expectedSpeedMode);
     }
 
+    /** Native x2 reader whose CGB bus is already disconnected by OAM DMA. */
+    public boolean isPerformanceOwnedDmaSpanEligible(int readerPosition, int spriteHeight) {
+        if (!registers.isGbc() || registers.getSpeedMode() != 2
+                || readerPosition < 0 || readerPosition >= 79
+                || !selectSprites || !oamReaderInitialized || !oamReaderDmaSource
+                || !dma.ownedOamForPpuBeforeTick() || !dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || previousOamSpriteHeight != spriteHeight) {
+            return false;
+        }
+        State expectedState = (readerPosition & 1) == 0
+                ? State.READING_Y : State.READING_X;
+        return i == readerPosition / 2 && state == expectedState
+                && (state != State.READING_X || this.spriteHeight == spriteHeight);
+    }
+
+    /**
+     * Advances the disconnected CGB reader through an ownership-stable interval. The cached
+     * old-source words remain until their ordinary even-position FF sample during the 80-dot
+     * source propagation; the reader's last physical bus word remains unchanged. Consequently
+     * DMA destination bytes can be copied first without moving any OAM observation in time.
+     */
+    public void advancePerformanceOwnedDmaSpanTrusted(
+            int readerPosition, int ticks, int currentSpriteHeight) {
+        if (ticks < 0 || readerPosition + ticks > 79
+                || !isPerformanceOwnedDmaSpanEligible(readerPosition, currentSpriteHeight)) {
+            throw new IllegalStateException("OAM reader is not in an owned PERFORMANCE span");
+        }
+        if (ticks == 0) {
+            return;
+        }
+        int position = readerPosition;
+        int elapsed = 0;
+        if ((position & 1) != 0) {
+            samplePerformanceDmaOamWord(++position / 2, ++elapsed);
+            commitPerformanceXHalf(currentSpriteHeight, true);
+        }
+        while (ticks - elapsed >= 2) {
+            latchPerformanceYHalf(currentSpriteHeight, true);
+            position += 2;
+            elapsed += 2;
+            samplePerformanceDmaOamWord(position / 2, elapsed);
+            commitPerformanceXHalf(currentSpriteHeight, true);
+        }
+        if (elapsed < ticks) {
+            latchPerformanceYHalf(currentSpriteHeight, true);
+        }
+        dmaBlockedThisLine = true;
+        previousOamSpriteHeight = currentSpriteHeight;
+        oamReaderSourceChangeTicks = Math.max(0, oamReaderSourceChangeTicks - ticks);
+    }
+
+    private void samplePerformanceDmaOamWord(int entry, int elapsed) {
+        if (oamReaderSourceChangeTicks >= elapsed) {
+            oamReaderY[entry] = 0xff;
+            oamReaderX[entry] = 0xff;
+        }
+    }
+
     /**
      * Whether a bounded physical-DMG mode-2 span can use the allocation-free OAM scanner.
      *

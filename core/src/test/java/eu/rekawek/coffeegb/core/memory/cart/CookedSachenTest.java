@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.performance.PerformanceStateAssertions;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc;
@@ -8,6 +10,8 @@ import org.junit.Test;
 import java.io.IOException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -134,5 +138,119 @@ public class CookedSachenTest {
         assertEquals(0xA5, other.getByte(0x6000));
         // the logo shim was already off (we wrote before saving); it stays off after restore
         assertEquals(SACHEN_HEADER[0], other.getByte(0x0104));
+    }
+
+    @Test
+    public void logicalPeekLeaseOpensOnlyAfterLogoShimIsGone() throws IOException {
+        Cartridge cart = build();
+        SachenMmc mapper = cart.getSachenMmc();
+        PerformanceRomAccess lease = cart.acquirePerformanceRomAccess();
+        assertNotNull(lease);
+        assertFalse("boot-logo reads remain authoritative", mapper.isPerformanceRomPeekSafe());
+        assertEquals(-1, lease.peekCpuByte(0x0150));
+
+        ComponentState<Cartridge> beforeBootTakeover = cart.captureState();
+        cart.setByte(0x2000, 0x01);
+        assertTrue("the first game write ends the synthetic logo window",
+                mapper.isPerformanceRomPeekSafe());
+        assertEquals(SACHEN_HEADER[0], lease.peekCpuByte(0x0104));
+
+        ComponentState<Cartridge> afterBootTakeover = cart.captureState();
+        cart.setByte(0x3f00, 0x06);
+        cart.restoreState(afterBootTakeover);
+        assertTrue("restoring a post-takeover checkpoint keeps the lease open",
+                mapper.isPerformanceRomPeekSafe());
+        assertEquals(SACHEN_HEADER[0], lease.peekCpuByte(0x0104));
+
+        cart.restoreState(beforeBootTakeover);
+        assertFalse("restoring the boot checkpoint restores the closed lease",
+                mapper.isPerformanceRomPeekSafe());
+        assertEquals(-1, lease.peekCpuByte(0x0150));
+
+        cart.skipBoot();
+        assertTrue("SKIP must make the cooked logical window available",
+                mapper.isPerformanceRomPeekSafe());
+        assertEquals(SACHEN_HEADER[0], lease.peekCpuByte(0x0104));
+    }
+
+    @Test
+    public void logicalPeekMatchesBothWindowsAcrossSachenBankControlsAndDoesNotMutateState()
+            throws IOException {
+        Cartridge cart = build(0x80000);
+        cart.skipBoot();
+        PerformanceRomAccess lease = cart.acquirePerformanceRomAccess();
+        assertNotNull(lease);
+
+        int[] validAddresses = {0x0000, 0x0104, 0x2000, 0x3fff, 0x4000, 0x6000, 0x7fff};
+        assertLogicalReadsMatch("initial windows", cart, lease, validAddresses);
+
+        cart.setByte(0x3f00, 0x06); // ordinary switchable-bank register, A6 clear
+        assertLogicalReadsMatch("ordinary bank", cart, lease, validAddresses);
+
+        // Enable the gated base/mask controls, then select values that exercise both windows.
+        cart.setByte(0x3f00, 0x30);
+        cart.setByte(0x0000, 0x22);
+        cart.setByte(0x4000, 0x30);
+        assertLogicalReadsMatch("base and mask", cart, lease, validAddresses);
+
+        // Return to the ordinary bank before testing the outer selector so the expected
+        // game-relative upper-window bank is explicit rather than inherited from the mask case.
+        cart.setByte(0x3f00, 0x01);
+        // A6-high select chooses the second 256 KB game and changes the upper-window mask.
+        cart.setByte(0x3fc0, 0x01);
+        assertEquals(0xb0, lease.peekCpuByte(0x2000));
+        assertEquals(0xb1, lease.peekCpuByte(0x6000));
+        assertLogicalReadsMatch("outer select", cart, lease, validAddresses);
+
+        for (int invalid : new int[]{-1, 0x8000, 0xffff, Integer.MAX_VALUE}) {
+            assertEquals("invalid physical offset " + invalid, -1, lease.physicalOffset(invalid));
+            assertEquals("invalid logical read " + invalid, -1, lease.readCpuByte(invalid));
+            assertEquals("invalid logical peek " + invalid, -1, lease.peekCpuByte(invalid));
+        }
+
+        ComponentState<Cartridge> beforePeeks = cart.captureState();
+        for (int repeat = 0; repeat < 3; repeat++) {
+            assertLogicalReadsMatch("repeat " + repeat, cart, lease, validAddresses);
+        }
+        PerformanceStateAssertions.assertStateEquals("logical peeks are side-effect free",
+                beforePeeks, cart.captureState());
+    }
+
+    @Test
+    public void rawLinearAndDerivedSachenReadersRemainFailClosed() throws IOException {
+        SachenMmc raw = new SachenMmc(new Rom(cookedSachenRom()), true);
+        SachenMmc linear = new SachenMmc(new Rom(cookedSachenRom()), true, false);
+        assertFalse(raw.isPerformanceRomPeekSafe());
+        assertFalse(linear.isPerformanceRomPeekSafe());
+        raw.skipBoot();
+        linear.skipBoot();
+        assertFalse("raw mapper stays closed after boot", raw.isPerformanceRomPeekSafe());
+        assertFalse("linear mapper stays closed after boot", linear.isPerformanceRomPeekSafe());
+
+        int[] reads = {0};
+        SachenMmc derived = new SachenMmc(new Rom(cookedSachenRom()), 0) {
+            @Override
+            public int getByte(int address) {
+                reads[0]++;
+                return super.getByte(address);
+            }
+        };
+        derived.skipBoot();
+        MapperPerformanceRomAccess access = new MapperPerformanceRomAccess(derived);
+        assertFalse(derived.isPerformanceRomPeekSafe());
+        assertEquals(-1, access.peekCpuByte(0x0150));
+        assertEquals("fail-closed peek must not call a subclass read", 0, reads[0]);
+        assertEquals(0, access.readCpuByte(0x0150));
+        assertEquals("authoritative read still uses the mapper", 1, reads[0]);
+    }
+
+    private static void assertLogicalReadsMatch(String label, Cartridge cart,
+                                                PerformanceRomAccess lease, int[] addresses) {
+        for (int address : addresses) {
+            assertEquals(label + " CPU read " + Integer.toHexString(address),
+                    cart.getByte(address), lease.readCpuByte(address));
+            assertEquals(label + " side-effect-free peek " + Integer.toHexString(address),
+                    cart.getByte(address), lease.peekCpuByte(address));
+        }
     }
 }

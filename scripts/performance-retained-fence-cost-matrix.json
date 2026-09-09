@@ -1,0 +1,75 @@
+{
+  "schema": "coffee-gb-authored-performance-matrix-v1",
+  "id": "retained-fence-cost-12-v1",
+  "description": "Separate cost follow-up for the four authored retained-fence fixtures. The original 39-case matrix and 23 scenario IDs remain unchanged; this matrix uses the same production runner protocol and small representative profile rows.",
+  "protocol": {
+    "trials": 3,
+    "warmup_ticks": 2097152,
+    "measured_ticks": 8388608,
+    "shuffle_seed": 80571,
+    "diagnostic_window_ticks": 4194304,
+    "bootstrap": "SKIP",
+    "execution": "PERFORMANCE",
+    "rtc_millis": 0,
+    "battery_persistence": false,
+    "held_input": [
+      "A",
+      "RIGHT"
+    ],
+    "jvm_flags": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:+UseSerialGC"
+    ]
+  },
+  "cases": [
+    {
+      "scenario": "CONTROL_LINK_IO",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "CONTROL_LINK_IO",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "CONTROL_LINK_IO",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "OAM_ROM_DMA",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "OAM_ROM_DMA",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "OAM_ROM_DMA",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "OVERLAP_DMA",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "OVERLAP_DMA",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "OVERLAP_DMA",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "MBC3_RTC_WINDOW",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "MBC3_RTC_WINDOW",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "MBC3_RTC_WINDOW",
+      "profile": "CGB0_COMPAT"
+    }
+  ]
+}

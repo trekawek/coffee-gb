@@ -73,6 +73,37 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
     }
 
     @Override
+    public int performanceQuietSpanLimit(int requested) {
+        // recvBit is always -1, external-transfer notifications are inert, and the physical
+        // input pin is always high. Only the engine's private idle clock advances between bits.
+        return engine.performanceQuietSpanLimit(requested);
+    }
+
+    @Override
+    public int performanceClockCapabilities() {
+        return PERFORMANCE_CLOCK_IDLE | PERFORMANCE_CLOCK_INTERNAL | PERFORMANCE_CLOCK_EXTERNAL_WAIT;
+    }
+
+    @Override
+    public int performanceExternalClockWaitSpanLimit(int requested) {
+        return engine.performanceQuietSpanLimit(requested);
+    }
+
+    @Override
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0 || performanceQuietSpanLimit(ticks) < ticks) {
+            return false;
+        }
+        tickPerformanceQuietSpanTrusted(ticks);
+        return true;
+    }
+
+    @Override
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        engine.tickPerformanceQuietSpanTrusted(ticks);
+    }
+
+    @Override
     public void disconnect() {
         engine.cancelOrReplace();
         sb = 0xff;

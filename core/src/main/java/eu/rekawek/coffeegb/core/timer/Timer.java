@@ -149,6 +149,22 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return Math.max(0, span);
     }
 
+    /** Same exact x2 timer proof for the strict detailed-PPU/LCDC 63-dot owner. */
+    public int performanceStrictPpuEpochSpanLimit(int requested) {
+        if (requested <= 0 || speedMode.getSpeedMode() != 2 || debugHooks != null
+                || divReset || overflow || haltWakeDelay != 0
+                || haltBugDivRippleVisible || suppressNextInterruptRequest
+                || previousBit != timerInput(div, tac)) {
+            return 0;
+        }
+        int span = Math.min(requested, 63);
+        span = capBeforeMasterTicks(span, clocksToOverflowFallingEdge(), 2);
+        span = capBeforeMasterTicks(span, clocksToPendingDividerRipple(), 2);
+        span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(0), 2);
+        span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(2), 2);
+        return Math.max(0, span);
+    }
+
     /** Applies a preflighted CPU epoch without visiting each CPU clock. */
     public boolean tickPerformanceEpoch(int ticks) {
         if (ticks <= 0 || performanceEpochSpanLimit(ticks) < ticks) {
@@ -158,7 +174,9 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return true;
     }
 
-    /** Applies an epoch after the caller has passed {@link #performanceEpochSpanLimit(int)}. */
+    /** Applies an epoch after the caller has passed either
+     * {@link #performanceEpochSpanLimit(int)} or the strict native-CGB PPU/LCDC
+     * {@link #performanceStrictPpuEpochSpanLimit(int)} preflight. */
     public void tickPerformanceEpochTrusted(int ticks) {
         if (ticks <= 0) {
             return;
@@ -252,7 +270,7 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
      * Returns the largest normal-speed PERFORMANCE span which can be advanced without visiting
      * the per-clock timer state machine.
      *
-     * <p>The limit stops before every observable timer edge: a selected timer falling edge,
+     * <p>The limit stops before every externally observable timer edge: an
      * overflow/reload/interrupt or HALT-wake transition, the DMG divider-ripple diagnostic, and
      * the raw divider edge which can clock the APU frame sequencer.  The CGB boot offset is
      * included conservatively as a second possible frame-sequencer tap.  A zero result means the
@@ -266,12 +284,13 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0 || speedMode.getSpeedMode() != 1 || debugHooks != null
                 || divReset || overflow || haltWakeDelay != 0
-                || haltBugDivRippleVisible || suppressNextInterruptRequest) {
+                || haltBugDivRippleVisible || suppressNextInterruptRequest
+                || previousBit != timerInput(div, tac)) {
             return 0;
         }
 
         int span = Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
-        span = capBefore(span, clocksToTimerFallingEdge());
+        span = capBefore(span, clocksToOverflowFallingEdge());
         span = capBefore(span, clocksToPendingDividerRipple());
         span = capBefore(span, clocksToFrameSequencerEdge(0));
         if (speedMode.isGbc()) {
@@ -286,16 +305,18 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
     /**
      * Returns the same exact horizon for a settled normal-speed HALT span, without the ordinary
      * three-dot scheduler cap. The DMG HALT side entrance bounds the request before calling this
-     * method; every divider, TIMA, overflow, wake, and frame-sequencer edge remains excluded.
+     * method. Ordinary TIMA increments advance arithmetically; overflow, wake, divider-ripple
+     * and frame-sequencer edges remain excluded.
      */
     public int performanceSettledHaltSpanLimit(int requested) {
         if (requested <= 0 || speedMode.getSpeedMode() != 1 || debugHooks != null
                 || divReset || overflow || haltWakeDelay != 0
-                || haltBugDivRippleVisible || suppressNextInterruptRequest) {
+                || haltBugDivRippleVisible || suppressNextInterruptRequest
+                || previousBit != timerInput(div, tac)) {
             return 0;
         }
         int span = requested;
-        span = capBefore(span, clocksToTimerFallingEdge());
+        span = capBefore(span, clocksToOverflowFallingEdge());
         span = capBefore(span, clocksToPendingDividerRipple());
         span = capBefore(span, clocksToFrameSequencerEdge(0));
         if (speedMode.isGbc()) {
@@ -317,8 +338,8 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
     /**
      * Advances an already-preflighted quiet span arithmetically.
      *
-     * <p>There are no timer edges inside an eligible span, so DIV and the divider input latch are
-     * the only changing state.  Interrupt acknowledgement is still handled at the span's first
+     * <p>Only DIV, ordinary TIMA increments and the divider input latch change inside an eligible
+     * span. Interrupt acknowledgement is still handled at the span's first
      * clock exactly as in {@link #tick()}; this preserves the CPU acknowledge window without
      * requiring a per-clock callback.  A false return guarantees that this method made no state
      * change.</p>
@@ -328,20 +349,7 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
             return false;
         }
 
-        // Keep the acknowledge gate at the same beginning-of-tick position as tick().  The
-        // preflight above excludes every timer edge in the span, so an acknowledgement can only
-        // update the manager's acknowledge/suppression latches and cannot make an interior timer
-        // transition arrive late.
-        acknowledgeInterruptIfNeeded();
-        divReset = false;
-        div = (div + ticks) & 0xffff;
-        previousBit = timerInput(div, tac);
-        if (ticksSinceDivReset != Integer.MAX_VALUE) {
-            ticksSinceDivReset += ticks;
-        }
-        // Scalar tick() clears this one-tick diagnostic at the beginning of every clock.  An
-        // eligible span cannot contain the carry which sets it, so it is settled by the end.
-        haltBugDivRippleVisible = false;
+        tickPerformanceNormalSpeedEpochTrusted(ticks);
         return true;
     }
 
@@ -350,17 +358,7 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         if (ticks <= 0) {
             return;
         }
-        // Gameboy has already preflighted this span and commits it as one packet.  Keep this
-        // path free of a second horizon walk; the scalar-safe state transitions are the same as
-        // tickPerformanceQuietSpan once the caller has established the quiet contract.
-        acknowledgeInterruptIfNeeded();
-        divReset = false;
-        div = (div + ticks) & 0xffff;
-        previousBit = timerInput(div, tac);
-        if (ticksSinceDivReset != Integer.MAX_VALUE) {
-            ticksSinceDivReset += ticks;
-        }
-        haltBugDivRippleVisible = false;
+        tickPerformanceNormalSpeedEpochTrusted(ticks);
     }
 
     /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */

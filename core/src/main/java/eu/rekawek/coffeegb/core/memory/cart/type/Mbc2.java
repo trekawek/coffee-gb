@@ -13,6 +13,17 @@ import java.util.Arrays;
 
 public class Mbc2 implements MemoryController {
 
+    @Override
+    public boolean isPerformanceRamAccessSafe() {
+        return getClass() == Mbc2.class;
+    }
+
+    @Override
+    public boolean isPerformanceRomPeekSafe() {
+        // Subclasses may transform reads or implement handshakes; they must opt in separately.
+        return getClass() == Mbc2.class;
+    }
+
     private final int[] cartridge;
 
     private final int[] ram;

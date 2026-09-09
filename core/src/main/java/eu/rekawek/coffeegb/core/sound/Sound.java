@@ -115,6 +115,13 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
      */
     private transient int pendingPerformanceTicks;
 
+    private transient eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics performanceDiagnostics;
+
+    public void setPerformanceDiagnostics(
+            eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics diagnostics) {
+        performanceDiagnostics = diagnostics;
+    }
+
     /**
      * Host-controlled PERFORMANCE-only calendar for a system-muted benchmark. It skips per-tick
      * channel dispatch and emits zero PCM while retaining sample cadence; deferred channel clocks
@@ -329,6 +336,11 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         }
         if (!enabled) {
             return;
+        }
+        if (performanceDiagnostics != null) {
+            performanceDiagnostics.recordReplay(
+                    eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics.Subsystem.AUDIO_MATERIALIZED,
+                    ticks);
         }
         int channel1 = mode1.tickPerformanceSpan(ticks);
         int channel2 = mode2.tickPerformanceSpan(ticks);

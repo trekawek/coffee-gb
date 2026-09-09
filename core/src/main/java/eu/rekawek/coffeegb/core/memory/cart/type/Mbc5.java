@@ -19,6 +19,11 @@ import java.util.Arrays;
 
 public class Mbc5 implements MemoryController, PerformanceRomAccessProvider {
 
+    @Override
+    public boolean isPerformanceRamAccessSafe() {
+        return getClass() == Mbc5.class && debugHooks == null;
+    }
+
     private final int romBanks;
 
     private final int ramBanks;
@@ -212,6 +217,11 @@ public class Mbc5 implements MemoryController, PerformanceRomAccessProvider {
     }
 
     private final class Mbc5PerformanceRomAccess implements PerformanceRomAccess {
+
+        @Override
+        public boolean canAccessRam() {
+            return isPerformanceRamAccessSafe();
+        }
 
         private int lowerWindowBase;
 

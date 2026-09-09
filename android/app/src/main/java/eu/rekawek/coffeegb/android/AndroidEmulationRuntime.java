@@ -104,6 +104,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Adaptive hint session; live mutations stay on synchronous controller callbacks. */
     private final AndroidPerformanceBoost performanceBoost;
     private final NativeFrameStore frames;
+    private volatile AndroidSoakDiagnostics soakDiagnostics;
+    private volatile boolean hostVisible;
+    /** Controller-thread state; priority changes must be made on that same thread. */
+    private boolean soakBoostDisabled;
+
     /** Session timing belongs to the service, not to a short-lived Activity attachment. */
     private final PlayTimeTracker playTime = new PlayTimeTracker();
     private final EmulatorProperties properties;
@@ -336,6 +341,53 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Service-owned native frames for a short-lived {@link CoffeeGbSurfaceView} attachment. */
     NativeFrameStore frames() {
         return frames;
+    }
+
+    public void setPerformanceSoakEnabled(boolean enabled) {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED || diagnostics.enabled()) return;
+        submit(() -> {
+            if ((soakDiagnostics != null) == enabled || eventBus == null) return;
+            AndroidSoakDiagnostics previous = soakDiagnostics;
+            if (enabled) {
+                soakDiagnostics = new AndroidSoakDiagnostics();
+                frames.setSoakDiagnostics(soakDiagnostics);
+            } else {
+                // Detach the producer first; close then invalidates and bounds any worker that is
+                // still outside the controller callback. The parser rejects replaced generations.
+                closeSoakDiagnostics(previous);
+            }
+            eventBus.post(new Controller.SetPerformanceSoakEnabledEvent(enabled));
+        });
+    }
+
+    private void closeSoakDiagnostics() {
+        closeSoakDiagnostics(soakDiagnostics);
+    }
+
+    private void closeSoakDiagnostics(AndroidSoakDiagnostics expected) {
+        if (expected == null || soakDiagnostics != expected) {
+            if (expected == null) {
+                return;
+            }
+            expected.close();
+            return;
+        }
+        soakDiagnostics = null;
+        frames.setSoakDiagnostics(null);
+        expected.close();
+    }
+
+    private void updateSoakBoostOnControllerThread() {
+        boolean disable = BuildConfig.DIAGNOSTICS_ENABLED && soakDiagnostics != null;
+        if (disable != soakBoostDisabled) {
+            ExecutionMode mode = disable ? ExecutionMode.ACCURACY : executionModeForSession();
+            performanceBoost.onSessionStarted(mode);
+            // This callback starts live work. Resume a recreated hint session immediately;
+            // waiting for a future playback event would leave restored accounting idle.
+            performanceBoost.onPlaybackStateChanged(false);
+            AndroidPerformanceBoost.apply(mode);
+            soakBoostDisabled = disable;
+        }
     }
 
     /** Returns a detached, opaque copy of the latest native game frame for a frozen pause menu. */
@@ -952,6 +1004,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Pauses at the controller safe point and asks for a bounded asynchronous battery flush. */
     public void onHostNotVisible() {
+        hostVisible = false;
         if (diagnostics.enabled()) {
             // Benchmark visibility is a scheduler precondition.  Do not flush/reopen audio or
             // enter the ordinary battery/autosave lifecycle barrier; a hidden run is discarded.
@@ -997,6 +1050,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Records visibility for a future load without automatically resuming an already paused game. */
     public void onHostVisible() {
+        hostVisible = true;
         if (diagnostics.enabled()) {
             diagnostics.inputMutation();
             return;
@@ -1471,6 +1525,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        closeSoakDiagnostics();
         if (diagnostics.enabled()) {
             // Invalidate the pre-ARM transaction before shutting down its deadline executor. The
             // lifecycle gate makes close serialize with a poll that is already inspecting or
@@ -1652,7 +1707,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         // BasicController brackets each live PERFORMANCE controller batch. These synchronous
         // events report its work while excluding TimingTicker pacing.
         eventBus.register(
-                event -> performanceBoost.onWorkStarted(),
+                event -> {
+                    updateSoakBoostOnControllerThread();
+                    performanceBoost.onWorkStarted();
+                },
                 Controller.PerformanceWorkStartedEvent.class);
         eventBus.register(
                 event -> performanceBoost.onWorkCompleted(),
@@ -1660,6 +1718,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 event -> performanceBoost.onWorkAborted(),
                 Controller.PerformanceWorkAbortedEvent.class);
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            eventBus.register((Controller.PerformanceSoakSampleEvent event) -> {
+                AndroidSoakDiagnostics active = soakDiagnostics;
+                if (active != null) {
+                    active.sample(event, audio, hostVisible, performanceBoost.hasActiveSession());
+                }
+            }, Controller.PerformanceSoakSampleEvent.class);
+        }
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         // A configured scenario observes only its matching native event, so an SGB transfer DMG
@@ -1739,8 +1805,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     // sample and adaptive session ownership on that thread instead of the runtime
                     // owner executor.
                     ExecutionMode executionMode = executionModeForSession();
-                    performanceBoost.onSessionStarted(executionMode);
-                    AndroidPerformanceBoost.apply(executionMode);
+                    soakBoostDisabled = BuildConfig.DIAGNOSTICS_ENABLED && soakDiagnostics != null;
+                    ExecutionMode boostMode = soakBoostDisabled ? ExecutionMode.ACCURACY : executionMode;
+                    performanceBoost.onSessionStarted(boostMode);
+                    AndroidPerformanceBoost.apply(boostMode);
                     submit(() -> {
                         if (callbackControllerGeneration != controllerInstanceGeneration) {
                             return;
@@ -2483,6 +2551,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private boolean closeController() {
         cancelFlushDeadline();
         pendingFlushRequestId = 0;
+        // Session replacement invalidates the old owner envelope before BasicController/audio
+        // teardown. A blocked media query must not publish into the next session's evidence.
+        closeSoakDiagnostics();
         BasicController active = controller;
         EventBus activeBus = eventBus;
         AndroidAudioSink activeAudio = audio;

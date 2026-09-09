@@ -941,7 +941,7 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void nativeCgbNormalSpeedEpochIsLimitedToOrdinaryPerformanceCgb() throws Exception {
+    public void nativeCgbNormalSpeedEpochCoversKnownCgbProfilesOnlyInPerformance() throws Exception {
         byte[] nativeColor = nativeColor(dmgRomWramLoop());
         try (Gameboy cgb0 = new Gameboy.GameboyConfiguration(new Rom(nativeColor))
                      .setHardwareProfile(HardwareProfileRegistry.CGB0)
@@ -964,7 +964,7 @@ public final class GameboyPerformanceEpochTest {
             cgb0.runTicks(100_000);
             nativeSpeed1.runTicks(100_000);
             accuracy.runTicks(100_000);
-            assertEquals(0L, cgb0.getPerformanceEpochTicks());
+            assertTrue(cgb0.getPerformanceEpochTicks() > 0L);
             assertTrue(nativeSpeed1.getPerformanceEpochTicks() > 0L);
             assertEquals(0L, accuracy.getPerformanceEpochTicks());
             assertFalse(nativeSpeed1.getSpeedMode().isDmgCompat());
@@ -1085,7 +1085,7 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void sgbStrictMaskedInterruptFallbackMatchesScalar()
+    public void sgbMaskedInterruptEpochMatchesScalar()
             throws Exception {
         for (HardwareProfile profile : new HardwareProfile[]{
                 HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
@@ -1103,16 +1103,16 @@ public final class GameboyPerformanceEpochTest {
                     gameboy.getAddressSpace().setByte(0xff0f,
                             gameboy.getAddressSpace().getByte(0xff0f) | 1);
                 }
-                assertFalse(profile.id() + " admitted a masked SGB interrupt",
+                assertTrue(profile.id() + " rejected a masked SGB interrupt",
                         candidate.getCpu().performanceNormalSpeedEpochEntryEligible(false));
 
                 int scalarFrames = runScalarTicks(scalar, 54);
                 int candidateFrames = candidate.runTicks(54);
 
                 assertEquals(profile.id() + " frame callbacks", scalarFrames, candidateFrames);
-                assertEquals(profile.id() + " strict masked SGB idle commit", 0L,
-                        candidate.getPerformanceEpochSgbIdleTicks());
-                assertDeepStateEquals(profile.id() + " strict masked fallback",
+                assertTrue(profile.id() + " masked SGB idle did not batch",
+                        candidate.getPerformanceEpochSgbIdleTicks() > 0L);
+                assertDeepStateEquals(profile.id() + " masked epoch",
                         scalar.captureStateWithoutTimeSource(),
                         candidate.captureStateWithoutTimeSource());
             }
@@ -1793,8 +1793,8 @@ public final class GameboyPerformanceEpochTest {
                     (Hdma.HdmaState) candidate.getHdma().captureState();
             assertEquals("owned HBlank scalar commit did not advance the source",
                     (sourceBeforePrefix + 0x10) & 0xffff, committed.src());
-            assertFalse("owned HBlank scalar commit retained the frozen-CPU lease",
-                    candidate.getCpu().performanceHdmaOwnedBlockCpuFrozenEligible());
+            assertFalse("owned HBlank scalar commit retained the DMA ownership lease",
+                    candidate.getHdma().isPerformanceNativeCgbOwnedDataStructurallyStable());
             assertDeepStateEquals("owned HBlank scalar destination commit",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
@@ -1828,7 +1828,15 @@ public final class GameboyPerformanceEpochTest {
     @Test
     public void nativeCgbDoubleSpeedOwnedHblankPhysicalRomDataMatchesScalarThroughRestore()
             throws Exception {
-        byte[] image = nativeMbc7(doubleSpeedLoop());
+        for (int prefix = 1; prefix <= 31; prefix++) {
+            assertOwnedHblankPhysicalRomMatchesScalarThroughRestore(nativeMbc7(doubleSpeedLoop()), prefix);
+            assertOwnedHblankPhysicalRomMatchesScalarThroughRestore(doubleSpeedLoop(), prefix);
+        }
+    }
+
+    private static void assertOwnedHblankPhysicalRomMatchesScalarThroughRestore(byte[] image, int prefix)
+            throws Exception {
+        for (int i = 0; i < 0x30; i++) image[0x4000 + i] = (byte) (0x29 + i * 37);
         try (Gameboy scalar = nativeDoubleSpeedSession(
                 image, PlayerInputSnapshot::released);
              Gameboy candidate = nativeDoubleSpeedSession(
@@ -1845,19 +1853,19 @@ public final class GameboyPerformanceEpochTest {
             candidate.resetPerformanceBulkCounters();
 
             assertEquals("owned HBlank ROM data-prefix frame callbacks",
-                    scalar.runTicks(31), candidate.runTicks(31));
-            assertEquals("immutable ROM source did not enter the owned-HDMA packet", 31L,
+                    scalar.runTicks(prefix), candidate.runTicks(prefix));
+            assertEquals("physical ROM prefix must enter the owned packet", (long) prefix,
                     candidate.getPerformanceHdmaOwnedTicks());
-            assertEquals("immutable ROM prefix was split", 1L,
+            assertEquals("physical ROM prefix must remain one packet", 1L,
                     candidate.getPerformanceHdmaOwnedSpanCount());
             assertDeepStateEquals("owned HBlank physical ROM data prefix",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
 
             assertEquals("owned HBlank ROM scalar commit frame callback",
-                    scalar.runTicks(1), candidate.runTicks(1));
-            assertFalse("ROM block commit retained the frozen-CPU lease",
-                    candidate.getCpu().performanceHdmaOwnedBlockCpuFrozenEligible());
+                    scalar.runTicks(32 - prefix), candidate.runTicks(32 - prefix));
+            assertFalse("ROM block commit retained the DMA ownership lease",
+                    candidate.getHdma().isPerformanceNativeCgbOwnedDataStructurallyStable());
             assertDeepStateEquals("owned HBlank physical ROM scalar commit",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
@@ -1881,7 +1889,7 @@ public final class GameboyPerformanceEpochTest {
     @Test
     public void nativeCgbDoubleSpeedOwnedHblankDataRejectsUnsafeSourcesAndOamDma()
             throws Exception {
-        assertOwnedHblankDataStaysScalar(0x4000, false, "ROM source");
+        assertOwnedHblankDataStaysScalar(0x4000, false, "logical MBC3 ROM source");
         assertOwnedHblankDataStaysScalar(0xc000, true, "OAM-DMA overlap");
     }
 
@@ -1893,8 +1901,10 @@ public final class GameboyPerformanceEpochTest {
                 image, PlayerInputSnapshot::released);
              Gameboy candidate = nativeDoubleSpeedSession(
                      image, PlayerInputSource.RELEASED)) {
+            scalar.setPerformanceBatchingEnabled(false);
             advancePairToNativeDoubleSpeedMode2EpochEntry(scalar, candidate,
                     "native x2 FF44 polling");
+            assertStableNativeDoubleSpeedLyPolling(scalar, candidate, "ordinary LY lease");
             int startLine = candidate.getGpu().getLine();
             scalar.resetPerformanceBulkCounters();
             candidate.resetPerformanceBulkCounters();
@@ -1920,8 +1930,8 @@ public final class GameboyPerformanceEpochTest {
                     candidate.getPerformanceEpochTicks() > 0L);
             assertEquals("stable FF44 read terminated a native x2 epoch", 0L,
                     candidate.getCpu().getPerformanceEpochTerminalAccesses());
-            assertEquals("stable FF44 read recorded a native x2 fence", 0L,
-                    candidate.getPerformanceEpochFenceAttemptCount());
+            assertTrue("changing-LY replay never fenced its observable read",
+                    candidate.getPerformanceEpochFenceAttemptCount() > 0L);
 
             var scalarCheckpoint = scalar.captureState();
             var candidateCheckpoint = candidate.captureState();
@@ -1931,6 +1941,7 @@ public final class GameboyPerformanceEpochTest {
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
 
+            var uninterrupted = candidate.captureStateWithoutTimeSource();
             scalar.restoreStateSilently(scalarCheckpoint);
             candidate.restoreStateSilently(candidateCheckpoint);
             assertEquals("native x2 FF44 restored frame callbacks",
@@ -1938,6 +1949,8 @@ public final class GameboyPerformanceEpochTest {
             assertDeepStateEquals("native x2 FF44 restored continuation",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
+            assertDeepStateEquals("native x2 FF44 restored vs uninterrupted",
+                    uninterrupted, candidate.captureStateWithoutTimeSource());
         }
     }
 
@@ -1949,11 +1962,13 @@ public final class GameboyPerformanceEpochTest {
                 image, PlayerInputSnapshot::released);
              Gameboy candidate = nativeDoubleSpeedSession(
                      image, PlayerInputSource.RELEASED)) {
+            scalar.setPerformanceBatchingEnabled(false);
             advancePairToNativeDoubleSpeedMode2EpochEntry(scalar, candidate,
                     "armed HBlank FF44 polling");
             startHblankDmaPair(scalar, candidate, 0x83);
             assertTrue("FF44 fixture did not start in an armed HBlank wait",
                     candidate.getHdma().isPerformanceArmedHblankWaitStable());
+            assertStableNativeDoubleSpeedLyPolling(scalar, candidate, "armed LY lease");
             scalar.resetPerformanceBulkCounters();
             candidate.resetPerformanceBulkCounters();
 
@@ -1981,6 +1996,7 @@ public final class GameboyPerformanceEpochTest {
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
 
+            var uninterrupted = candidate.captureStateWithoutTimeSource();
             scalar.restoreStateSilently(scalarCheckpoint);
             candidate.restoreStateSilently(candidateCheckpoint);
             assertTrue("restored FF44 polling wait lost its armed lease",
@@ -1989,24 +2005,30 @@ public final class GameboyPerformanceEpochTest {
                     scalar.runTicks(1_300), candidate.runTicks(1_300));
             assertFalse("restored armed HBlank FF44 transfer did not complete",
                     candidate.getHdma().hasActiveOrPendingTransfer());
-            assertEquals("restored armed FF44 read recorded a decoded fence", 0L,
-                    candidate.getPerformanceEpochFenceAttemptCount());
+            assertTrue("restored armed polling did not fence changing-LY replay reads",
+                    candidate.getPerformanceEpochFenceAttemptCount() > 0L);
+            assertEquals("changing-LY read crossed its pre-bus fence", 0L,
+                    candidate.getCpu().getPerformanceEpochTerminalAccesses());
             assertDeepStateEquals("armed HBlank FF44 restored completion",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
+            assertDeepStateEquals("armed FF44 restored vs uninterrupted",
+                    uninterrupted, candidate.captureStateWithoutTimeSource());
         }
     }
 
     @Test
-    public void nativeCgbDoubleSpeedStatHorizonKeepsLyTransitionWindowsScalar()
+    public void nativeCgbDoubleSpeedLyTransitionsReplaySafeTicksAndFenceTheRead()
             throws Exception {
         byte[] image = nativeDoubleSpeedLyPollingLoop();
         try (Gameboy scalar = nativeDoubleSpeedSession(
                 image, PlayerInputSnapshot::released);
              Gameboy candidate = nativeDoubleSpeedSession(
                      image, PlayerInputSource.RELEASED)) {
+            scalar.setPerformanceBatchingEnabled(false);
             advancePairToNativeDoubleSpeedMode2EpochEntry(scalar, candidate,
                     "native x2 FF44 transition horizon");
+            var pollingCpu = candidate.getCpu().captureState();
             advancePairToOddVisibleLineDot(scalar, candidate, 447,
                     "native x2 FF44 line-tail horizon");
             int line = candidate.getGpu().getLine();
@@ -2014,29 +2036,45 @@ public final class GameboyPerformanceEpochTest {
             assertEquals("FF44 changed before its rephased tail slot", line,
                     candidate.getAddressSpace().getByte(0xff44));
 
+            // Align the real LDH read with the line's changing-LY slot: opcode at 447,
+            // immediate at 449, data read at 451. Safe fetches/phase ticks may replay;
+            // the observable read itself must remain on the scalar owner.
+            for (Gameboy gameboy : new Gameboy[]{scalar, candidate}) {
+                gameboy.getCpu().restoreState(pollingCpu);
+                gameboy.getCpu().getRegisters().setPC(0x0106);
+            }
             scalar.resetPerformanceBulkCounters();
             candidate.resetPerformanceBulkCounters();
             while (candidate.getGpu().getTicksInLine() < 450) {
                 assertEquals("FF44 pre-ripple frame callback",
                         scalar.runTicks(1), candidate.runTicks(1));
+                assertDeepStateEquals("safe LY-transition replay dot "
+                                + candidate.getGpu().getTicksInLine(),
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
             }
-            assertEquals("STAT horizon admitted the dot-447..449 tail", 0L,
-                    candidate.getPerformanceEpochTicks());
+            assertTrue("safe line-tail fetches did not use replay epochs",
+                    candidate.getPerformanceEpochTicks() > 0L);
             assertEquals(line, candidate.getAddressSpace().getByte(0xff44));
 
             assertEquals("FF44 ripple frame callback",
                     scalar.runTicks(1), candidate.runTicks(1));
             assertEquals("rephased odd-line FF44 ripple", line & (line + 1),
                     candidate.getAddressSpace().getByte(0xff44));
-            assertEquals("FF44 ripple slot entered an epoch", 0L,
-                    candidate.getPerformanceEpochTicks());
+            assertDeepStateEquals("FF44 ripple slot",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            long epochsBeforeRead = candidate.getPerformanceEpochTicks();
+            long fencesBeforeRead = candidate.getPerformanceEpochFenceAttemptCount();
 
             assertEquals("FF44 main-edge frame callback",
                     scalar.runTicks(1), candidate.runTicks(1));
             assertEquals("native x2 FF44 did not advance at dot 452", line + 1,
                     candidate.getAddressSpace().getByte(0xff44));
-            assertEquals("FF44 dot-452 edge entered an epoch", 0L,
+            assertEquals("changing-LY data read entered a replay epoch", epochsBeforeRead,
                     candidate.getPerformanceEpochTicks());
+            assertTrue("changing-LY data read did not record its fence",
+                    candidate.getPerformanceEpochFenceAttemptCount() > fencesBeforeRead);
             assertDeepStateEquals("native x2 FF44 ordinary-line edge",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
@@ -2267,6 +2305,8 @@ public final class GameboyPerformanceEpochTest {
 
             scalar.resetPerformanceBulkCounters();
             replay.resetPerformanceBulkCounters();
+            var diagnostics = new eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics(1000);
+            replay.setPerformanceDiagnostics(diagnostics);
             int replayDots = 79 - replay.getGpu().getTicksInLine();
             for (int i = 0; i < replayDots; i++) {
                 scalar.tick();
@@ -2278,9 +2318,11 @@ public final class GameboyPerformanceEpochTest {
             assertTrue("mode-2 epoch coverage was too small: "
                             + replay.getPerformanceEpochMode2ReplayTicks(),
                     replay.getPerformanceEpochMode2ReplayTicks() >= 40);
-            assertEquals("mode-2 epochs used the arithmetic raster plan",
+            assertEquals("every epoch dot used the arithmetic mode-2 or detailed replay plan",
                     replay.getPerformanceEpochTicks(),
-                    replay.getPerformanceEpochMode2ReplayTicks());
+                    replay.getPerformanceEpochMode2BulkTicks()
+                            + diagnostics.snapshot().subsystemTicks().get(
+                            eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics.Subsystem.PPU_REPLAY));
             assertEquals("mode-2 epoch fell back to the per-dot PPU replay",
                     replay.getPerformanceEpochMode2ReplayTicks(),
                     replay.getPerformanceEpochMode2BulkTicks());
@@ -2300,6 +2342,25 @@ public final class GameboyPerformanceEpochTest {
             assertDeepStateEquals("mode-3 handoff", scalar.captureStateWithoutTimeSource(),
                     replay.captureStateWithoutTimeSource());
         }
+    }
+
+    /** A stable mode-2 interior must admit repeated LY reads without any CPU fence. */
+    private static void assertStableNativeDoubleSpeedLyPolling(
+            Gameboy scalar, Gameboy candidate, String label) {
+        scalar.resetPerformanceBulkCounters();
+        candidate.resetPerformanceBulkCounters();
+        int ly = candidate.getAddressSpace().getByte(0xff44);
+        assertEquals(ly, scalar.getAddressSpace().getByte(0xff44));
+        assertEquals(label + " frame callbacks", scalar.runTicks(24), candidate.runTicks(24));
+        assertEquals(label + " did not execute the LY polling read", ly,
+                candidate.getCpu().getRegisters().getA());
+        assertTrue(label + " had no running epochs", candidate.getPerformanceEpochTicks() > 0);
+        assertEquals(label + " fenced an invariant read", 0,
+                candidate.getPerformanceEpochFenceAttemptCount());
+        assertEquals(label + " reached the terminal bus", 0,
+                candidate.getCpu().getPerformanceEpochTerminalAccesses());
+        assertDeepStateEquals(label, scalar.captureStateWithoutTimeSource(),
+                candidate.captureStateWithoutTimeSource());
     }
 
     private static Gameboy nativeDoubleSpeedSession() throws Exception {
@@ -2425,6 +2486,9 @@ public final class GameboyPerformanceEpochTest {
     private static void assertOwnedHblankDataStaysScalar(
             int source, boolean startOamDma, String label) throws Exception {
         byte[] image = doubleSpeedLoop();
+        // BasicRom now has a physical backing proof. Keep the negative ROM-source case on
+        // a supported logical mapper whose authoritative reads cannot supply that proof.
+        if (source < 0x8000) image[0x147] = 0x11;
         try (Gameboy scalar = nativeDoubleSpeedSession(
                 image, PlayerInputSnapshot::released);
              Gameboy candidate = nativeDoubleSpeedSession(

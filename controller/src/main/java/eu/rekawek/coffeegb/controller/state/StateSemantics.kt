@@ -635,6 +635,7 @@ internal object StateSemantics {
           constrained("Fetcher state and attribute sentinel are bounded to the seven-stage machine.") {
             it.range("state", 0, 6); it.range("tileAttributesValue", -1, 0xff)
             it.nonNegative("data2Delay")
+            it.range("tileMapX", 0, 31); it.range("xBasePosition", -16, 160)
           })
       put("eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState",
           constrained("Pending PPU writes retain a 16-bit address and non-negative dot delay.") {

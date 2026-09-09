@@ -425,12 +425,8 @@ public final class GameboyPerformanceMode2PhaseTest {
     }
 
     @Test
-    public void cgbNormalSpeedMode2RejectsCgb0AccuracyAndDebug() throws Exception {
+    public void cgbNormalSpeedMode2RejectsAccuracyAndDebug() throws Exception {
         Mode2ExclusionCase[] cases = {
-                new Mode2ExclusionCase("cgb0-compat", HardwareProfileRegistry.CGB0,
-                        ExecutionMode.PERFORMANCE, false, true),
-                new Mode2ExclusionCase("cgb0-native", HardwareProfileRegistry.CGB0,
-                        ExecutionMode.PERFORMANCE, true, true),
                 new Mode2ExclusionCase("accuracy-cgb-compat", HardwareProfileRegistry.CGB,
                         ExecutionMode.ACCURACY, false, false),
                 new Mode2ExclusionCase("accuracy-cgb-native", HardwareProfileRegistry.CGB,

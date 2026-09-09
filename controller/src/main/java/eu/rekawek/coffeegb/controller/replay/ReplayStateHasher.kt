@@ -37,9 +37,12 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
-/** Canonical v1 replay-checkpoint hashing, independent of JVM serialization and host services. */
+/** Canonical replay-checkpoint hashing, independent of JVM serialization and host services. */
 object ReplayStateHasher {
 
+  // Keep the canonical hash framing at schema v1 for both replay identities. The semantics
+  // version selects the state inventory (legacy Fetcher projection versus complete current
+  // state) while preserving the established v1 digest domain.
   private const val HASH_SCHEMA_VERSION = 1
   private const val HASH_DOMAIN_PREFIX = "coffee-gb/replay-state"
 
@@ -88,26 +91,47 @@ object ReplayStateHasher {
 
   private val INPUT_FIELDS = listOf("joypadMemento")
 
-  /** Captures one detached StateFile-v2 session plus its replay-visible physical input latch. */
+  /**
+   * Captures one detached StateFile-v2 session plus its replay-visible physical input latch.
+   * Newly recorded replays use the current semantics version.
+   */
   fun hash(session: Session): ReplayStateHashes =
-      hash(StateCodec.captureVersion2(session), session.gameboy.sampledPlayerInput)
+      hash(session, ReplayIdentity.REPLAY_SEMANTICS_VERSION)
+
+  fun hash(
+      session: Session,
+      replaySemanticsVersion: Int,
+  ): ReplayStateHashes {
+    requireSupportedReplaySemantics(replaySemanticsVersion)
+    return hash(
+        StateCodec.captureVersion2(session),
+        session.gameboy.sampledPlayerInput,
+        replaySemanticsVersion,
+    )
+  }
 
   /**
-   * Hashes a detached session. The full digest is the canonical, uncompressed StateFile-v2 byte
-   * stream with diagnostics removed; subsystem digests use the explicit walker below.
+   * Hashes a detached session using the current replay semantics by default. The full digest is
+   * the canonical, uncompressed StateFile-v2 byte stream with diagnostics removed; subsystem
+   * digests use the explicit walker below.
    */
-  fun hash(file: StateFile): ReplayStateHashes = hash(file, PlayerInputSnapshot.released())
+  fun hash(file: StateFile): ReplayStateHashes =
+      hash(file, ReplayIdentity.REPLAY_SEMANTICS_VERSION)
+
+  fun hash(
+      file: StateFile,
+      replaySemanticsVersion: Int,
+  ): ReplayStateHashes {
+    requireSupportedReplaySemantics(replaySemanticsVersion)
+    return hash(file, PlayerInputSnapshot.released(), replaySemanticsVersion)
+  }
 
   private fun hash(
       file: StateFile,
       sampledInput: PlayerInputSnapshot,
+      replaySemanticsVersion: Int,
   ): ReplayStateHashes {
-    val session =
-        (file.root as? SessionStateRoot)?.session
-            ?: incompatible(
-                ReplayCompatibilityReason.UNSUPPORTED_STATE_ROOT,
-                "Replay checkpoints require a detached session root",
-            )
+    requireSupportedReplaySemantics(replaySemanticsVersion)
     val canonical =
         StateFile(
             file.identities,
@@ -115,7 +139,22 @@ object ReplayStateHasher {
             diagnostics = null,
             formatVersion = StateCodec.LATEST_FORMAT_VERSION,
         )
-    val canonicalState = StateCodec.encode(canonical, StateCompression.NONE)
+    // Legacy replay hashes were generated before Fetcher gained its three in-flight coordinates.
+    // Project exactly that suffix on a detached copy for hashing; the caller's StateFile remains
+    // the complete canonical state and is still used by restore/serialization paths.
+    val hashFile =
+        if (replaySemanticsVersion == ReplayIdentity.LEGACY_REPLAY_SEMANTICS_VERSION) {
+          StateGraph.projectLegacyReplayFile(canonical)
+        } else {
+          canonical
+        }
+    val session =
+        (hashFile.root as? SessionStateRoot)?.session
+            ?: incompatible(
+                ReplayCompatibilityReason.UNSUPPORTED_STATE_ROOT,
+                "Replay checkpoints require a detached session root",
+            )
+    val canonicalState = StateCodec.encode(hashFile, StateCompression.NONE)
     val full =
         CanonicalHasher("full").run {
           namedBytes("stateFileV2", canonicalState)
@@ -396,6 +435,15 @@ object ReplayStateHasher {
     }
 
     fun finish(): ByteArray = digest.digest()
+  }
+
+  private fun requireSupportedReplaySemantics(version: Int) {
+    if (!ReplayIdentity.isSupportedReplaySemantics(version)) {
+      incompatible(
+          ReplayCompatibilityReason.REPLAY_SEMANTICS_MISMATCH,
+          "Replay semantics version $version is not supported",
+      )
+    }
   }
 
   private fun incompatible(reason: ReplayCompatibilityReason, message: String): Nothing =

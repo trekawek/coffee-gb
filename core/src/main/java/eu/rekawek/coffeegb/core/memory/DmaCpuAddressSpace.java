@@ -68,6 +68,26 @@ public class DmaCpuAddressSpace implements AddressSpace, PerformanceRomAccessPro
     }
 
     @Override
+    public PerformanceRomAccess acquirePerformanceDetailedPpuRomAccess() {
+        if (!gbc || dma.hasCpuBusSpecialState()
+                && dma.performanceNativeCgbWramReplaySpanLimit(1) <= 0
+                || !(addressSpace instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceRomAccess();
+    }
+
+    @Override
+    public PerformanceHramReadAccess acquirePerformanceDetailedPpuHramReadAccess(int requestedMasterTicks) {
+        if (requestedMasterTicks <= 0 || getClass() != DmaCpuAddressSpace.class || !gbc
+                || dma.performanceNativeCgbHramReadSpanLimit(requestedMasterTicks) < requestedMasterTicks
+                || !(addressSpace instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceDetailedPpuHramReadAccess(requestedMasterTicks);
+    }
+
+    @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         if (dma.hasCpuBusSpecialState()
                 || !(addressSpace instanceof PerformanceRomAccessProvider provider)) {

@@ -348,6 +348,8 @@ internal object StateValueCodec {
           listOf(names, names.dropLast(2))
       "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" ->
           listOf(names, names.dropLast(3), names.dropLast(4))
+      "eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherState" ->
+          listOf(names, names.dropLast(3))
       "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortState" ->
           listOf(names, names.dropLast(1))
       else -> listOf(names)

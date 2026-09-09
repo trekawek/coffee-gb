@@ -116,6 +116,16 @@ public class SachenMmc implements MemoryController {
         this.serveBootLogo = true;
     }
 
+    /**
+     * A cooked dump is a stable logical ROM window only after the boot-logo shim has stepped
+     * aside.  Keep the exact-class guard: subclasses may add mapper read effects or mutable
+     * routing, and raw/linear boards still expose their lock and address-wiring behaviour.
+     */
+    @Override
+    public boolean isPerformanceRomPeekSafe() {
+        return getClass() == SachenMmc.class && cooked && !serveBootLogo;
+    }
+
     @Override
     public boolean accepts(int address) {
         return address >= 0x0000 && address < 0x8000;

@@ -481,6 +481,82 @@ public class Fetcher implements StatefulComponent<Fetcher> {
     }
 
     /**
+     * Eight exact dots of an already-proved native-CGB background timing skeleton.
+     * The GPU's existing steady lease excludes writes/observers/VRAM changes for the span;
+     * the caller retains scalar startup, partial tiles, and the full visible output machine.
+     */
+    public boolean tryAdvanceSteadyBackgroundTimingTile(int position) {
+        if (!gbc || state != GET_TILE_T1 || position < 0 || position > 152
+                || !(fifo instanceof ScalarTimingColorPixelFifo timing)
+                || !timing.isSteadyBackgroundTileEntry()) {
+            return false;
+        }
+        // PixelTransfer pops before advancing Fetcher, so the first X sample is p + 1.
+        sampleXBase(position + 1, false, false);
+        timing.advanceSteadyBackgroundPixelsTrusted(4);
+        state = GET_TILE_DATA_LOW_T2;
+        sampleY(false, -1);
+        tileMapAddress = lcdc.getBgTileMapDisplay() + tileMapOffset;
+        tileId = videoRam0.getByte(tileMapAddress);
+        tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
+
+        timing.advanceSteadyBackgroundPixelsTrusted(2);
+        state = GET_TILE_DATA_HIGH_T2;
+        tileData1 = getTileData(tileId, effectiveY(false, -1) & 7, 0,
+                lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+        data2Pending = true;
+        data2TileSelectGlitch = false;
+        data2Delay = 2;
+        state = PUSH;
+
+        timing.advanceSteadyBackgroundPixelsTrusted(2);
+        data2Delay = 0;
+        readData2(false, -1);
+        // Even the scalar timing skeleton serializes Fetcher's pixelLine. Keep its zip.
+        timing.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
+        state = GET_TILE_T1;
+        return true;
+    }
+
+    /**
+     * Eight exact dots of an already-proved native-CGB background output machine.
+     * The GPU's existing steady lease excludes writes/observers/VRAM changes for the span;
+     * the caller retains scalar startup, partial tiles, and all per-pixel LCD publication.
+     */
+    public boolean tryAdvanceSteadyBackgroundOutputTile(int position) {
+        if (!gbc || state != GET_TILE_T1 || position < 0 || position > 152
+                || !(fifo instanceof ColorPixelFifo output)
+                || !output.isSteadyBackgroundOutputTileEntry()) {
+            return false;
+        }
+        // PixelTransfer pops before advancing Fetcher, so the first X sample is p + 1.
+        sampleXBase(position + 1, false, false);
+        output.advanceSteadyBackgroundOutputPixelsTrusted(4);
+        state = GET_TILE_DATA_LOW_T2;
+        sampleY(false, -1);
+        tileMapAddress = lcdc.getBgTileMapDisplay() + tileMapOffset;
+        tileId = videoRam0.getByte(tileMapAddress);
+        tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
+
+        output.advanceSteadyBackgroundOutputPixelsTrusted(2);
+        state = GET_TILE_DATA_HIGH_T2;
+        tileData1 = getTileData(tileId, effectiveY(false, -1) & 7, 0,
+                lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+        data2Pending = true;
+        data2TileSelectGlitch = false;
+        data2Delay = 2;
+        state = PUSH;
+
+        output.advanceSteadyBackgroundOutputPixelsTrusted(2);
+        data2Delay = 0;
+        readData2(false, -1);
+        // Preserve the live packed FIFO payload and Fetcher's serialized pixelLine.
+        output.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
+        state = GET_TILE_T1;
+        return true;
+    }
+
+    /**
      * The DMG recomputes the fetch line from LY+SCY at the data reads; the CGB (rev D and
      * later) uses the value cached at the tile index fetch.
      */
@@ -576,7 +652,10 @@ public class Fetcher implements StatefulComponent<Fetcher> {
                 insertionGlitchDisabled,
                 data2Pending,
                 data2Delay,
-                data2TileSelectGlitch);
+                data2TileSelectGlitch,
+                tileMapX,
+                xBasePosition,
+                xBaseObjectFetch);
     }
 
     @Override
@@ -594,7 +673,10 @@ public class Fetcher implements StatefulComponent<Fetcher> {
                 insertionGlitchDisabled,
                 data2Pending,
                 data2Delay,
-                data2TileSelectGlitch);
+                data2TileSelectGlitch,
+                tileMapX,
+                xBasePosition,
+                xBaseObjectFetch);
     }
 
     @Override
@@ -620,6 +702,11 @@ public class Fetcher implements StatefulComponent<Fetcher> {
         this.data2Pending = mem.data2Pending;
         this.data2Delay = mem.data2Delay;
         this.data2TileSelectGlitch = mem.data2TileSelectGlitch;
+        // These coordinates cross GET_TILE_T1 to the later map-read dot. The
+        // current target's previous fetch cannot supply an imported snapshot.
+        this.tileMapX = mem.tileMapX;
+        this.xBasePosition = mem.xBasePosition;
+        this.xBaseObjectFetch = mem.xBaseObjectFetch;
     }
 
     private record FetcherState(
@@ -635,7 +722,10 @@ public class Fetcher implements StatefulComponent<Fetcher> {
             boolean insertionGlitchDisabled,
             boolean data2Pending,
             int data2Delay,
-            boolean data2TileSelectGlitch)
+            boolean data2TileSelectGlitch,
+            int tileMapX,
+            int xBasePosition,
+            boolean xBaseObjectFetch)
             implements ComponentState<Fetcher> {
     }
 

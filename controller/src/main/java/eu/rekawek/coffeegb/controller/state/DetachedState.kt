@@ -97,10 +97,13 @@ class RecordState(val typeId: Int, fields: Collection<StateField>) : StateValue 
   override fun toString(): String = "RecordState(typeId=$typeId, fields=$fields)"
 
   /**
-   * Portable state treats defaultable PERFORMANCE suffixes as logical metadata rather than part
-   * of the historical record identity. Keep equality/hashCode aligned with StateCodec and replay
-   * hashing so a decoded legacy prefix compares equal to a freshly captured current record.
-   * Unknown record IDs remain structurally comparable for malformed-state diagnostics.
+   * Portable state treats recognized append-only suffixes at their historical default values as
+   * logical metadata rather than part of the historical record identity. This normalization is
+   * limited to those defaults: non-default hardware fields, including in-flight Fetcher
+   * coordinates, remain part of equality and hashing. Keep equality/hashCode aligned with
+   * StateCodec and replay hashing so a decoded legacy prefix compares equal to a freshly captured
+   * current record. Unknown record IDs remain structurally comparable for malformed-state
+   * diagnostics.
    */
   private fun canonicalFields(): List<StateField> {
     if (typeId !in 1..StateTypeRegistry.recordClasses.size) return fields
@@ -939,6 +942,10 @@ internal object DetachedStateAdapter {
 }
 
 internal object StateGraph {
+  private const val FETCHER_STATE =
+      "eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherState"
+  private val FETCHER_COORDINATE_FIELDS =
+      listOf("tileMapX", "xBasePosition", "xBaseObjectFetch")
   private const val INFRARED_PORT_STATE =
       "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortState"
   private const val TV_REMOTE_STATE = "eu.rekawek.coffeegb.core.ir.TvRemote\$TvRemoteState"
@@ -985,9 +992,10 @@ internal object StateGraph {
 
   /**
    * Returns the stable wire/hash view of one record without changing the detached value itself.
-   * New execution metadata and inactive accessory state are append-only. When those fields are at
-   * their historical defaults, omit them for canonical encoding and replay hashing. Non-default
-   * metadata, and already-decoded historical prefixes, remain untouched.
+   * Recognized append-only suffixes are omitted only at their historical default values. The
+   * Fetcher coordinate suffix is hardware state and remains whenever non-default; this default
+   * normalization does not broaden equality or remove any non-default field. Already-decoded
+   * historical prefixes remain untouched.
    */
   internal fun canonicalRecordFields(value: RecordState): List<StateField> {
     val fields = value.fields
@@ -1022,6 +1030,18 @@ internal object StateGraph {
           fields
         }
       }
+      "eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherState" -> {
+        if (fields.size >= 3 &&
+            fields.takeLast(3).map(StateField::name) ==
+                listOf("tileMapX", "xBasePosition", "xBaseObjectFetch") &&
+            fields[fields.lastIndex - 2].value == Int32State(0) &&
+            fields[fields.lastIndex - 1].value == Int32State(0) &&
+            fields.last().value == BooleanState(false)) {
+          fields.dropLast(3)
+        } else {
+          fields
+        }
+      }
       INFRARED_PORT_STATE -> {
         if (fields.lastOrNull()?.name == "tvRemoteMemento" &&
             fields.last().value == idleTvRemoteState()) {
@@ -1033,6 +1053,89 @@ internal object StateGraph {
       else -> fields
     }
   }
+
+  /**
+   * Returns a detached copy for replay-semantics-v1 hashing. The live/canonical StateFile is never
+   * changed. Only the three Fetcher coordinates appended after the historical v1 record are
+   * projected away; all other records and values are copied recursively.
+   */
+  internal fun projectLegacyReplayFile(file: StateFile): StateFile =
+      StateFile(
+          file.identities,
+          projectLegacyReplayRoot(file.root),
+          file.diagnostics,
+          file.formatVersion,
+      )
+
+  private fun projectLegacyReplayRoot(root: StateFileRoot): StateFileRoot =
+      when (root) {
+        is MachineStateRoot -> MachineStateRoot(projectLegacyReplayMachine(root.machine))
+        is SessionStateRoot -> SessionStateRoot(projectLegacyReplaySession(root.session))
+        is LinkedSessionStateRoot ->
+            LinkedSessionStateRoot(
+                LinkedSessionState(
+                    root.linked.frame,
+                    root.linked.localPlayer,
+                    root.linked.topology,
+                    root.linked.players.map { player ->
+                      LinkedPlayerState(
+                          player.player,
+                          player.session?.let(::projectLegacyReplaySession),
+                      )
+                    },
+                ))
+      }
+
+  private fun projectLegacyReplayMachine(machine: MachineState): MachineState =
+      MachineState(
+          projectLegacyReplayState(machine.root) as RecordState,
+          machine.rtcRuntime,
+          machine.hardware,
+          machine.dmgFifoRuntime,
+      )
+
+  private fun projectLegacyReplaySession(session: SessionState): SessionState =
+      SessionState(
+          projectLegacyReplayMachine(session.machine),
+          session.serialPeripheral,
+          projectLegacyReplayState(session.serialState),
+          session.serialRuntime,
+          session.heldButtons,
+      )
+
+  private fun projectLegacyReplayState(value: StateValue): StateValue =
+      when (value) {
+        is RecordState -> {
+          val sourceFields =
+              if (isFetcherState(value) && hasFetcherCoordinateSuffix(value.fields)) {
+                value.fields.dropLast(3)
+              } else {
+                value.fields
+              }
+          RecordState(
+              value.typeId,
+              sourceFields.map { field ->
+                StateField(field.name, projectLegacyReplayState(field.value))
+              },
+          )
+        }
+        is ObjectArrayState -> ObjectArrayState(value.values.map(::projectLegacyReplayState))
+        is ListState -> ListState(value.values.map(::projectLegacyReplayState))
+        is Int32MapState ->
+            Int32MapState(
+                value.entries.map { entry ->
+                  Int32MapEntry(entry.key, projectLegacyReplayState(entry.value))
+                },
+            )
+        else -> value
+      }
+
+  private fun isFetcherState(value: RecordState): Boolean =
+      StateTypeRegistry.recordClassNames.getOrNull(value.typeId - 1) == FETCHER_STATE
+
+  private fun hasFetcherCoordinateSuffix(fields: List<StateField>): Boolean =
+      fields.size >= 3 &&
+          fields.takeLast(3).map(StateField::name) == FETCHER_COORDINATE_FIELDS
 
   /** Validates target-dependent restore preconditions without touching the live target. */
   fun validateCompatible(candidate: StateValue, target: StateValue, path: String) {
@@ -1087,6 +1190,20 @@ internal object StateGraph {
         value.fields.size == names.size - 1 &&
         value.fields.map(StateField::name) == names.dropLast(1)) {
       return value.fields + StateField("tvRemoteMemento", idleTvRemoteState())
+    }
+
+    if (typeName == "eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherState" &&
+        value.fields.size == names.size - 3 &&
+        value.fields.map(StateField::name) == names.dropLast(3)) {
+      // Historical files never retained the in-flight horizontal fetch coordinates.
+      // Preserve their fresh-session defaults deterministically; do not borrow a
+      // target's unrelated live fetch. Only newly captured states guarantee exact
+      // continuation between the X latch and its later tile-map read.
+      return value.fields + listOf(
+          StateField("tileMapX", Int32State(0)),
+          StateField("xBasePosition", Int32State(0)),
+          StateField("xBaseObjectFetch", BooleanState(false)),
+      )
     }
 
     val gpuType = typeName == "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState"

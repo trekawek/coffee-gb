@@ -5,12 +5,25 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccessProvider;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 
 import java.util.Arrays;
 
-public class BasicRom implements MemoryController {
+public class BasicRom implements MemoryController, PerformanceRomAccessProvider {
+
+    @Override
+    public boolean isPerformanceRamAccessSafe() {
+        return getClass() == BasicRom.class;
+    }
+
+    @Override
+    public boolean isPerformanceRomPeekSafe() {
+        // Subclasses may transform reads or implement handshakes; they must opt in separately.
+        return getClass() == BasicRom.class;
+    }
 
     private final int[] rom;
 
@@ -19,6 +32,38 @@ public class BasicRom implements MemoryController {
     private final Battery battery;
 
     private boolean ramUpdated;
+
+    /** Reused immutable mapping; outer boot, cheat, debug and DMA owners retain their gates. */
+    private final PerformanceRomAccess performanceRomAccess = new BasicRomPerformanceRomAccess();
+
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        // A subclass can transform reads or implement side effects and must opt in separately.
+        return getClass() == BasicRom.class ? performanceRomAccess : null;
+    }
+
+    private final class BasicRomPerformanceRomAccess implements PerformanceRomAccess {
+        @Override
+        public int physicalOffset(int cpuAddress) {
+            return cpuAddress >= 0 && cpuAddress < 0x8000 ? cpuAddress : -1;
+        }
+
+        @Override
+        public int readPhysicalByte(int physicalOffset) {
+            return physicalOffset >= 0 && physicalOffset < rom.length ? rom[physicalOffset] : 0xff;
+        }
+
+        @Override
+        public int readCpuByte(int cpuAddress) {
+            if (cpuAddress < 0 || cpuAddress >= 0x8000) return -1;
+            return cpuAddress < rom.length ? rom[cpuAddress] : 0xff;
+        }
+
+        @Override
+        public boolean canAccessRam() {
+            return isPerformanceRamAccessSafe();
+        }
+    }
 
     public BasicRom(Rom rom) {
         this(rom, Battery.NULL_BATTERY);

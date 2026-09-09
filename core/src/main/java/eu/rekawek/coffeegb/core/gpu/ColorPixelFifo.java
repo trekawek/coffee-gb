@@ -100,6 +100,47 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         delaySize++;
     }
 
+    /** Exact full-output counterpart of the steady timing FIFO's eight-dot tile entry. */
+    boolean isSteadyBackgroundOutputTileEntry() {
+        return getClass() == ColorPixelFifo.class && !dmgCompatValue && renderOutput
+                && background.size == 8 && clearedBackground.size == 0
+                && spriteFifo.size == 0 && linePixels <= 152 && delaySize <= 1
+                && (delaySize == 0 || (delayEntry[delayHead] & ~0x3f) == 0);
+    }
+
+    /**
+     * Publishes every pixel on its original output dot, then appends that dot's background
+     * pop. The caller has already proved an invariant native-CGB, object-free tile. Keeping
+     * the complete packed queues and delay stamps makes arbitrary restored splits exact.
+     */
+    void advanceSteadyBackgroundOutputPixelsTrusted(int count) {
+        if (count <= 0 || count > 8 || count > background.size || linePixels + count > 160) {
+            throw new IllegalStateException("Invalid steady CGB output pixel span");
+        }
+        for (int i = 0; i < count; i++) {
+            outputTicks++;
+            if (delaySize != 0) {
+                int entry = delayEntry[delayHead];
+                delayHead = (delayHead + 1) & 7;
+                delaySize = 0;
+                // Native CGB LCDC.0 affects object priority only. There is no object pixel
+                // here, so the exact native resolver is the live background palette lookup.
+                display.putColorPixel(bgPalette.getPalette((entry >> 2) & 7)[entry & 3]);
+            }
+            linePixels++;
+            int entry = background.array[background.offset];
+            background.offset = (background.offset + 1) & 15;
+            background.size--;
+            spriteFifo.poppedPixel = 0;
+            spriteFifo.poppedPalette = 0;
+            spriteFifo.poppedBgPriority = false;
+            spriteFifo.underflow++;
+            delayEntry[delayHead] = entry;
+            delayStamp[delayHead] = outputTicks;
+            delaySize = 1;
+        }
+    }
+
     @Override
     public void startLine() {
         linePixels = 0;

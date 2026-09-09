@@ -31,6 +31,12 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu>, PerformanceRom
 
     private final Ram ramFF80 = new Ram(0xff80, 0x7f);
 
+    /** Reused read-only view; canonical writes and state restore update this same RAM. */
+    private final PerformanceHramReadAccess performanceHramReadAccess = address ->
+            address >= 0xff80 && address <= 0xfffd ? ramFF80.getByte(address) : -1;
+
+    private boolean performanceHramOwnedMapping;
+
     private final GbcRam gbcRam = new GbcRam();
 
     private final boolean gbc;
@@ -145,6 +151,14 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu>, PerformanceRom
                 }
             }
         }
+        // Independent of the ROM proof below, which can return early for split windows.
+        performanceHramOwnedMapping = true;
+        for (int address = 0xff80; address <= 0xfffd; address++) {
+            if (addressToSpace[address] != ramFF80) {
+                performanceHramOwnedMapping = false;
+                break;
+            }
+        }
         AddressSpace romWindow = addressToSpace[0x0000];
         for (int address = 0x0001; address < 0x8000; address++) {
             if (addressToSpace[address] != romWindow) {
@@ -198,6 +212,12 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu>, PerformanceRom
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         return performanceRomAccessProvider == null
                 ? null : performanceRomAccessProvider.acquirePerformanceRomAccess();
+    }
+
+    @Override
+    public PerformanceHramReadAccess acquirePerformanceDetailedPpuHramReadAccess(int requestedMasterTicks) {
+        return requestedMasterTicks > 0 && getClass() == Mmu.class && performanceHramOwnedMapping
+                ? performanceHramReadAccess : null;
     }
 
     /** Returns the owner-held SVBK value without routing a read through the MMU bus. */

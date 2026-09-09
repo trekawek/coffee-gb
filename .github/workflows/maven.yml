@@ -28,6 +28,8 @@ jobs:
         cache: maven
     - name: Build with Maven
       run: mvn -B package --file pom.xml
+    - name: Test performance diagnostic reports and comparison matrix
+      run: python3 -m unittest discover -s scripts/tests -p 'test_performance*.py' -v
     - name: Headless CLI compatibility regression
       run: mvn -B -pl cli -am -Dtest=HeadlessCliCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
       env:

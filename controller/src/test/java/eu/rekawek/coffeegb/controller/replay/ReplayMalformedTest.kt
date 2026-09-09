@@ -156,6 +156,24 @@ class ReplayMalformedTest {
   }
 
   @Test
+  fun unsupportedReplaySemanticsAreRejectedByDecodeAndInspect() {
+    val encoded = ReplayCodec.encode(ReplayTestFixture.file())
+    val identityOffset = ReplayTestFixture.sectionOffsets(encoded).first()
+    val identityBody = identityOffset + ReplayCodec.SECTION_HEADER_SIZE
+    val identityDecodedLength = ReplayTestFixture.readLong(encoded, identityOffset + 16).toInt()
+    val semanticsOffset = identityBody + identityDecodedLength - 4
+
+    listOf(0, 3).forEach { unsupportedSemantics ->
+      val invalidIdentity = encoded.clone()
+      ReplayTestFixture.writeU16(invalidIdentity, semanticsOffset, unsupportedSemantics)
+      assertReasonForDecodeAndInspect(
+          ReplayDecodeReason.UNSUPPORTED_REPLAY_SEMANTICS,
+          ReplayTestFixture.withChecksum(invalidIdentity),
+      )
+    }
+  }
+
+  @Test
   fun embeddedModeRequiresAValidSessionStateFileV2() {
     val encoded = ReplayCodec.encode(ReplayTestFixture.file())
     val initialOffset = ReplayTestFixture.sectionOffsets(encoded)[1]

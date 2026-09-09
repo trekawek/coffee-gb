@@ -65,6 +65,11 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         serialEndpoint.setExternalClockReceiver(this::exchangeExternalClockBit);
     }
 
+    /** Pure applicability query; admission still requires the authoritative event horizon. */
+    public boolean hasAttachedPerformanceEndpoint() {
+        return serialEndpoint != SerialEndpoint.NULL_ENDPOINT;
+    }
+
     /** True when the raw SC register has armed a transfer using this port's clock. */
     public boolean isInternalClockTransferActive() {
         return (sc & 0x81) == 0x81;
@@ -116,36 +121,29 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
     /**
-     * Returns the largest exact PERFORMANCE span for an idle link port.
+     * Returns the largest exact normal-speed PERFORMANCE span before a serial event.
      *
      * <p>A quiet endpoint can advance its wall clock without changing the input level. A stopped
      * transfer, or an external-clock transfer whose endpoint guarantees that no input bit arrives,
      * has no serial edge to deliver. In those states the port advances only the endpoint's exact
-     * arithmetic countdown and the free-running 8-bit phase. Other endpoints, internal-clock
-     * transfers, HALT wake delay, and debug hooks remain scalar so endpoint callbacks and trace
-     * ordering cannot be observed late.</p>
+     * arithmetic countdown and the free-running 8-bit phase. Internal-clock transfers can advance
+     * between falling-bit edges. Endpoint events, the final-bit acknowledge window, HALT wake
+     * delay, and debug hooks remain scalar so callbacks and trace ordering cannot be observed
+     * late.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
-        if (requested <= 0
-                || speedMode.getSpeedMode() != 1
-                || !canAdvancePerformanceQuietTransfer(requested)
-                || haltWakeDelay != 0
-                || debugHooks != null) {
+        if (speedMode.getSpeedMode() != 1) {
             return 0;
         }
-        return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+        return performanceEventHorizon(Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN));
     }
 
-    /** Same idle-link horizon for a settled HALT packet, without the normal three-dot cap. */
+    /** Same serial-event horizon for a settled HALT packet, without the normal three-dot cap. */
     public int performanceSettledHaltSpanLimit(int requested) {
-        if (requested <= 0
-                || speedMode.getSpeedMode() != 1
-                || !canAdvancePerformanceQuietTransfer(requested)
-                || haltWakeDelay != 0
-                || debugHooks != null) {
+        if (speedMode.getSpeedMode() != 1) {
             return 0;
         }
-        return requested;
+        return performanceEventHorizon(requested);
     }
 
     /** Returns the largest safe span using the scheduler's normal three-clock bound. */
@@ -170,9 +168,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (!canTickPerformanceQuietSpan(ticks)) {
             return false;
         }
-        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
-        acknowledgeInterruptIfNeeded();
-        serialClocks = (serialClocks + ticks) & 0xff;
+        advancePerformanceEventSpanTrusted(ticks, 1);
         return true;
     }
 
@@ -181,20 +177,14 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
-        // The packet preflight has already established a quiet endpoint and no pending
-        // acknowledge/transfer edge. Do not repeat that walk on the hot commit path.
-        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
-        acknowledgeInterruptIfNeeded();
-        serialClocks = (serialClocks + ticks) & 0xff;
+        advancePerformanceEventSpanTrusted(ticks, 1);
     }
 
-    /** Native-CGB double-speed epoch guard; edge-producing transfers remain scalar. */
+    /** Compatibility guard for a fixed-x2 epoch wholly inside the serial event horizon. */
     public boolean performanceEpochIdle(int requested) {
         return requested > 0
                 && speedMode.getSpeedMode() == 2
-                && canAdvancePerformanceQuietTransfer(requested)
-                && haltWakeDelay == 0
-                && debugHooks == null;
+                && performanceEventHorizon(requested) >= requested;
     }
 
     /** Applies the preflighted quiet serial phase without a per-dot loop. */
@@ -202,13 +192,11 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
-        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
-        acknowledgeInterruptIfNeeded();
-        serialClocks = (serialClocks + ticks * 2) & 0xff;
+        advancePerformanceEventSpanTrusted(ticks, 2);
     }
 
 
-    /** Physical-DMG normal-speed epoch guard; edge-producing transfers remain scalar. */
+    /** Physical-DMG normal-speed epoch guard, including intervals between serial edges. */
     public boolean performancePhysicalDmgEpochIdle(int requested) {
         return performanceNormalSpeedEpochIdle(requested, false);
     }
@@ -221,9 +209,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         return requested > 0
                 && speedMode.getSpeedMode() == 1
                 && topologyMatches
-                && canAdvancePerformanceQuietTransfer(requested)
-                && haltWakeDelay == 0
-                && debugHooks == null;
+                && performanceEventHorizon(requested) >= requested;
     }
 
     /** Applies a preflighted physical-DMG quiet serial phase at one clock per master tick. */
@@ -236,9 +222,84 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
-        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
+        advancePerformanceEventSpanTrusted(ticks, 1);
+    }
+
+    /**
+     * Largest exact master-tick interval before a bit exchange, endpoint callback, or serial
+     * interrupt/wake event, at either CPU speed. The returned interval excludes the event tick.
+     * Rising internal clock toggles are private latch changes and can advance arithmetically;
+     * falling toggles still shift exactly one bit through the scalar path.
+     *
+     * <p>The final bit also has a short interrupt-acknowledge window which can pull completion
+     * before its oscillator edge. Keep that window scalar even when no acknowledge is currently
+     * pending. Queries neither consume an acknowledge nor invoke an endpoint callback.</p>
+     */
+    public int performanceEventHorizon(int requested) {
+        if (requested <= 0 || haltWakeDelay != 0 || debugHooks != null) {
+            return 0;
+        }
+        if (isInternalClockTransferActive()) {
+            int span = Math.min(requested,
+                    serialEndpoint.performanceInternalClockSpanLimit(requested));
+            if (span <= 0) {
+                return 0;
+            }
+            int halfPeriod = getInternalClockHalfPeriod();
+            int clocksToToggle = halfPeriod - (serialClocks & (halfPeriod - 1));
+            int clocksToBit = clocksToToggle + (serialClockSignal ? 0 : halfPeriod);
+            int clocksBeforeEvent = clocksToBit - 1;
+            if (receivedBits == 7) {
+                clocksBeforeEvent = Math.min(clocksBeforeEvent,
+                        clocksToBit - (gbc ? 8 : 3));
+            }
+            return Math.max(0, Math.min(span,
+                    clocksBeforeEvent / speedMode.getSpeedMode()));
+        }
+        int span = Math.min(requested, serialEndpoint.performanceQuietSpanLimit(requested));
+        if (span <= 0) {
+            return 0;
+        }
+        if (isExternalClockTransferActive()) {
+            span = Math.min(span, serialEndpoint.performanceExternalClockWaitSpanLimit(span));
+        }
+        return Math.max(0, span);
+    }
+
+    /** Diagnostics only: distinguishes a due edge from a missing endpoint clock contract. */
+    public boolean performanceEndpointClockCapabilityKnown() {
+        int required = isInternalClockTransferActive()
+                ? SerialEndpoint.PERFORMANCE_CLOCK_INTERNAL : SerialEndpoint.PERFORMANCE_CLOCK_IDLE;
+        if (isExternalClockTransferActive()) {
+            required |= SerialEndpoint.PERFORMANCE_CLOCK_EXTERNAL_WAIT;
+        }
+        return (serialEndpoint.performanceClockCapabilities() & required) == required;
+    }
+
+    /** Applies a span admitted by {@link #performanceEventHorizon(int)} at the current CPU speed. */
+    public void tickPerformanceEventSpanTrusted(int ticks) {
+        if (ticks > 0) {
+            advancePerformanceEventSpanTrusted(ticks, speedMode.getSpeedMode());
+        }
+    }
+
+    private void advancePerformanceEventSpanTrusted(int ticks, int speed) {
+        boolean internalTransfer = isInternalClockTransferActive();
+        if (internalTransfer) {
+            serialEndpoint.tickPerformanceInternalClockSpanTrusted(ticks);
+        } else {
+            serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
+        }
         acknowledgeInterruptIfNeeded();
-        serialClocks = (serialClocks + ticks) & 0xff;
+        int clocks = ticks * speed;
+        if (internalTransfer) {
+            int halfPeriod = getInternalClockHalfPeriod();
+            int toggles = ((serialClocks & (halfPeriod - 1)) + clocks) / halfPeriod;
+            if ((toggles & 1) != 0) {
+                serialClockSignal = !serialClockSignal;
+            }
+        }
+        serialClocks = (serialClocks + clocks) & 0xff;
     }
 
     /** True when scalar CPU clocks cannot shift a bit or expose an endpoint callback. */

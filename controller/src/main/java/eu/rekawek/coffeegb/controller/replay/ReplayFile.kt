@@ -55,8 +55,8 @@ class ReplayIdentity(
     require(strictUtf8Length(canonicalProfileId) <= ReplayLimits.MAX_PROFILE_ID_BYTES) {
       "Replay hardware profile ID exceeds ${ReplayLimits.MAX_PROFILE_ID_BYTES} UTF-8 bytes"
     }
-    require(replaySemanticsVersion == REPLAY_SEMANTICS_VERSION) {
-      "Replay semantics version must be $REPLAY_SEMANTICS_VERSION"
+    require(isSupportedReplaySemantics(replaySemanticsVersion)) {
+      "Unsupported replay semantics version $replaySemanticsVersion"
     }
     require(requiredStateFileVersion == REQUIRED_STATE_FILE_VERSION) {
       "Required StateFile version must be $REQUIRED_STATE_FILE_VERSION"
@@ -100,8 +100,14 @@ class ReplayIdentity(
           "stateFile=$requiredStateFileVersion)"
 
   companion object {
-    const val REPLAY_SEMANTICS_VERSION = 1
+    /** Historical checkpoint hashes omit the three Fetcher coordinates appended after v1. */
+    const val LEGACY_REPLAY_SEMANTICS_VERSION = 1
+    /** Current recordings hash the complete detached Fetcher coordinate state. */
+    const val REPLAY_SEMANTICS_VERSION = 2
     const val REQUIRED_STATE_FILE_VERSION = 2
+
+    fun isSupportedReplaySemantics(version: Int): Boolean =
+        version == LEGACY_REPLAY_SEMANTICS_VERSION || version == REPLAY_SEMANTICS_VERSION
 
     private fun digest(value: ByteArray, label: String): ByteArray {
       require(value.size == ReplayLimits.SHA256_BYTES) {

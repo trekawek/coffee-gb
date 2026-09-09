@@ -451,6 +451,46 @@ public class OamSearchTest {
         return fixture;
     }
 
+    @Test
+    public void ownedDmaSpanPreservesSourcePropagationAndEveryHalfSlot() {
+        for (int sourceAge : new int[]{0, 23, 81}) {
+            for (int start : new int[]{13, 14, 27, 38, 77, 78}) {
+                for (int requested : new int[]{1, 2, 3, 7, 19, 54}) {
+                    Fixture scalar = performanceOwnedFixture(sourceAge);
+                    Fixture bulk = performanceOwnedFixture(sourceAge);
+                    for (int i = 0; i < start; i++) {
+                        scalar.tickSearch();
+                        bulk.tickSearch();
+                    }
+                    int ticks = Math.min(requested, 79 - start);
+                    assertTrue("owned reader proof at " + start,
+                            bulk.search.isPerformanceOwnedDmaSpanEligible(
+                                    start, bulk.lcdc.getSpriteHeight()));
+                    for (int i = 0; i < ticks; i++) {
+                        scalar.tickSearch();
+                        bulk.dma.tick();
+                    }
+                    bulk.search.advancePerformanceOwnedDmaSpanTrusted(
+                            start, ticks, bulk.lcdc.getSpriteHeight());
+                    assertSearchStateEquals("owned source age " + sourceAge
+                                    + " dot " + start + " + " + ticks,
+                            scalar.search, bulk.search);
+                }
+            }
+        }
+    }
+
+    private static Fixture performanceOwnedFixture(int sourceAge) {
+        Fixture fixture = performanceFixture();
+        fixture.dma.setByte(0xff46, 0xc0);
+        fixture.advanceDma(5, 100);
+        for (int i = 0; i < sourceAge; i++) {
+            fixture.dmaTickAtReaderPosition(i % 80);
+        }
+        fixture.beginSearchLine();
+        return fixture;
+    }
+
     private static void assertSearchStateEquals(
             String message, OamSearch expected, OamSearch actual) {
         assertArrayEquals(message + " reader Y",

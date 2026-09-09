@@ -85,9 +85,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     private transient volatile boolean playerInputHubFastPathEligible;
 
     /**
-     * Complete cached eligibility for a PERFORMANCE span. The ordinary input shortcuts above
-     * intentionally cover a few states (for example a settled legacy button) which still need
-     * scalar packet observation. Keeping that distinction here lets the hot scheduler perform
+     * Complete cached eligibility for a PERFORMANCE span, including settled legacy buttons and
+     * all SGB controller selections. Keeping the complete contract here lets the scheduler perform
      * one volatile read instead of walking the {@link CopyOnWriteArraySet} and observer guards
      * for every epoch.
      */
@@ -285,14 +284,14 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     }
 
     /**
-     * Returns the largest exact PERFORMANCE span for a settled released-input JOYP receiver.
+     * Returns the largest exact PERFORMANCE span for a settled JOYP receiver.
      *
      * <p>The released default source cannot produce a poll or a physical transition, and a
      * settled four-sample receiver has no electrical edge to process.  Only the free-running
-     * BOGA clock phase changes, so it can be advanced arithmetically.  The SGB multiplayer
-     * extension admits only a released {@link PlayerInputHub} snapshot; custom sources, held
-     * Hub input, debug/timeline observers, and any pending input mutation stay on the scalar
-     * path.  The SGB packet receiver is clocked by CPU writes to JOYP, not by this free-running
+     * BOGA clock phase changes, so it can be advanced arithmetically. Settled legacy buttons and
+     * every SGB player's held {@link PlayerInputHub} input obey the same rule. Hub intervals stop
+     * before the next poll; custom sources, observers and pending input mutations stay scalar.
+     * The SGB packet receiver is clocked by CPU writes to JOYP, not by this free-running
      * tick, so it remains unchanged inside a preflighted no-bus span.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
@@ -300,7 +299,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 || !performanceSpanFastPathEligible) {
             return 0;
         }
-        if (releasedInputFastPathEligible && playerInputSource == PlayerInputSource.RELEASED) {
+        if (playerInputSource == PlayerInputSource.RELEASED) {
             return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
         }
         if (playerInputHubFastPathEligible && playerInputSource instanceof PlayerInputHub) {
@@ -315,14 +314,11 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             return Math.min(Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN),
                     (int) Math.max(0, distance - 1));
         }
-        if (isSgb && players > 0) {
-            return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
-        }
         return 0;
     }
 
     /**
-     * Same settled released-input/PlayerInputHub horizon for a HALT packet, without the normal
+     * Same settled default-input/PlayerInputHub horizon for a HALT packet, without the normal
      * three-tick scheduler cap.  A hub poll remains the hard endpoint; a host update is sampled
      * only by that poll, preserving the scalar visibility contract.
      */
@@ -331,7 +327,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 || !performanceSpanFastPathEligible) {
             return 0;
         }
-        if (releasedInputFastPathEligible && playerInputSource == PlayerInputSource.RELEASED) {
+        if (playerInputSource == PlayerInputSource.RELEASED) {
             return requested;
         }
         if (playerInputHubFastPathEligible && playerInputSource instanceof PlayerInputHub) {
@@ -342,10 +338,28 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             }
             return (int) Math.min((long) requested, Math.max(0, distance - 1));
         }
-        if (isSgb && players > 0) {
-            return requested;
-        }
         return 0;
+    }
+
+    /**
+     * Returns the bounded number of scalar ticks through the next PlayerInputHub poll when
+     * the settled-input horizon is the only short LCDC-replay fence. A zero result means that
+     * the requested span is not poll-limited; host mutation, observers, custom sources, and
+     * released-input sessions never expose a retry deadline. This reports a scheduling boundary
+     * only. It does not grant permission to skip the poll or to reuse a prior input proof.
+     */
+    public int performanceLcdcWriteReplayPollDistance(int requested) {
+        if (requested <= 0 || inputChangedSinceLastTick
+                || !performanceSpanFastPathEligible
+                || !(playerInputSource instanceof PlayerInputHub)
+                || !playerInputHubFastPathEligible) {
+            return 0;
+        }
+        int safeSpan = performanceSettledHaltSpanLimit(requested);
+        if (safeSpan >= requested) {
+            return 0;
+        }
+        return safeSpan + 1;
     }
 
     /** Returns the largest safe span using the scheduler's normal three-clock bound. */
@@ -359,7 +373,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     }
 
     /**
-     * Advances a settled released-input JOYP receiver without polling or filtering each tick.
+     * Advances a settled JOYP receiver without polling or filtering each tick.
      *
      * @return false without mutation when a host input, observer, or debug edge could make a
      *         scalar callback observable
@@ -546,32 +560,22 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && !inputChangedSinceLastTick
                 && inputHistory == SETTLED_HISTORY[inputLines]
                 && filteredInputLines == inputLines;
-        performanceSpanFastPathEligible = performanceSpanFastPathEligible
-                || playerInputHubFastPathEligible
-                && players == 0
-                && buttons.isEmpty()
-                && inputTimelineObserver == null
-                && debugHooks == null;
     }
 
     private void refreshInputFastPathEligibility(int inputLines) {
         refreshReleasedInputFastPathEligibility();
         refreshPlayerInputHubFastPathEligibility(inputLines);
-        refreshSgbPerformanceSpanFastPathEligibility(inputLines);
+        refreshPerformanceSpanFastPathEligibility(inputLines);
     }
 
-    private void refreshSgbPerformanceSpanFastPathEligibility(int inputLines) {
-        if (!isSgb || players == 0) {
-            return;
-        }
-        boolean releasedDefault = playerInputSource == PlayerInputSource.RELEASED
+    private void refreshPerformanceSpanFastPathEligibility(int inputLines) {
+        boolean stableDefault = playerInputSource == PlayerInputSource.RELEASED
                 && sampledInput == PlayerInputSnapshot.RELEASED;
-        boolean releasedHub = playerInputSource instanceof PlayerInputHub
-                && playerInputHubFastPathEligible
-                && sampledInput.equals(PlayerInputSnapshot.RELEASED);
-        performanceSpanFastPathEligible = (releasedDefault || releasedHub)
+        // inputLines already includes the selected SGB player's buttons, legacy P1 union and
+        // multiplayer ID response. Those levels stay constant until a selector/control write,
+        // host mutation, or hub poll; all three boundaries revoke or limit this cached proof.
+        performanceSpanFastPathEligible = (stableDefault || playerInputHubFastPathEligible)
                 && !inputChangedSinceLastTick
-                && buttons.isEmpty()
                 && debugHooks == null
                 && inputTimelineObserver == null
                 && inputHistory == SETTLED_HISTORY[inputLines]
