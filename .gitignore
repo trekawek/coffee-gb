@@ -8,3 +8,4 @@ android/app/build/
 games
 .mvn
 /roms
+__pycache__/

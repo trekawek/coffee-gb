@@ -22,4 +22,9 @@ public class Peer2PeerInfraredEndpoint implements InfraredEndpoint {
         Peer2PeerInfraredEndpoint peer = this.peer;
         return peer != null && peer.lightOn;
     }
+
+    @Override
+    public int performanceQuietSpanLimit(int requested) {
+        return peer == null ? Math.max(0, requested) : 0;
+    }
 }

@@ -495,7 +495,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     /**
      * Replays a deferred background span after the GPU's coarse performance cursor reaches an
      * observation boundary. The caller has already proved that this is the unshifted scalar
-     * machine on a normal-speed, no-sprite/no-window line; keeping that proof outside the loop
+     * machine on an invariant no-sprite/no-window line; keeping that proof outside the loop
      * removes the branch-heavy general PixelTransfer path without changing its canonical
      * Fetcher/FIFO state. Native CGB uses the same structural scalar FIFO, while Fetcher retains
      * its exact CGB map-attribute, bank, and tile-flip reads.
@@ -508,7 +508,32 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 || ticks < 0) {
             throw new IllegalStateException("Invalid steady background timing span");
         }
+        if (gbc && !speedMode.isDmgCompat() && ticks >= 8 && spriteCount == 0
+                && fifo instanceof ScalarTimingColorPixelFifo) {
+            advanceSteadyNativeCgbTimingTiles(ticks);
+            return;
+        }
         for (int i = 0; i < ticks; i++) {
+            fifo.outputTick();
+            renderSteadyBackgroundPixel();
+            fetcher.advanceSteadyBackground(position);
+        }
+    }
+
+    /** Only materialization enters this helper; the full visible machine stays per-pixel. */
+    private void advanceSteadyNativeCgbTimingTiles(int ticks) {
+        while (ticks >= 8) {
+            if (fetcher.tryAdvanceSteadyBackgroundTimingTile(position)) {
+                position += 8;
+                ticks -= 8;
+            } else {
+                fifo.outputTick();
+                renderSteadyBackgroundPixel();
+                fetcher.advanceSteadyBackground(position);
+                ticks--;
+            }
+        }
+        while (ticks-- > 0) {
             fifo.outputTick();
             renderSteadyBackgroundPixel();
             fetcher.advanceSteadyBackground(position);
@@ -546,7 +571,32 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 fetcher.advanceSteadyBackground(position);
             }
         }
+        if (gbc && !speedMode.isDmgCompat() && spriteCount == 0
+                && fifo.getClass() == ColorPixelFifo.class && ticks - i >= 8) {
+            advanceSteadyNativeCgbOutputTiles(ticks - i);
+            return;
+        }
         for (; i < ticks; i++) {
+            fifo.outputTick();
+            renderSteadyBackgroundPixel();
+            fetcher.advanceSteadyBackground(position);
+        }
+    }
+
+    /** Full output publication remains per-pixel; only its invariant fetch schedule is grouped. */
+    private void advanceSteadyNativeCgbOutputTiles(int ticks) {
+        while (ticks >= 8) {
+            if (fetcher.tryAdvanceSteadyBackgroundOutputTile(position)) {
+                position += 8;
+                ticks -= 8;
+            } else {
+                fifo.outputTick();
+                renderSteadyBackgroundPixel();
+                fetcher.advanceSteadyBackground(position);
+                ticks--;
+            }
+        }
+        while (ticks-- > 0) {
             fifo.outputTick();
             renderSteadyBackgroundPixel();
             fetcher.advanceSteadyBackground(position);

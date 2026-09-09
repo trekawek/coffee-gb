@@ -121,6 +121,32 @@ public class BarcodeBoySerialEndpoint implements SerialEndpoint {
     public void setSb(int sb) {
     }
 
+    /**
+     * Internal-clock handshakes change only on supplied bit edges. A concurrently queued scan is
+     * consumed by recvBit only after the guest selects the external clock, so it cannot shorten
+     * this horizon. External-clock polling retains its original scalar observation contract.
+     */
+    @Override
+    public int performanceInternalClockSpanLimit(int requested) {
+        return Math.max(0, requested);
+    }
+
+    @Override
+    public int performanceClockCapabilities() {
+        return PERFORMANCE_CLOCK_INTERNAL;
+    }
+
+    @Override
+    public int performanceInputPinSpanLimit(int requested) {
+        // The scanner uses framed serial bits; it does not drive the separate software-UART pin.
+        return Math.max(0, requested);
+    }
+
+    @Override
+    public void tickPerformanceInternalClockSpanTrusted(int ticks) {
+        // This endpoint has no master-tick clock; the port retains every exchangeBit callback.
+    }
+
     @Override
     public void startSending() {
         sendBitIndex = 0;

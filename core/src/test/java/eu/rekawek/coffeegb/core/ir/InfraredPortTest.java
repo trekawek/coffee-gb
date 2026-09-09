@@ -49,9 +49,12 @@ public class InfraredPortTest {
     }
 
     @Test
-    public void settledHaltSpanRejectsAnyAttachedInfraredEndpoint() {
+    public void settledHaltSpanAdmitsDisconnectedInfraredAndRejectsConnectedPeer() {
         InfraredPort port = new InfraredPort(true, new SpeedMode(true));
-        port.init(EventBus.NULL_EVENT_BUS, new Peer2PeerInfraredEndpoint());
+        Peer2PeerInfraredEndpoint endpoint = new Peer2PeerInfraredEndpoint();
+        port.init(EventBus.NULL_EVENT_BUS, endpoint);
+        assertEquals(54, port.performanceSettledHaltSpanLimit(54));
+        endpoint.init(new Peer2PeerInfraredEndpoint());
         assertEquals(0, port.performanceSettledHaltSpanLimit(54));
     }
 

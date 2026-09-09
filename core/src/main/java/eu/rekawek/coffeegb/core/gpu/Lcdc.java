@@ -113,15 +113,38 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         return gbc && isPerformanceQuietSpanFixedPoint();
     }
 
+    /**
+     * Native-CGB mode 2 consumes only LCDC.2 from this history. Other LCDC bits may still be
+     * propagating after a write when every size sample already agrees. The caller keeps both
+     * pixel machines stopped and advances the complete raw histories exactly before handoff.
+     */
+    boolean isPerformanceMode2HeightStable() {
+        if (!gbc || hasPendingConflictLatches()) {
+            return false;
+        }
+        if (performanceFixedPointDrain == 0) {
+            return true;
+        }
+        for (int i = 0; i < CONFLICT_HISTORY_LENGTH; i++) {
+            if (((oamSizeHistory[i] ^ value) & 4) != 0 || tileSelectGlitchHistory[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Whether all delayed LCDC histories are uniform at the current value. */
     boolean isPerformanceQuietSpanFixedPoint() {
         return performanceFixedPointDrain == 0 && !hasPendingConflictLatches();
     }
 
-    /** The fixed-point histories remain identical for an arbitrary positive quiet span. */
+    /** Advances raw histories while every delayed mode-2 size sample remains constant. */
     void advancePerformanceMode2FixedPointSpanTrusted(int ticks) {
-        if (ticks < 0 || !isPerformanceMode2FixedPoint()) {
+        if (ticks < 0 || !isPerformanceMode2HeightStable()) {
             throw new IllegalStateException("LCDC is not at its PERFORMANCE mode-2 fixed point");
+        }
+        if (performanceFixedPointDrain != 0) {
+            advancePerformanceUnobservedHistorySpanTrusted(ticks);
         }
     }
 
@@ -131,6 +154,43 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
             throw new IllegalStateException(
                     "LCDC is not at its physical-DMG PERFORMANCE mode-2 fixed point");
         }
+    }
+
+    /**
+     * Exact history advancement while both pixel machines are stopped on an already composed
+     * direct line or have drained completely in HBlank. No history consumer runs inside this
+     * interval. Fill the newly clocked history cells directly; after at most nine dots both
+     * rings are uniform and further rotations are unobservable.
+     * Active write/conflict latches remain a caller fence and are never skipped here.
+     */
+    void advancePerformanceUnobservedHistorySpanTrusted(int ticks) {
+        if (ticks < 0 || hasPendingConflictLatches()) {
+            throw new IllegalStateException("LCDC has an active conflict in a history-only span");
+        }
+        int drain = Math.min(ticks, performanceFixedPointDrain);
+        if (drain > 0) {
+            advancePerformanceUnobservedHistoryDrain(drain);
+        }
+    }
+
+    // Keep the usual already-settled history check small enough to inline in GPU commits.
+    private void advancePerformanceUnobservedHistoryDrain(int drain) {
+        boolean backgroundEnabled = (value & 0x01) != 0;
+        dmgBlobBackgroundEnable = drain == 1
+                ? pendingDmgBlobBackgroundEnable : backgroundEnabled;
+        pendingDmgBlobBackgroundEnable = backgroundEnabled;
+        if (drain >= CONFLICT_HISTORY_LENGTH) {
+            Arrays.fill(tileSelectGlitchHistory, false);
+            Arrays.fill(oamSizeHistory, value);
+            historyHead = (historyHead - drain) & (CONFLICT_HISTORY_LENGTH - 1);
+        } else {
+            for (int i = 0; i < drain; i++) {
+                historyHead = (historyHead - 1) & (CONFLICT_HISTORY_LENGTH - 1);
+                tileSelectGlitchHistory[historyHead] = false;
+                oamSizeHistory[historyHead] = value;
+            }
+        }
+        performanceFixedPointDrain -= drain;
     }
 
     /** Called once per GPU tick: the mix value lives for the single tick after the write. */

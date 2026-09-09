@@ -212,6 +212,59 @@ public class PerformanceRomAccessTest {
     }
 
     @Test
+    public void detailedPpuLeaseCrossesDmaOnlyForNativeDoubleSpeedWramAndKeepsOverlayGuards()
+            throws Exception {
+        for (int topology = 0; topology < 4; topology++) {
+            for (int source : new int[]{0x40, 0x80, 0xc0, 0xdf, 0xe0}) {
+                boolean color = topology != 3;
+                SpeedMode speed = new SpeedMode(color);
+                if (topology == 0) {
+                    speed.setByte(0xff4d, 1);
+                    var onStop = SpeedMode.class.getDeclaredMethod("onStop");
+                    onStop.setAccessible(true);
+                    assertEquals(true, onStop.invoke(speed));
+                } else if (topology == 2) {
+                    speed.setDmgCompat(true);
+                }
+                Cartridge cartridge = new Cartridge(new Rom(mbc5Rom()), Battery.NULL_BATTERY);
+                BiosShadow shadow = new BiosShadow(new Bios(HardwareProfileRegistry.CGB), cartridge);
+                Mmu mmu = new Mmu(color);
+                mmu.addAddressSpace(shadow);
+                mmu.addAddressSpace(new Ram(0xc000, 0x2000));
+                mmu.indexSpaces();
+                Dma dma = new Dma(mmu, new Ram(0xfe00, 0xa0), speed);
+                DmaCpuAddressSpace dmaBus = new DmaCpuAddressSpace(mmu, dma, color);
+                Genie outer = new Genie(dmaBus, color);
+                assertNull("boot overlay cannot be bypassed", outer.acquirePerformanceDetailedPpuRomAccess());
+                shadow.setByte(0xff50, 1);
+                var inactive = dma.captureState();
+                dma.setByte(0xff46, source);
+                assertNull("acquisition remains scalar", outer.acquirePerformanceDetailedPpuRomAccess());
+                for (int tick = 0; tick < 8; tick++) dma.tick(false, false);
+                assertNull("ordinary leases remain disabled for all active DMA", outer.acquirePerformanceRomAccess());
+                boolean permitted = topology == 0 && source >= 0xc0 && source < 0xe0;
+                PerformanceRomAccess lease = outer.acquirePerformanceDetailedPpuRomAccess();
+                if (permitted) {
+                    assertNotNull(lease);
+                    assertEquals(0x80, lease.readCpuByte(0x100));
+                    dma.setDebugHooks(new TestDebugHooks());
+                    assertNull("DMA observation remains authoritative", outer.acquirePerformanceDetailedPpuRomAccess());
+                    dma.setDebugHooks(null);
+                    try (EventBusImpl events = new EventBusImpl(null, null, false)) {
+                        outer.init(events);
+                        events.post(new AddPatches(List.of(new GameGenieCheat(0x55, 0x4100, -1))));
+                        assertNull("outer cheat cannot be bypassed", outer.acquirePerformanceDetailedPpuRomAccess());
+                    }
+                } else {
+                    assertNull("unsupported source/topology " + topology + '/' + source, lease);
+                }
+                dma.restoreState(inactive);
+                assertNotNull("ordinary reader restores after DMA ends", dmaBus.acquirePerformanceRomAccess());
+            }
+        }
+    }
+
+    @Test
     public void mmuRejectsAProviderWhenAnyRomAddressHasAnotherOwner() {
         PerformanceRomAccess access = new ConstantPerformanceRomAccess();
         Mmu mmu = new Mmu(true);
@@ -223,7 +276,7 @@ public class PerformanceRomAccessTest {
     }
 
     @Test
-    public void basicRomCartridgeUsesReusedExactMapperFallback() throws IOException {
+    public void basicRomCartridgeUsesReusedExactPhysicalReader() throws IOException {
         byte[] rom = new byte[0x8000];
         rom[0x0000] = 0x21;
         rom[0x3fff] = 0x43;
@@ -236,8 +289,11 @@ public class PerformanceRomAccessTest {
         PerformanceRomAccess access = cartridge.acquirePerformanceRomAccess();
         assertNotNull(access);
         assertSame(access, cartridge.acquirePerformanceRomAccess());
-        assertEquals(-1, access.physicalOffset(0x0000));
-        assertEquals(0xff, access.readPhysicalByte(0));
+        assertEquals(0, access.physicalOffset(0x0000));
+        assertEquals(0x7fff, access.physicalOffset(0x7fff));
+        assertEquals(0x21, access.readPhysicalByte(0));
+        assertEquals(0x87, access.readPhysicalByte(0x7fff));
+        assertEquals(0xff, access.readPhysicalByte(0x8000));
         assertEquals(0x21, access.readCpuByte(0x0000));
         assertEquals(0x43, access.readCpuByte(0x3fff));
         assertEquals(0x65, access.readCpuByte(0x4000));

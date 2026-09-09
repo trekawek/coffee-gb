@@ -338,6 +338,101 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
     }
 
     /**
+     * Interior whose source bus is disjoint from native CGB ROM and HRAM CPU accesses.
+     * A detailed PPU reader still requires {@link #tick(boolean, boolean)} once per dot.
+     * This horizon alone grants no permission to batch copies or source writes; advancing
+     * between copy edges additionally requires the owner's separate quiet CPU/PPU proof.
+     */
+    public int performanceNativeCgbWramReplaySpanLimit(int requested) {
+        if (requested <= 0 || !speedMode.isGbc() || speedMode.isDmgCompat()
+                || speedMode.getSpeedMode() != 2 || !transferInProgress
+                || from < 0xc000 || from >= 0xe000
+                || cpuClockPaused || pauseEntryClocks != 0 || restarted
+                || ppuOamOwnedThroughRestart || pendingInterruptWriteByte >= 0
+                || vramDmaBusAddress >= 0 || vramDmaBusCollisionObserved
+                || debugHooks != null || transferClocks < 8 || transferClocks >= 644) {
+            return 0;
+        }
+        // Acquisition, final release and every restart remain scalar ownership seams.
+        return Math.min(requested, (644 - transferClocks) / 2);
+    }
+
+    /**
+     * One exact master dot inside an owner-proved native-x2 WRAM transfer. The owner must
+     * hold {@link #performanceNativeCgbWramReplaySpanLimit(int)} for its entire packet and
+     * exclude CPU/source mutations, HDMA, clock changes and debug callbacks until replay
+     * finishes. GPU/STAT still run after every call; this grants no PPU batching permission.
+     *
+     * <p>At most one copy edge can occur during two CPU clocks. Canonical source/OAM calls
+     * still see that actual edge, its current byte and the master-dot generation. The
+     * admitted interior excludes acquisition, completion and all collision/pause events.</p>
+     */
+    public void tickPerformanceNativeCgbWramReplayTrusted() {
+        assert performanceNativeCgbWramReplaySpanLimit(1) == 1
+                : "DMA owner lost its native-x2 WRAM replay proof";
+        ppuBusGeneration++;
+        oamOwnedForPpuBeforeTick = oamOwnedForPpu;
+        ticks++;
+        int endClocks = transferClocks + 2;
+        int copyClock = (transferClocks & ~3) + 4;
+        if (copyClock <= endClocks) {
+            transferClocks = copyClock;
+            int value = addressSpace.getByte(from + currentByte);
+            oam.setByte(0xfe00 + currentByte, value);
+            currentByte++;
+        }
+        transferClocks = endClocks;
+        // Native-x2 ownership is continuously asserted throughout clocks8..644. Preserve
+        // the old value during callbacks above, just like tick's final ownership update.
+        oamOwnedForPpu = true;
+        vramDmaBusAddress = -1;
+    }
+
+    /** Exact native-x2 HRAM read plane for a bounded detailed CPU packet. */
+    public int performanceNativeCgbHramReadSpanLimit(int requested) {
+        if (requested <= 0 || getClass() != Dma.class || !speedMode.isGbc()
+                || speedMode.isDmgCompat() || speedMode.getSpeedMode() != 2 || debugHooks != null) {
+            return 0;
+        }
+        if (!hasCpuBusSpecialState() && !requiresClockTick(false)) {
+            return requested;
+        }
+        return performanceNativeCgbWramReplaySpanLimit(requested);
+    }
+
+    /**
+     * Copies an owned WRAM prefix when the owner has separately proved that neither the CPU
+     * nor the PPU observes its intervening dots. Source reads and OAM writes still occur once
+     * per byte, in their canonical order and copy-clock phase. This is not suitable for the
+     * detailed PPU reader: that owner must continue interleaving {@link #tick(boolean, boolean)}.
+     */
+    public void advancePerformanceNativeCgbWramCopySpanTrusted(int count) {
+        if (count <= 0 || performanceNativeCgbWramReplaySpanLimit(count) != count) {
+            throw new IllegalStateException("DMA does not own a stable WRAM copy prefix");
+        }
+        int startClocks = transferClocks;
+        int startTicks = ticks;
+        long startGeneration = ppuBusGeneration;
+        int endClocks = startClocks + 2 * count;
+        oamOwnedForPpuBeforeTick = oamOwnedForPpu;
+        for (int copyClock = (startClocks & ~3) + 4;
+                copyClock <= endClocks; copyClock += 4) {
+            // Native x2 can enter with either CPU-clock residue after a prior speed change.
+            // Preserve the exact progress visible at each canonical source/destination call.
+            int elapsed = (copyClock - startClocks + 1) / 2;
+            transferClocks = copyClock;
+            ticks = startTicks + elapsed;
+            ppuBusGeneration = startGeneration + elapsed;
+            int value = addressSpace.getByte(from + currentByte);
+            oam.setByte(0xfe00 + currentByte, value);
+            currentByte++;
+        }
+        transferClocks = endClocks;
+        ticks = startTicks + count;
+        ppuBusGeneration = startGeneration + count;
+    }
+
+    /**
      * Returns whether advancing the OAM-DMA clock can still change its observable
      * state. A settled, inactive engine otherwise has no work on a Game Boy tick.
      */

@@ -239,19 +239,19 @@ public class SoundMode3 extends AbstractSoundMode {
         if (channelEnabled && freqDivider > edgeCount) {
             freqDivider -= edgeCount;
         } else if (channelEnabled) {
-            for (int edge = 0; edge < edgeCount; edge++) {
-                if (--freqDivider == 0) {
-                    resetFreqDivider();
-                    i = (i + 1) & 31;
-                    int stale = applyVolume((buffer >> 4) & 0x0f);
-                    int out = getWaveEntry();
-                    // getWaveEntry() resets ticksSinceRead at the edge; remember its timestamp so
-                    // the ticks after the final edge are restored below.
-                    lastReadPosition = firstEdgePosition + edge * 2;
-                    lastOutput = triggered ? stale : out;
-                    triggered = false;
-                }
-            }
+            int afterFirst = edgeCount - freqDivider;
+            int fetches = 1 + afterFirst / frequencyPeriod;
+            int tail = afterFirst % frequencyPeriod;
+            int stale = applyVolume((buffer >> 4) & 0x0f);
+            freqDivider = frequencyPeriod - tail;
+            i = (i + fetches) & 31;
+            // Quiet spans contain no wave-RAM write or CPU read. Only the final fetched byte
+            // and its access-window age survive; the first DMG fetch still plays stale data
+            // if it is the only fetch in this span.
+            int out = getWaveEntry();
+            lastReadPosition = firstEdgePosition + (edgeCount - tail - 1) * 2;
+            lastOutput = triggered && fetches == 1 ? stale : out;
+            triggered = false;
         }
         clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
         if (lastReadPosition != 0) {

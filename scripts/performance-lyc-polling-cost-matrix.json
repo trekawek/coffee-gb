@@ -1,0 +1,67 @@
+{
+  "schema": "coffee-gb-authored-performance-matrix-v1",
+  "id": "lyc-poll-10-v1",
+  "description": "Separate ten-case cost follow-up for authored FF45/LYC polling across every known profile. Each case uses the existing MIXED fixture form (four real addressing forms). Existing 39/60/15/12 manifests and the common runner remain unchanged; timing acceptance is pending.",
+  "protocol": {
+    "trials": 3,
+    "warmup_ticks": 2097152,
+    "measured_ticks": 8388608,
+    "shuffle_seed": 80571,
+    "diagnostic_window_ticks": 4194304,
+    "bootstrap": "SKIP",
+    "execution": "PERFORMANCE",
+    "rtc_millis": 0,
+    "battery_persistence": false,
+    "held_input": [
+      "A",
+      "RIGHT"
+    ],
+    "jvm_flags": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:+UseSerialGC"
+    ]
+  },
+  "cases": [
+    {
+      "scenario": "LYC_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "LYC_POLL",
+      "profile": "SGB2"
+    }
+  ]
+}

@@ -90,6 +90,18 @@ public class FullChanger implements StatefulComponent<FullChanger> {
         return armed || running;
     }
 
+    /** Constant-pulse interval; an armed transmission starts only at a scalar RP read. */
+    int performanceSpanLimit(int requested, int speed) {
+        return requested <= 0 ? 0 : running
+                ? Math.min(requested, Math.max(0, (remaining - 1) / speed)) : requested;
+    }
+
+    void tickPerformanceSpanTrusted(int ticks, int speed) {
+        if (running) {
+            remaining -= ticks * speed;
+        }
+    }
+
     boolean isLightOn() {
         return running && (index & 1) == 0; // even entries are the ON periods
     }

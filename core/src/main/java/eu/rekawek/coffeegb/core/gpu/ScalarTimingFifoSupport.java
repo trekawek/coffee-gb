@@ -41,6 +41,13 @@ final class ScalarTimingFifoSupport {
             size--;
         }
 
+        void dequeueSpanTrusted(int count) {
+            if (count < 0 || count > size) {
+                throw new IllegalStateException("Invalid timing FIFO pop span");
+            }
+            size -= count;
+        }
+
         void clear() {
             size = 0;
         }
@@ -90,6 +97,17 @@ final class ScalarTimingFifoSupport {
             } else {
                 size--;
             }
+        }
+
+        boolean isEmpty() {
+            return size == 0;
+        }
+
+        void popEmptySpanTrusted(int count) {
+            if (count < 0 || size != 0) {
+                throw new IllegalStateException("Timing object FIFO is not empty");
+            }
+            underflow += count;
         }
 
         void rewind() {

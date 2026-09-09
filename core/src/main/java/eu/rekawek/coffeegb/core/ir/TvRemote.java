@@ -84,6 +84,18 @@ public class TvRemote implements StatefulComponent<TvRemote> {
         return armed || running;
     }
 
+    /** Constant-pulse interval; the tick which changes the light remains scalar. */
+    int performanceSpanLimit(int requested, int speed) {
+        return requested <= 0 ? 0 : running
+                ? Math.min(requested, Math.max(0, (remaining - 1) / speed)) : requested;
+    }
+
+    void tickPerformanceSpanTrusted(int ticks, int speed) {
+        if (running) {
+            remaining -= ticks * speed;
+        }
+    }
+
     boolean isLightOn() {
         return running && (index & 1) == 0;
     }

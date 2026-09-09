@@ -1,0 +1,87 @@
+{
+  "schema": "coffee-gb-authored-performance-matrix-v1",
+  "id": "profile-cost-15-v1",
+  "description": "Separate profile-cost follow-up: five authored workloads on each of MGB, CGB0_X2 and SGB2. The historical 39-case and 60-case manifests are unchanged; this uses the original three-trial protocol.",
+  "protocol": {
+    "trials": 3,
+    "warmup_ticks": 2097152,
+    "measured_ticks": 8388608,
+    "shuffle_seed": 80571,
+    "diagnostic_window_ticks": 4194304,
+    "bootstrap": "SKIP",
+    "execution": "PERFORMANCE",
+    "rtc_millis": 0,
+    "battery_persistence": false,
+    "held_input": [
+      "A",
+      "RIGHT"
+    ],
+    "jvm_flags": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:+UseSerialGC"
+    ]
+  },
+  "cases": [
+    {
+      "scenario": "CPU",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "MASKED_IRQ",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "RASTER_WRITES",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "HELD_INPUT",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "AUDIO",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "HBLANK_DMA",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "LCD_OFF",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "LCDC_WRITES",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "OAM_DMA",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "MASKED_IRQ",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "STAT_POLL",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "HELD_INPUT",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "AUDIO",
+      "profile": "SGB2"
+    }
+  ]
+}

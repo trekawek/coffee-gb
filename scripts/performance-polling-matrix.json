@@ -1,0 +1,267 @@
+{
+  "schema": "coffee-gb-authored-performance-matrix-v1",
+  "id": "polling-60-v1",
+  "description": "Separate follow-up cost matrix: six persistent mixed-form MMIO polling workloads across every known profile. The historical39-case matrix is unchanged; positive correctness coverage alone is not a throughput result.",
+  "protocol": {
+    "trials": 3,
+    "warmup_ticks": 2097152,
+    "measured_ticks": 8388608,
+    "shuffle_seed": 80571,
+    "diagnostic_window_ticks": 4194304,
+    "bootstrap": "SKIP",
+    "execution": "PERFORMANCE",
+    "rtc_millis": 0,
+    "battery_persistence": false,
+    "held_input": [
+      "A",
+      "RIGHT"
+    ],
+    "jvm_flags": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:+UseSerialGC"
+    ]
+  },
+  "cases": [
+    {
+      "scenario": "IF_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "IF_POLL",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "IE_POLL",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "DIV_POLL",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "TIMA_POLL",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "JOYP_POLL",
+      "profile": "SGB2"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "MGB"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "CGB0_X2"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "NR52_POLL",
+      "profile": "SGB2"
+    }
+  ]
+}

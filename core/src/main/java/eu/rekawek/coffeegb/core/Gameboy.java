@@ -67,6 +67,10 @@ import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy;
 import eu.rekawek.coffeegb.core.sound.Sound;
 import eu.rekawek.coffeegb.core.timer.Timer;
+import eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics;
+import eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics.Blocker;
+import eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics.Execution;
+import eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics.Subsystem;
 
 import java.io.Closeable;
 import java.io.File;
@@ -123,6 +127,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Maximum settled-HALT packet horizon; Android's next input poll trims this to at most 63. */
     private static final int SETTLED_HALT_PERFORMANCE_MAX_SPAN = 64;
+
+    /** Internal admission result; ordinary negative STAT deadlines are at most 54 dots. */
+    private static final int PERFORMANCE_EPOCH_NEEDS_PPU_REPLAY = Integer.MIN_VALUE;
+
+    // Detailed replay has another CPU/bus lease to establish. At the short PPU seams of
+    // otherwise coarse-rendered lines, scalar execution costs less than that second plan.
+    private static final int PERFORMANCE_DETAILED_REPLAY_MIN_SPAN = 8;
+
+    /** Low 32 bits of the allocation-free serial-denial lease result. */
+    private static final long PERFORMANCE_SERIAL_DENIED_TICKS_MASK = 0xffffffffL;
 
     // A granted HBlank burst can finish while the CPU speed-switch countdown is still
     // running. Its completed bus hand-off removes five ticks from the retained tail.
@@ -197,6 +211,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Whether the visible frame currently being scanned out is host-suppressed. */
     private transient boolean frameRenderSuppressed;
 
+    private transient long performanceNativeFrames;
+    private transient long performanceRenderedFrames;
+    private transient long performanceSuppressedFrames;
+
     private boolean requestedScreenRefresh;
 
     private boolean lcdDisabled;
@@ -223,6 +241,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Session-only retirement observation state; deliberately absent from machine state. */
     private transient boolean debugRetirementTrackingActive;
+
+    private transient PerformanceDiagnostics performanceDiagnostics;
+
+    /** Owner-thread reference control: retains Performance rendering/audio with scalar clocks. */
+    private transient boolean performanceBatchingEnabled = true;
 
     /** PERFORMANCE scheduler diagnostics; deliberately absent from portable machine state. */
     private transient long performanceBulkSpanCount;
@@ -539,6 +562,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // so the machine boots native-colour despite the dump's garbage flag byte
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
                     && !cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
+            if (configuration.bootstrapMode == BootstrapMode.SKIP && gbc) {
+                // SKIP starts with the GPU's post-boot LCD level and executes no transition
+                // from which the scheduler could publish it to the fresh DMA controller.
+                hdma.onLcdSwitch(gpu.isLcdEnabled());
+            }
         }
         applyBootCompatibilityIfReady();
     }
@@ -645,6 +673,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private void applyWarmReset() {
         nativeCgbScalarOwner = false;
+        performanceLcdcWriteReplayRetry = false;
+        performanceLcdcWriteReplayPollTicks = 0;
         // the boot ROM leaves the LCD running with the DMG-compatible defaults
         interruptManager.disableInterrupts(false);
         mmu.setByte(0xffff, 0x00);
@@ -776,6 +806,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * @return true if there was a new frame emitted in this tick
      */
     public boolean tick() {
+        if (performanceDiagnostics != null) {
+            performanceDiagnostics.recordTicks(Execution.SCALAR, 1);
+            recordPerformanceScalarReasons();
+        }
         DebugInstrumentation instrumentation = debugInstrumentation;
         if (instrumentation != null) {
             instrumentation.onMasterTickStarted();
@@ -845,12 +879,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 }
             }
             if (!stopFrameBlanked && newMode == Mode.VBlank) {
+                performanceNativeFrames++;
                 requestedScreenRefresh = true;
                 // The request is deliberately not acted on at the controller's shorter
                 // 69,905-tick cadence. At this PPU edge every visible dot of the current frame
                 // has already advanced, so one whole physical frame is either published or held.
                 if (!frameRenderSuppressed) {
+                    performanceRenderedFrames++;
                     display.frameIsReady();
+                } else {
+                    performanceSuppressedFrames++;
                 }
                 // This is emulated SGB transfer timing, not host presentation. In particular,
                 // it must remain available independently of a future presentation policy.
@@ -894,6 +932,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
+            if (!performanceBatchingEnabled) {
+                return runScalarPerformanceTicks(ticks);
+            }
             if (isNativeCgbPerformanceEpochTopology()) {
                 return runNativeCgbPerformanceTicks(ticks);
             }
@@ -909,6 +950,85 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
         }
         return frameEvents;
+    }
+
+    private long runScalarPerformanceTicks(long ticks) {
+        gpu.setPerformanceScanlineEnabled(true);
+        long frames = 0;
+        try {
+            for (long i = 0; i < ticks; i++) {
+                if (tick()) frames++;
+            }
+            return frames;
+        } finally {
+            sound.materializePendingPerformanceTicks();
+            gpu.setPerformanceScanlineEnabled(false);
+        }
+    }
+
+    /** Installs optional accounting between owner-thread work batches; null removes it. */
+    public void setPerformanceDiagnostics(PerformanceDiagnostics diagnostics) {
+        this.performanceDiagnostics = diagnostics;
+        cpu.setPerformanceDiagnostics(diagnostics);
+        gpu.setPerformanceDiagnostics(diagnostics);
+        sound.setPerformanceDiagnostics(diagnostics);
+    }
+
+    /**
+     * Selects the scalar scheduler while retaining the session's rendering and audio contract.
+     * Intended for differential tests and diagnostics, not a portable hardware-state setting.
+     */
+    public void setPerformanceBatchingEnabled(boolean enabled) {
+        performanceBatchingEnabled = enabled;
+    }
+
+    public long getPerformanceNativeFrames() { return performanceNativeFrames; }
+
+    public long getPerformanceRenderedFrames() { return performanceRenderedFrames; }
+
+    public long getPerformanceSuppressedFrames() { return performanceSuppressedFrames; }
+
+    private void recordPerformanceTicks(Execution execution, int ticks) {
+        if (performanceDiagnostics != null) {
+            performanceDiagnostics.recordTicks(execution, ticks);
+        }
+    }
+
+    private int limitPerformanceSpan(int requested, int available, Blocker blocker) {
+        if (performanceDiagnostics != null && available < requested) {
+            performanceDiagnostics.recordRejected(blocker.mask());
+        }
+        return Math.min(requested, available);
+    }
+
+    private void recordPerformanceScalarReasons() {
+        long reasons = 0;
+        if (!bootCompatibilityResolved) reasons |= Blocker.BOOT.mask();
+        if (debugInstrumentation != null || debugRetirementTrackingActive || debugHistoryReplay
+                || !performanceBatchingEnabled) reasons |= Blocker.OBSERVATION.mask();
+        if (warmResetRequested || speedSwitchTailTicks != 0) reasons |= Blocker.RESET.mask();
+        if (cpu.getState() == Cpu.State.HALTED || cpu.getState() == Cpu.State.STOPPED
+                || cpu.getState() == Cpu.State.SPEED_SWITCH || cpu.getState() == Cpu.State.LOCKED) {
+            reasons |= Blocker.CPU_STATE.mask();
+        }
+        if (interruptManager.isIme() && interruptManager.hasRawPendingEnabledInterrupt()) {
+            reasons |= Blocker.CPU_INTERRUPT.mask();
+        }
+        if (dma.isTransferInProgress()) reasons |= Blocker.DMA.mask();
+        if (gbc && !(cpu.getState() == Cpu.State.HALTED
+                ? hdma.isPerformanceSettledHaltClockStable()
+                : hdma.isPerformanceRunningEpochStable())) reasons |= Blocker.HDMA.mask();
+        // This method is entered only with accounting enabled. Probe the generic event
+        // contracts here because a topology's admission guard can reject before its limiters.
+        if (serialPort.performanceEventHorizon(1) <= 0) {
+            reasons |= Blocker.SERIAL.mask();
+            if (!serialPort.performanceEndpointClockCapabilityKnown()) {
+                reasons |= Blocker.SERIAL_UNBOUNDED_ENDPOINT.mask();
+            }
+        }
+        if (gbc && infraredPort.performanceEventHorizon(1) <= 0) reasons |= Blocker.INFRARED.mask();
+        if (joypad.performanceSettledHaltSpanLimit(1) <= 0) reasons |= Blocker.INPUT.mask();
+        performanceDiagnostics.recordRejected(reasons);
     }
 
     /**
@@ -970,6 +1090,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             throw new IllegalArgumentException("ticks must be non-negative");
         }
         Objects.requireNonNull(stop, "stop");
+        if (!performanceBatchingEnabled) {
+            return runTicksUntilStop(ticks, stop);
+        }
         if (executionMode == ExecutionMode.PERFORMANCE
                 && bootCompatibilityResolved
                 && debugInstrumentation == null
@@ -1002,8 +1125,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         long remaining = ticks;
         try {
             while (remaining > 0 && !stop.getAsBoolean()) {
+                int epoch = tryPerformanceEpochForCurrentTopology(remaining);
+                if (epoch > 0) {
+                    remaining -= epoch;
+                    continue;
+                }
                 if (cpu.getState() == Cpu.State.HALTED) {
-                    int committed = tryPerformanceSettledHaltSpan(remaining);
+                    int committed = isNativeCgbPerformanceEpochTopology()
+                            ? tryPerformanceSettledNativeCgbHaltSpan(remaining)
+                            : tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
                         remaining -= committed;
                         continue;
@@ -1025,6 +1155,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         }
                     }
                     continue;
+                }
+                if (epoch == 0) {
+                    long serialLease = serialPort.hasAttachedPerformanceEndpoint()
+                            ? tryPerformanceSerialDeniedScalarLease(remaining, stop,
+                                    isNativeCgbPerformanceEpochTopology()) : 0L;
+                    long serialLeaseTicks = serialLease & PERFORMANCE_SERIAL_DENIED_TICKS_MASK;
+                    if (serialLeaseTicks > 0) {
+                        remaining -= serialLeaseTicks;
+                        continue;
+                    }
                 }
                 if (stop.getAsBoolean()) {
                     break;
@@ -1050,12 +1190,31 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         try {
             while (remaining > 0 && !stop.getAsBoolean()
                     && isNativeCgbPerformanceEpochTopology()) {
-                int committed = tryPerformanceNativeCgbHdmaOwnedDataSpan(remaining);
+                if (performanceLcdcWriteReplayPollTicks > 0
+                        && consumePerformanceLcdcWriteReplayPollOnlyTick()) {
+                    tickPerformanceLcdcWriteReplayPollOnlyScalar();
+                    remaining--;
+                    continue;
+                }
+                int committed = tryPerformanceNativeCgbDmaOwnedDataSpan(remaining);
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
                 }
-                committed = tryPerformanceEpoch(remaining);
+                committed = tryPerformanceEpochOrDetailedReplay(remaining);
+                if (performanceLcdcWriteReplayPollTicks > 0) {
+                    if (stop.getAsBoolean()) {
+                        break;
+                    }
+                    if (consumePerformanceLcdcWriteReplayPollOnlyTick()) {
+                        // This is the first dot of the exact distance armed by the failed
+                        // strict preflight; consume it here so the wrapper's zero result does
+                        // not add an extra dot before the next loop guard.
+                        tickPerformanceLcdcWriteReplayPollOnlyScalar();
+                        remaining--;
+                        continue;
+                    }
+                }
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
@@ -1090,6 +1249,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         continue;
                     }
                 }
+                long serialLease = serialPort.hasAttachedPerformanceEndpoint()
+                        ? tryPerformanceSerialDeniedScalarLease(remaining, stop, true) : 0L;
+                long serialLeaseTicks = serialLease & PERFORMANCE_SERIAL_DENIED_TICKS_MASK;
+                if (serialLeaseTicks > 0) {
+                    remaining -= serialLeaseTicks;
+                    continue;
+                }
                 if (stop.getAsBoolean()) {
                     break;
                 }
@@ -1122,7 +1288,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         try {
             while (remaining > 0 && !stop.getAsBoolean()
                     && isNormalSpeedPerformanceEpochTopology()) {
-                int committed = tryNormalSpeedPerformanceEpoch(remaining);
+                int committed = tryPerformanceNativeCgbDmaOwnedDataSpan(remaining);
+                if (committed > 0) {
+                    remaining -= committed;
+                    continue;
+                }
+                committed = tryNormalSpeedPerformanceEpoch(remaining);
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
@@ -1138,6 +1309,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 int phaseSpan = tryPerformancePhaseOnlySpan(remaining, cpuSpanLimit);
                 if (phaseSpan > 0) {
                     remaining -= phaseSpan;
+                    continue;
+                }
+                long serialLease = serialPort.hasAttachedPerformanceEndpoint()
+                        ? tryPerformanceSerialDeniedScalarLease(remaining, stop, false) : 0L;
+                long serialLeaseTicks = serialLease & PERFORMANCE_SERIAL_DENIED_TICKS_MASK;
+                if (serialLeaseTicks > 0) {
+                    remaining -= serialLeaseTicks;
                     continue;
                 }
                 if (stop.getAsBoolean()) {
@@ -1172,8 +1350,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             long frameEvents = 0;
             long remaining = ticks;
             while (remaining > 0) {
+                int epoch = tryPerformanceEpochForCurrentTopology(remaining);
+                if (epoch > 0) {
+                    remaining -= epoch;
+                    continue;
+                }
                 if (cpu.getState() == Cpu.State.HALTED) {
-                    int committed = tryPerformanceSettledHaltSpan(remaining);
+                    int committed = isNativeCgbPerformanceEpochTopology()
+                            ? tryPerformanceSettledNativeCgbHaltSpan(remaining)
+                            : tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
                         remaining -= committed;
                         continue;
@@ -1195,6 +1380,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     }
                     continue;
                 }
+                if (epoch == 0) {
+                    long serialLease = serialPort.hasAttachedPerformanceEndpoint()
+                            ? tryPerformanceSerialDeniedScalarLease(remaining, null,
+                                    isNativeCgbPerformanceEpochTopology()) : 0L;
+                    long serialLeaseTicks = serialLease & PERFORMANCE_SERIAL_DENIED_TICKS_MASK;
+                    if (serialLeaseTicks > 0) {
+                        remaining -= serialLeaseTicks;
+                        frameEvents += serialLease >>> 32;
+                        continue;
+                    }
+                }
                 if (tick()) {
                     frameEvents++;
                 }
@@ -1212,6 +1408,92 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // first scalar tick, while a subsequent PERFORMANCE call can resume it safely.
             gpu.setPerformanceScanlineEnabled(false);
         }
+    }
+
+    /** Re-dispatches after a speed/compatibility transition within the current caller budget. */
+    private int tryPerformanceEpochForCurrentTopology(long remaining) {
+        if (isNativeCgbPerformanceEpochTopology()) {
+            int transfer = tryPerformanceNativeCgbDmaOwnedDataSpan(remaining);
+            return transfer > 0 ? transfer : tryPerformanceEpochOrDetailedReplay(remaining);
+        }
+        if (isNormalSpeedPerformanceEpochTopology()) {
+            int transfer = tryPerformanceNativeCgbDmaOwnedDataSpan(remaining);
+            return transfer > 0 ? transfer : tryNormalSpeedPerformanceEpoch(remaining);
+        }
+        return 0;
+    }
+
+    /**
+     * Runs only the canonical scalar tick while an attached serial endpoint denies even one
+     * exact master tick. The low 32 result bits are consumed ticks and the high 32 bits are
+     * frame callbacks; zero means no lease was entered. The identity check is a conservative
+     * applicability guard; the event horizon remains the sole denial authority. This lease
+     * deliberately does not use endpoint capability metadata and is bounded like the ordinary
+     * CPU epoch.
+     *
+     * <p>The native-CGB caller enters only after the ordinary DMA/epoch/HALT owners have
+     * returned no committed span. The failed epoch attempt normally expires
+     * {@link #performanceLcdcWriteReplayRetry}; the idempotent clear below preserves that
+     * denial-path expiration while leaving any pending CPU LCDC store intact for the first later
+     * positive proof.</p>
+     */
+    private long tryPerformanceSerialDeniedScalarLease(
+            long remaining, BooleanSupplier stop, boolean nativeCgbOwner) {
+        if (remaining <= 0
+                || !serialPort.hasAttachedPerformanceEndpoint()
+                || (nativeCgbOwner
+                        ? !isNativeCgbPerformanceEpochTopology()
+                        : !isPhysicalDmgPerformanceEpochTopology())) {
+            return 0L;
+        }
+        Cpu.State state = cpu.getState();
+        if (state == Cpu.State.HALTED || state == Cpu.State.STOPPED
+                || state == Cpu.State.SPEED_SWITCH || state == Cpu.State.LOCKED
+                || warmResetRequested || speedSwitchTailTicks != 0
+                || debugInstrumentation != null || debugRetirementTrackingActive
+                || debugHistoryReplay || serialPort.performanceEventHorizon(1) > 0
+                || stop != null && stop.getAsBoolean()) {
+            return 0L;
+        }
+        if (nativeCgbOwner) {
+            // Match the existing failed-LCDC-attempt expiration. A pending CPU store remains
+            // authoritative and is retried only after this denial lease exits.
+            performanceLcdcWriteReplayRetry = false;
+            performanceLcdcWriteReplayPollTicks = 0;
+        }
+        long limit = Math.min(remaining, (long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
+        long executed = 0;
+        long frameEvents = 0;
+        while (executed < limit
+                && (stop == null || !stop.getAsBoolean())
+                && serialPort.hasAttachedPerformanceEndpoint()
+                && (nativeCgbOwner
+                        ? isNativeCgbPerformanceEpochTopology()
+                        : isPhysicalDmgPerformanceEpochTopology())
+                && cpu.getState() != Cpu.State.HALTED
+                && cpu.getState() != Cpu.State.STOPPED
+                && cpu.getState() != Cpu.State.SPEED_SWITCH
+                && cpu.getState() != Cpu.State.LOCKED
+                && !warmResetRequested
+                && speedSwitchTailTicks == 0
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && !debugHistoryReplay
+                && serialPort.performanceEventHorizon(1) <= 0) {
+            if (nativeCgbOwner) {
+                nativeCgbScalarOwner = !warmResetRequested
+                        && debugInstrumentation == null
+                        && !debugRetirementTrackingActive
+                        && !debugHistoryReplay;
+            }
+            if (tick()) {
+                frameEvents++;
+            }
+            executed++;
+        }
+        // Both values are bounded by the 54-dot lease. Pack them into one primitive so the
+        // persistent denial path does not allocate a result object for every lease.
+        return executed == 0 ? 0L : (frameEvents << 32) | executed;
     }
 
     /**
@@ -1234,12 +1516,28 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         long remaining = ticks;
         try {
             while (remaining > 0 && isNativeCgbPerformanceEpochTopology()) {
-                int committed = tryPerformanceNativeCgbHdmaOwnedDataSpan(remaining);
+                if (performanceLcdcWriteReplayPollTicks > 0
+                        && consumePerformanceLcdcWriteReplayPollOnlyTick()) {
+                    if (tickPerformanceLcdcWriteReplayPollOnlyScalar()) {
+                        frameEvents++;
+                    }
+                    remaining--;
+                    continue;
+                }
+                int committed = tryPerformanceNativeCgbDmaOwnedDataSpan(remaining);
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
                 }
-                committed = tryPerformanceEpoch(remaining);
+                committed = tryPerformanceEpochOrDetailedReplay(remaining);
+                if (performanceLcdcWriteReplayPollTicks > 0
+                        && consumePerformanceLcdcWriteReplayPollOnlyTick()) {
+                    if (tickPerformanceLcdcWriteReplayPollOnlyScalar()) {
+                        frameEvents++;
+                    }
+                    remaining--;
+                    continue;
+                }
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
@@ -1269,6 +1567,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         remaining -= committed;
                         continue;
                     }
+                }
+                long serialLease = serialPort.hasAttachedPerformanceEndpoint()
+                        ? tryPerformanceSerialDeniedScalarLease(remaining, null, true) : 0L;
+                long serialLeaseTicks = serialLease & PERFORMANCE_SERIAL_DENIED_TICKS_MASK;
+                if (serialLeaseTicks > 0) {
+                    remaining -= serialLeaseTicks;
+                    frameEvents += serialLease >>> 32;
+                    continue;
                 }
                 nativeCgbScalarOwner = !warmResetRequested
                         && debugInstrumentation == null
@@ -1302,7 +1608,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         long remaining = ticks;
         try {
             while (remaining > 0 && isNormalSpeedPerformanceEpochTopology()) {
-                int committed = tryNormalSpeedPerformanceEpoch(remaining);
+                int committed = tryPerformanceNativeCgbDmaOwnedDataSpan(remaining);
+                if (committed > 0) {
+                    remaining -= committed;
+                    continue;
+                }
+                committed = tryNormalSpeedPerformanceEpoch(remaining);
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
@@ -1327,6 +1638,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     continue;
                 }
 
+                long serialLease = serialPort.hasAttachedPerformanceEndpoint()
+                        ? tryPerformanceSerialDeniedScalarLease(remaining, null, false) : 0L;
+                long serialLeaseTicks = serialLease & PERFORMANCE_SERIAL_DENIED_TICKS_MASK;
+                if (serialLeaseTicks > 0) {
+                    remaining -= serialLeaseTicks;
+                    frameEvents += serialLease >>> 32;
+                    continue;
+                }
                 if (tick()) {
                     frameEvents++;
                 }
@@ -1372,36 +1691,36 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean directRasterSpan = false;
         boolean steadyRasterSpan = false;
         if (span > 0) {
-            span = Math.min(span, timer.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, timer.performanceQuietSpanLimit(span), Blocker.TIMER);
             if (span <= 0) {
                 return 0;
             }
-            span = Math.min(span, serialPort.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, serialPort.performanceQuietSpanLimit(span), Blocker.SERIAL);
             if (span <= 0) {
                 return 0;
             }
-            span = Math.min(span, joypad.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, joypad.performanceQuietSpanLimit(span), Blocker.INPUT);
             if (span <= 0) {
                 return 0;
             }
-            span = Math.min(span, sound.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, sound.performanceQuietSpanLimit(span), Blocker.AUDIO);
             if (span <= 0) {
                 return 0;
             }
             if (cartridgeClocked) {
-                span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+                span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
                 if (span <= 0) {
                     return 0;
                 }
             }
             if (slotCartridgeClocked) {
-                span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+                span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
                 if (span <= 0) {
                     return 0;
                 }
             }
             if (gbc) {
-                span = Math.min(span, infraredPort.performanceQuietSpanLimit(span));
+                span = limitPerformanceSpan(span, infraredPort.performanceQuietSpanLimit(span), Blocker.INFRARED);
                 if (span <= 0) {
                     return 0;
                 }
@@ -1441,7 +1760,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             } else {
                 span = 0;
             }
-            span = Math.min(span, statRegister.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, statRegister.performanceQuietSpanLimit(span), Blocker.STAT);
         }
         if (remaining < span) {
             span = (int) remaining;
@@ -1456,8 +1775,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         : cpu.performanceNoPendingPpuReadPhase())
                 || dma.isTransferInProgress()
                 || dma.requiresClockTick(cpu.getState() == Cpu.State.HALTED)
-                || gbc && (hdma.hasActiveOrPendingTransfer()
-                        || !hdma.isPerformanceInactiveRequestClockStable())
+                || gbc && !hdma.isPerformanceRunningEpochStable()
                 // This is intentionally the one post-preflight volatile Joypad check.
                 || !joypad.isPerformanceQuietSpanStillEligible()) {
             return 0;
@@ -1466,6 +1784,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 entryStatReadPhaseFlags);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
+        recordPerformanceTicks(Execution.PHASE, span);
         return span;
     }
 
@@ -1483,19 +1802,21 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return gbc && speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1;
     }
 
-    /** Exact measured epoch row: ordinary CGB only (CGB0 compatibility remains scalar). */
+    /** Registered CGB and CGB0 compatibility rows with their own timing profiles. */
     private boolean isCgbCompatibilityPerformanceEpochTopology() {
-        return hardwareProfile == HardwareProfileRegistry.CGB
+        return (hardwareProfile == HardwareProfileRegistry.CGB
+                || hardwareProfile == HardwareProfileRegistry.CGB0)
                 && isCgbCompatibilityPerformanceTopology();
     }
 
-    /** Exact native-color fixed-x1 epoch row: ordinary CGB only. */
+    /** Registered CGB and CGB0 native-color fixed-x1 epoch rows. */
     private boolean isNativeCgbNormalSpeedPerformanceEpochTopology() {
-        return hardwareProfile == HardwareProfileRegistry.CGB
+        return (hardwareProfile == HardwareProfileRegistry.CGB
+                || hardwareProfile == HardwareProfileRegistry.CGB0)
                 && gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1;
     }
 
-    /** Ordinary-CGB fixed-x1 CPU epochs retain the complete CGB peripheral plane. */
+    /** CGB fixed-x1 CPU epochs retain the complete revision-specific peripheral plane. */
     private boolean isCgbNormalSpeedPerformanceEpochTopology() {
         return isCgbCompatibilityPerformanceEpochTopology()
                 || isNativeCgbNormalSpeedPerformanceEpochTopology();
@@ -1524,7 +1845,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 || speedSwitchTailTicks != 0) {
             return false;
         }
-        if (statRegister.performanceSettledHaltSpanLimit(1) == 0) {
+        if (statRegister.hasPendingModeRegisterCapture()
+                || statRegister.performanceSettledHaltSpanLimit(1) == 0) {
             return true;
         }
         return !cpu.performanceEpochEntryEligible();
@@ -1542,23 +1864,24 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !debugHistoryReplay
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
-                && gpu.isLcdEnabled()
+                && (gpu.isLcdEnabled() || lcdDisabled)
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(false)
                 && hdma.isPerformanceNativeCgbRunningEpochStable()
-                && serialPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS)
-                && infraredPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
+                && serialPort.performanceEventHorizon(1) > 0
+                && infraredPort.performanceEventHorizon(1) > 0;
     }
 
     /**
-     * Advances the remaining source-read interior of one already-owned native-CGB HBlank burst.
+     * Advances the source-read interior of an already-owned native-CGB HBlank or general DMA burst.
      * HDMA tick 32 remains on the scalar scheduler so its atomic VRAM publication, request reset,
      * and held-opcode release keep their established whole-machine ordering.
      */
-    private int tryPerformanceNativeCgbHdmaOwnedDataSpan(long remaining) {
+    private int tryPerformanceNativeCgbDmaOwnedDataSpan(long remaining) {
         if (remaining <= 0
-                || !hdma.isPerformanceNativeCgbOwnedHblankDataStructurallyStable()
-                || !isNativeCgbPerformanceEpochTopology()
+                || !hdma.isPerformanceNativeCgbOwnedDataStructurallyStable()
+                || !(isNativeCgbPerformanceEpochTopology()
+                        || isNativeCgbNormalSpeedPerformanceEpochTopology())
                 || warmResetRequested
                 || speedSwitchTailTicks != 0
                 || debugHistoryReplay
@@ -1571,44 +1894,46 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         PerformanceRomAccess romAccess =
-                hdma.requiresPerformanceNativeCgbOwnedHblankRomAccess()
+                hdma.requiresPerformanceNativeCgbOwnedRomAccess()
                         ? gameGenie.acquirePerformanceRomAccess()
                         : null;
         int requested = (int) Math.min((long) Integer.MAX_VALUE, remaining);
-        int span = hdma.performanceNativeCgbOwnedHblankDataSpanLimit(requested, romAccess);
-        if (span <= 0
-                || cartridgeClocked && cartridge.performanceQuietSpanLimit(span) < span
-                || slotCartridgeClocked && slotCartridge.performanceQuietSpanLimit(span) < span
-                || timer.performanceEpochSpanLimit(span) < span
-                || sound.performanceQuietSpanLimit(span) < span
-                || joypad.performanceSettledHaltSpanLimit(span) < span
-                || !serialPort.performanceEpochIdle(span)
-                || !infraredPort.performanceEpochIdle(span)
-                || gpu.performanceNativeCgbOwnedHblankDataSpanLimit(span) < span
-                || statRegister.performanceSettledHaltSpanLimit(span) < span) {
-            return 0;
-        }
+        int span = hdma.performanceNativeCgbOwnedDataSpanLimit(requested, romAccess);
+        if (cartridgeClocked) span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        if (slotCartridgeClocked) span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+        span = Math.min(span, speedMode.getSpeedMode() == 2
+                ? timer.performanceEpochSpanLimit(span)
+                : timer.performanceNormalSpeedEpochSpanLimit(span, true));
+        span = Math.min(span, sound.performanceQuietSpanLimit(span));
+        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        span = Math.min(span, serialPort.performanceEventHorizon(span));
+        span = Math.min(span, infraredPort.performanceEventHorizon(span));
+        span = Math.min(span, gpu.performanceNativeCgbOwnedDataSpanLimit(span));
+        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        if (!gpu.isLcdEnabled()) span = Math.min(span, performanceLcdOffEpochSpanLimit(span));
+        if (span <= 0) return 0;
 
         // Input/reset publication is the only host-side mutation admitted by this scheduler.
         // Keep those volatile/state guards adjacent to the trusted packet commit.
         if (warmResetRequested
                 || speedSwitchTailTicks != 0
                 || !cpu.performanceHdmaOwnedBlockCpuFrozenEligible()
-                || !hdma.isPerformanceNativeCgbOwnedHblankDataStable(romAccess)
-                || hdma.performanceNativeCgbOwnedHblankDataSpanLimit(
+                || !hdma.isPerformanceNativeCgbOwnedDataStable(romAccess)
+                || hdma.performanceNativeCgbOwnedDataSpanLimit(
                         span, romAccess) != span
                 || dma.isTransferInProgress()
                 || dma.requiresClockTick(false)
-                || !serialPort.performanceEpochIdle(span)
-                || !infraredPort.performanceEpochIdle(span)
+                || serialPort.performanceEventHorizon(span) < span
+                || infraredPort.performanceEventHorizon(span) < span
                 || !joypad.isPerformanceQuietSpanStillEligible()) {
             return 0;
         }
 
-        tickPerformanceNativeCgbHdmaOwnedDataSpan(
+        tickPerformanceNativeCgbDmaOwnedDataSpan(
                 span, cpu.getStatReadPhaseFlags(), romAccess);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
+        recordPerformanceTicks(Execution.TRANSFER, span);
         performanceBulkMaxTicks = Math.max(performanceBulkMaxTicks, span);
         performanceHdmaOwnedSpanCount++;
         performanceHdmaOwnedTicks += span;
@@ -1616,7 +1941,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /** Commits one preflighted no-CPU/no-OAM-DMA HDMA source-read packet. */
-    private void tickPerformanceNativeCgbHdmaOwnedDataSpan(
+    private void tickPerformanceNativeCgbDmaOwnedDataSpan(
             int ticks, int entryStatReadPhaseFlags, PerformanceRomAccess romAccess) {
         if (cartridgeClocked) {
             cartridge.tickPerformanceQuietSpanTrusted(ticks);
@@ -1625,55 +1950,465 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
         }
         statRegister.capturePerformanceNoCpuReadPhaseTrusted(entryStatReadPhaseFlags);
-        timer.tickPerformanceEpochTrusted(ticks);
+        if (speedMode.getSpeedMode() == 2) timer.tickPerformanceEpochTrusted(ticks);
+        else timer.tickPerformanceNormalSpeedEpochTrusted(ticks);
         sound.tickFrameSequencer(false);
         assert !sound.hasPendingFrameSequencerClock()
                 : "frame sequencer edge crossed an HDMA-owned PERFORMANCE span";
         sound.commitFrameSequencerClock();
         sound.tickPerformanceQuietSpan(ticks);
-        serialPort.tickPerformanceEpochIdle(ticks);
-        infraredPort.tickPerformanceEpochIdle(ticks);
+        serialPort.tickPerformanceEventSpanTrusted(ticks);
+        infraredPort.tickPerformanceEventSpanTrusted(ticks);
         joypad.tickPerformanceQuietSpanTrusted(ticks);
 
         // The source is side-effect-free WRAM or immutable leased ROM, OAM DMA is inactive, and
-        // the direct line is already in HBlank, so the ordered source reads commute with these
+        // the GPU is in settled HBlank or its LCD is off, so the ordered source reads commute with these
         // independently preflighted peripheral advances.
-        hdma.advancePerformanceNativeCgbOwnedHblankDataTrusted(ticks, romAccess);
-        gpu.advancePerformanceNativeCgbOwnedHblankDataSpanTrusted(ticks);
+        hdma.advancePerformanceNativeCgbOwnedDataTrusted(ticks, romAccess);
+        gpu.advancePerformanceNativeCgbOwnedDataSpanTrusted(ticks);
+        if (!gpu.isLcdEnabled()) lcdOffTicks += ticks;
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
                 gpu.isStatModeLatchRephasedBySpeedSwitch());
         cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
     }
 
+    private transient boolean performanceLcdcWriteReplayRetry;
+
+    /** Remaining scalar dots before the next settled PlayerInputHub poll. */
+    private transient int performanceLcdcWriteReplayPollTicks;
+
+    /**
+     * The retry affinity may wait only for the already-proven input poll seam. Every other
+     * guard is rechecked before each scalar dot; the following owner still repeats its complete
+     * LCDC/PPU/STAT/peripheral proof. A decoded FF40 store remains on the canonical scalar
+     * scheduler, so the hint never changes its write ordering or grants a new bus permission.
+     */
+    private boolean consumePerformanceLcdcWriteReplayPollOnlyTick() {
+        if (!performanceLcdcWriteReplayRetry || performanceLcdcWriteReplayPollTicks <= 0) {
+            if (!performanceLcdcWriteReplayRetry) {
+                performanceLcdcWriteReplayPollTicks = 0;
+            }
+            return false;
+        }
+        if (!isPerformanceLcdcWriteReplayPollSeamStable()) {
+            performanceLcdcWriteReplayRetry = false;
+            performanceLcdcWriteReplayPollTicks = 0;
+            return false;
+        }
+        performanceLcdcWriteReplayPollTicks--;
+        return true;
+    }
+
+    /** Uses the same one-shot native scalar-owner token as the ordinary fallback tick. */
+    private boolean tickPerformanceLcdcWriteReplayPollOnlyScalar() {
+        nativeCgbScalarOwner = !warmResetRequested
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && !debugHistoryReplay;
+        boolean frame = tick();
+        finishPerformanceLcdcWriteReplayPollOnlyTick();
+        return frame;
+    }
+
+    private void finishPerformanceLcdcWriteReplayPollOnlyTick() {
+        if (!performanceLcdcWriteReplayRetry || !isPerformanceLcdcWriteReplayPollSeamStable()) {
+            performanceLcdcWriteReplayRetry = false;
+            performanceLcdcWriteReplayPollTicks = 0;
+        }
+    }
+
+    /** Cheap lifecycle/reset/debug/topology invalidation for the bounded scheduling affinity. */
+    private boolean isPerformanceLcdcWriteReplayPollSeamStable() {
+        Cpu.State state = cpu.getState();
+        if (state == Cpu.State.HALTED || state == Cpu.State.STOPPED
+                || state == Cpu.State.SPEED_SWITCH || state == Cpu.State.LOCKED) {
+            return false;
+        }
+        return isNativeCgbPerformanceEpochTopology()
+                && !warmResetRequested
+                && speedSwitchTailTicks == 0
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && !debugHistoryReplay
+                && !lcdDisabled
+                && gpu.isLcdEnabled()
+                && !hdma.hasActiveOrPendingTransfer()
+                && hdma.isPerformanceInactiveRequestClockStable()
+                && !dma.isTransferInProgress()
+                && !dma.requiresClockTick(false)
+                && joypad.isPerformanceQuietSpanStillEligible();
+    }
+
+    private int tryPerformanceEpochOrDetailedReplay(long remaining) {
+        boolean retryHint = performanceLcdcWriteReplayRetry;
+        boolean pendingLcdcStore = cpu.hasPendingLcdcWriteReplayStore();
+        if (retryHint || pendingLcdcStore) {
+            performanceLcdcWriteReplayRetry = false;
+            performanceLcdcWriteReplayPollTicks = 0;
+            int lcdcPacket = tryPerformanceLcdcWriteReplayEpoch(remaining);
+            if (lcdcPacket > 0) return lcdcPacket;
+            if (retryHint && !pendingLcdcStore && performanceLcdcWriteReplayPollTicks > 0) {
+                // Do not enter the ordinary or detailed owner during the bounded input seam.
+                // The native scheduler consumes these dots one at a time, including a decoded
+                // FF40 store if its canonical scalar boundary arrives, then makes a fresh
+                // strict attempt at the poll boundary.
+                performanceLcdcWriteReplayRetry = true;
+                return 0;
+            }
+            // A fresh pending FF40 store, or any other rejected attempt, may not leave a
+            // deadline behind while the ordinary scheduler takes ownership.
+            performanceLcdcWriteReplayPollTicks = 0;
+        }
+        int committed = tryPerformanceEpoch(remaining);
+        if (committed > 0) return committed;
+        if (committed == PERFORMANCE_EPOCH_NEEDS_PPU_REPLAY || dma.isTransferInProgress()) {
+            // The detailed owner only supplies a missing PPU/DMA plane. Retrying it after
+            // CPU, timer, STAT or endpoint rejection repeats equal or stricter proofs.
+            return tryPerformanceNativeCgbDetailedPpuEpoch(remaining);
+        }
+        return committed;
+    }
+
+    private transient long performanceLcdcWriteReplayQuietTicks;
+    public long getPerformanceLcdcWriteReplayQuietTicks() { return performanceLcdcWriteReplayQuietTicks; }
+    private transient long performanceLcdcWriteReplayTicks;
+    private transient long performanceLcdcWriteReplayWrites;
+    public long getPerformanceLcdcWriteReplayTicks() { return performanceLcdcWriteReplayTicks; }
+    public long getPerformanceLcdcWriteReplayWrites() { return performanceLcdcWriteReplayWrites; }
+
+    /**
+     * Owns a bounded IME-off ROM/HRAM packet and replays LCDC writes before their exact GPU
+     * dot. All STAT source and phase planes remain inactive, both DMAs remain inactive, and
+     * bit7 remains on. Existing quiet proofs may commit only gaps between queued writes.
+     */
+    private int tryPerformanceLcdcWriteReplayEpoch(long remaining) {
+        if (remaining <= 0 || !isNativeCgbPerformanceEpochTopology()
+                || !cpu.performanceLcdcWriteReplayEntryEligible()
+                || cpu.hasPendingPeripheralSample() || warmResetRequested
+                || speedSwitchTailTicks != 0 || debugInstrumentation != null
+                || debugRetirementTrackingActive || debugHistoryReplay
+                || lcdDisabled || !gpu.isLcdEnabled()
+                || hdma.hasActiveOrPendingTransfer()
+                || !hdma.isPerformanceInactiveRequestClockStable()
+                || dma.isTransferInProgress() || dma.requiresClockTick(false)) return 0;
+        int span = (int) Math.min(remaining, (long) Cpu.PERFORMANCE_STRICT_PPU_EPOCH_MAX_TICKS);
+        span = Math.min(span, gpu.performanceNativeCgbLcdcWriteReplaySpanLimit(span));
+        span = Math.min(span, statRegister.performanceNativeCgbLcdcWriteReplaySpanLimit(span));
+        if (span < 8) return 0;
+        span = Math.min(span, timer.performanceStrictPpuEpochSpanLimit(span));
+        span = Math.min(span, sound.performanceFencedEpochSpanLimit(span));
+        span = Math.min(span, serialPort.performanceEventHorizon(span));
+        span = Math.min(span, infraredPort.performanceEventHorizon(span));
+        int spanBeforeInput = span;
+        int inputSpan = joypad.performanceSettledHaltSpanLimit(span);
+        span = Math.min(span, inputSpan);
+        if (cartridgeClocked) span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        if (slotCartridgeClocked) span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+        if (span < 8) {
+            if (span == inputSpan && spanBeforeInput >= 8 && spanBeforeInput > inputSpan) {
+                int inputPollDistance = joypad.performanceLcdcWriteReplayPollDistance(spanBeforeInput);
+                if (inputPollDistance == inputSpan + 1
+                        && performanceLcdcWriteReplayPostInputHorizonAllows(inputSpan)
+                        && !warmResetRequested
+                        && joypad.isPerformanceQuietSpanStillEligible()) {
+                    performanceLcdcWriteReplayPollTicks = inputPollDistance;
+                }
+            }
+            return 0;
+        }
+        if (warmResetRequested || !joypad.isPerformanceQuietSpanStillEligible()) return 0;
+        int elapsed = cpu.runNativeCgbLcdcWriteReplayEpoch(span);
+        if (elapsed <= 0) { cpu.finishPerformanceLcdcWriteReplay(); return 0; }
+        try {
+            if (cartridgeClocked) cartridge.tickPerformanceQuietSpanTrusted(elapsed);
+            if (slotCartridgeClocked) slotCartridge.tickPerformanceQuietSpanTrusted(elapsed);
+            timer.tickPerformanceEpochTrusted(elapsed);
+            sound.tickFrameSequencer(false);
+            assert !sound.hasPendingFrameSequencerClock();
+            sound.commitFrameSequencerClock();
+            sound.tickPerformanceQuietSpan(elapsed);
+            serialPort.tickPerformanceEventSpanTrusted(elapsed);
+            infraredPort.tickPerformanceEventSpanTrusted(elapsed);
+            joypad.tickPerformanceQuietSpanTrusted(elapsed);
+            hdma.advancePerformanceInactiveRequestClockTrusted(elapsed);
+            statRegister.capturePerformanceNoCpuReadPhaseTrusted(0);
+            int dot = 0;
+            int replayed = 0, quiet = 0, packetWrites = 0;
+            while (dot < elapsed) {
+                int writes = cpu.replayPerformanceLcdcWritesAtDot(dot);
+                performanceLcdcWriteReplayWrites += writes;
+                packetWrites += writes;
+                Mode mode = gpu.isPerformanceSteadyCursorActive()
+                        ? gpu.tickPerformanceSteady() : gpu.tick();
+                statRegister.tickNativeCgbPerformancePostGpu();
+                if (mode != null) {
+                    assert mode != Mode.VBlank && mode != Mode.OamSearch;
+                    hdma.onGpuUpdate(mode);
+                }
+                hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                        gpu.isStatModeLatchRephasedBySpeedSwitch());
+                cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+                dot++;
+                replayed++;
+                // One proof attempt after the first exact dot in each write interval. A
+                // failed or partially admitted remainder stays scalar until the next write.
+                if (writes == 0 && dot != 1) continue;
+                int gap = cpu.nextPerformanceLcdcWriteReplayDot(elapsed) - dot;
+                if (gap <= 0) continue;
+                int kind = 0;
+                int prefix = gpu.performanceEpochSpanLimit(gap);
+                if (prefix <= 0) {
+                    prefix = gpu.performanceSteadyQuietSpanLimit();
+                    if (prefix > 0) prefix = Math.min(gap, prefix);
+                }
+                if (prefix <= 0) {
+                    prefix = gpu.performanceEpochMode2BulkSpanLimit(gap);
+                    kind = 1;
+                }
+                if (prefix <= 0) continue;
+                prefix = Math.min(prefix, statRegister.performanceSettledHaltSpanLimit(prefix));
+                if (prefix <= 0) continue;
+                if (kind == 1) {
+                    gpu.advancePerformanceMode2QuietSpanTrusted(prefix);
+                } else {
+                    gpu.advancePerformanceEpochQuietSpanTrusted(prefix,
+                            gpu.isPerformanceScanlineCursorActive(),
+                            gpu.isPerformanceSteadyCursorActive());
+                }
+                statRegister.tickPerformanceQuietSpanTrusted(prefix);
+                hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                        gpu.isStatModeLatchRephasedBySpeedSwitch());
+                cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+                dot += prefix;
+                quiet += prefix;
+            }
+            performanceLcdcWriteReplayQuietTicks += quiet;
+            if (performanceDiagnostics != null) {
+                performanceDiagnostics.recordReplay(Subsystem.PPU_REPLAY, replayed);
+                performanceDiagnostics.recordReplay(Subsystem.STAT_REPLAY, replayed);
+                performanceDiagnostics.recordReplay(Subsystem.PPU_QUIET_AFTER_REPLAY, quiet);
+            }
+            performanceEpochCount++;
+            performanceEpochTicks += elapsed;
+            performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
+            performanceLcdcWriteReplayTicks += elapsed;
+            // A recent write selects one more fully re-proved packet even if its next
+            // opcode is not decoded yet. A rejection or a packet without writes expires
+            // the hint; it grants no bus access and retains no peripheral-state proof.
+            performanceLcdcWriteReplayPollTicks = 0;
+            performanceLcdcWriteReplayRetry = packetWrites > 0;
+            recordPerformanceTicks(Execution.EPOCH, elapsed);
+            return elapsed;
+        } finally { cpu.finishPerformanceLcdcWriteReplay(); }
+    }
+
+    private boolean performanceLcdcWriteReplayPostInputHorizonAllows(int inputSpan) {
+        int probe = inputSpan + 1;
+        if (cartridgeClocked && cartridge.performanceQuietSpanLimit(probe) <= inputSpan) {
+            return false;
+        }
+        return !slotCartridgeClocked
+                || slotCartridge.performanceQuietSpanLimit(probe) > inputSpan;
+    }
+
+    /**
+     * Keeps independent clocks batched while DMA and the PPU retain their exact dot order.
+     * The CPU lease admits only ROM/HRAM bus cycles with IME off, so neither replayed DMA
+     * samples nor PPU/STAT events can be observed by those instructions. All other accesses
+     * and lifecycle changes stop before their bus boundary and return to the scalar owner.
+     */
+    private int tryPerformanceNativeCgbDetailedPpuEpoch(long remaining) {
+        if (remaining <= 0 || !isNativeCgbPerformanceEpochTopology()
+                || interruptManager.isIme() || !cpu.performanceEpochEntryEligible()
+                || cpu.hasPendingPeripheralSample()
+                || warmResetRequested || speedSwitchTailTicks != 0
+                || debugInstrumentation != null || debugRetirementTrackingActive
+                || debugHistoryReplay || !gpu.isLcdEnabled() || lcdDisabled
+                || hdma.hasActiveOrPendingTransfer()
+                || !hdma.isPerformanceInactiveRequestClockStable()) {
+            return 0;
+        }
+        int span = (int) Math.min(remaining, (long) Cpu.PERFORMANCE_STRICT_PPU_EPOCH_MAX_TICKS);
+        boolean replayDma = dma.isTransferInProgress();
+        if (replayDma) {
+            span = dma.performanceNativeCgbWramReplaySpanLimit(span);
+        } else if (dma.requiresClockTick(false)) {
+            return 0;
+        }
+        span = Math.min(span, gpu.performanceNativeCgbDetailedReplaySpanLimit(span));
+        // Keep real publication/acceptance edges interleaved. The existing native checkpoint
+        // proof additionally admits disabled/LYC-only windows with no CPU-observable edge;
+        // the strict ROM/HRAM runner fences STAT/LY/IF reads and every lifecycle instruction.
+        int statSpan = statRegister.performanceSettledHaltSpanLimit(span);
+        boolean statReplay = statSpan == 0;
+        span = Math.min(span, statReplay
+                ? statRegister.performanceNativeCgbCheckpointReplaySpanLimit(span) : statSpan);
+        if (span < PERFORMANCE_DETAILED_REPLAY_MIN_SPAN) return 0;
+        span = Math.min(span, timer.performanceStrictPpuEpochSpanLimit(span));
+        span = Math.min(span, sound.performanceFencedEpochSpanLimit(span));
+        span = Math.min(span, serialPort.performanceEventHorizon(span));
+        span = Math.min(span, infraredPort.performanceEventHorizon(span));
+        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        if (cartridgeClocked) span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        if (slotCartridgeClocked) span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+        if (span < PERFORMANCE_DETAILED_REPLAY_MIN_SPAN
+                || warmResetRequested || !joypad.isPerformanceQuietSpanStillEligible()) {
+            return 0;
+        }
+        boolean statAggregate = statReplay
+                && statRegister.performanceNativeCgbCheckpointAggregateSpanLimit(span) >= span;
+        // Newly admitted nonaggregate checkpoints retain every GPU/DMA/STAT dot. Only the
+        // existing aggregate proof may accompany an independently proven quiet PPU plane.
+        boolean quietPpu = (!statReplay || statAggregate) && replayDma
+                && gpu.performanceNativeCgbOamReplayQuietSpanLimit(span) >= span;
+        // OAM release can leave an exact no-object cursor active for the rest of mode 3.
+        // Retain the strict ROM/HRAM-only CPU lease while advancing that already-proved
+        // cursor; neither ordinary CPU bus rights nor line-snapshot rendering are widened.
+        boolean quietSteadyPpu = (!statReplay || statAggregate) && !replayDma
+                && gpu.performanceSteadyQuietSpanLimit() >= span;
+        int entryStatReadPhase = cpu.getStatReadPhaseFlags();
+        int elapsed = cpu.runNativeCgbDetailedPpuPerformanceEpoch(span);
+        if (elapsed <= 0) return 0;
+
+        // The lease contains no external writes, so these advances cannot move a CPU bus
+        // effect past a DMA copy. Sample/overflow/input/endpoint callbacks remain outside it.
+        if (cartridgeClocked) cartridge.tickPerformanceQuietSpanTrusted(elapsed);
+        if (slotCartridgeClocked) slotCartridge.tickPerformanceQuietSpanTrusted(elapsed);
+        timer.tickPerformanceEpochTrusted(elapsed);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock();
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(elapsed);
+        serialPort.tickPerformanceEventSpanTrusted(elapsed);
+        infraredPort.tickPerformanceEventSpanTrusted(elapsed);
+        joypad.tickPerformanceQuietSpanTrusted(elapsed);
+        hdma.advancePerformanceInactiveRequestClockTrusted(elapsed);
+        statRegister.capturePerformanceNoCpuReadPhaseTrusted(entryStatReadPhase);
+        if (replayDma) dma.setCpuInterruptStackWrite(false);
+        int recoveredPpuTicks = 0;
+        if (quietPpu) {
+            dma.advancePerformanceNativeCgbWramCopySpanTrusted(elapsed);
+            gpu.advancePerformanceNativeCgbOamReplayQuietSpanTrusted(elapsed);
+            if (statAggregate) {
+                statRegister.advancePerformanceNativeCgbCheckpointAggregateSpanTrusted(elapsed);
+            } else {
+                statRegister.tickPerformanceQuietSpanTrusted(elapsed);
+            }
+        } else if (quietSteadyPpu) {
+            gpu.advancePerformanceEpochQuietSpanTrusted(elapsed, false, true);
+            if (statAggregate) {
+                statRegister.advancePerformanceNativeCgbCheckpointAggregateSpanTrusted(elapsed);
+            } else {
+                statRegister.tickPerformanceQuietSpanTrusted(elapsed);
+            }
+        } else {
+            if (replayDma) dma.tickPerformanceNativeCgbWramReplayTrusted();
+            Mode mode = gpu.isPerformanceSteadyCursorActive()
+                    ? gpu.tickPerformanceSteady() : gpu.tick();
+            assert mode == null : "detailed PPU lease crossed a mode boundary";
+            statRegister.tickNativeCgbPerformancePostGpu();
+            int suffix = elapsed - 1;
+            // A native LCDC capture can mature on the first exact dot. The strict CPU packet
+            // contains no PPU writes, so re-prove the existing quiet plane once at that point
+            // instead of replaying an already-inert remainder. Mode/STAT handoffs, pending
+            // output and unresolved latches still reject through their ordinary proofs.
+            PerformanceEpochPpuPlan quietSuffixPlan = null;
+            if (!replayDma && suffix > 0) {
+                if (gpu.performanceEpochSpanLimit(suffix) >= suffix) {
+                    quietSuffixPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
+                } else if (gpu.performanceEpochMode2BulkSpanLimit(suffix) >= suffix) {
+                    quietSuffixPlan = PerformanceEpochPpuPlan.MODE2_BULK;
+                }
+            }
+            if (quietSuffixPlan != null
+                    && statRegister.performanceSettledHaltSpanLimit(suffix) >= suffix) {
+                if (quietSuffixPlan == PerformanceEpochPpuPlan.MODE2_BULK) {
+                    gpu.advancePerformanceMode2QuietSpanTrusted(suffix);
+                } else {
+                    gpu.advancePerformanceEpochQuietSpanTrusted(suffix,
+                            gpu.isPerformanceScanlineCursorActive(),
+                            gpu.isPerformanceSteadyCursorActive());
+                }
+                statRegister.tickPerformanceQuietSpanTrusted(suffix);
+                recoveredPpuTicks = suffix;
+            } else {
+                for (int i = 1; i < elapsed; i++) {
+                    if (replayDma) dma.tickPerformanceNativeCgbWramReplayTrusted();
+                    mode = gpu.isPerformanceSteadyCursorActive()
+                            ? gpu.tickPerformanceSteady() : gpu.tick();
+                    assert mode == null : "detailed PPU lease crossed a mode boundary";
+                    statRegister.tickNativeCgbPerformancePostGpu();
+                }
+            }
+        }
+        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                gpu.isStatModeLatchRephasedBySpeedSwitch());
+        cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+        performanceEpochCount++;
+        performanceEpochTicks += elapsed;
+        performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
+        recordPerformanceTicks(Execution.EPOCH, elapsed);
+        if (performanceDiagnostics != null) {
+            if (replayDma) performanceDiagnostics.recordReplay(
+                    quietPpu ? Subsystem.DMA_BATCHED_COPY : Subsystem.DMA_REPLAY, elapsed);
+            if (quietPpu) {
+                performanceDiagnostics.recordReplay(Subsystem.PPU_QUIET_DURING_DMA, elapsed);
+            } else if (quietSteadyPpu) {
+                performanceDiagnostics.recordReplay(Subsystem.PPU_QUIET_STEADY, elapsed);
+            } else {
+                performanceDiagnostics.recordReplay(Subsystem.PPU_REPLAY, elapsed - recoveredPpuTicks);
+                performanceDiagnostics.recordReplay(Subsystem.STAT_REPLAY, elapsed - recoveredPpuTicks);
+                if (recoveredPpuTicks > 0) performanceDiagnostics.recordReplay(
+                        Subsystem.PPU_QUIET_AFTER_REPLAY, recoveredPpuTicks);
+            }
+        }
+        return elapsed;
+    }
+
     /**
      * Attempts one bounded native-CGB epoch.
      *
-     * @return committed ticks when positive, zero for an ordinary rejection, or the negative
-     *         uncommitted scalar deadline when only STAT rejected an otherwise valid plan
+     * @return committed ticks when positive, zero for an ordinary rejection, the internal PPU
+     *         replay marker for a missing raster plane, or the negative uncommitted scalar
+     *         deadline when only STAT rejected an otherwise valid plan
      */
     private int tryPerformanceEpoch(long remaining) {
         if (remaining <= 0 || !cpu.performanceEpochEntryEligible()
                 || !canStartPerformanceEpoch()) {
             return 0;
         }
+        if (statRegister.hasPendingModeRegisterCapture()) {
+            // Native x2 mode-register captures mature within a few dots. Repeated LYC/STAT
+            // writes otherwise spend more on tiny epoch setup than canonical execution.
+            // Reuse the scalar lease until the copies settle; each dot still delivers every
+            // CPU/peripheral event, and the outer loop retains topology/reset/stop checks.
+            return -(int) Math.min(remaining, (long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
+        }
         boolean armedHblankWait = hdma.isPerformanceArmedHblankWaitStable();
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
         if (cartridgeClocked) {
-            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         if (slotCartridgeClocked) {
-            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
-        span = Math.min(span, timer.performanceEpochSpanLimit(span));
+        span = limitPerformanceSpan(span, timer.performanceEpochSpanLimit(span), Blocker.TIMER);
+        span = limitPerformanceSpan(span, serialPort.performanceEventHorizon(span), Blocker.SERIAL);
+        if (gbc) span = limitPerformanceSpan(span, infraredPort.performanceEventHorizon(span), Blocker.INFRARED);
         span = Math.min(span, armedHblankWait
                 ? sound.performanceFencedEpochSpanLimit(span)
                 : sound.performanceEpochSpanLimit(span));
-        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        span = limitPerformanceSpan(span, joypad.performanceSettledHaltSpanLimit(span), Blocker.INPUT);
 
+        if (span <= 0) return 0;
         PerformanceEpochPpuPlan ppuPlan;
         int rasterSpan = gpu.performanceEpochSpanLimit(span);
-        if (rasterSpan > 0) {
+        if (!gpu.isLcdEnabled()) {
+            span = Math.min(span, performanceLcdOffEpochSpanLimit(span));
+            span = Math.min(span, gpu.performanceNativeCgbDoubleSpeedLcdOffSpanLimit(span));
+            ppuPlan = PerformanceEpochPpuPlan.LCD_OFF;
+        } else if (rasterSpan > 0) {
             span = Math.min(span, rasterSpan);
             ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
         } else {
@@ -1687,7 +2422,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
         }
         if (span <= 0) {
-            return 0;
+            return PERFORMANCE_EPOCH_NEEDS_PPU_REPLAY;
         }
         int statSpan = statRegister.performanceSettledHaltSpanLimit(span);
         boolean statReplay = false;
@@ -1716,6 +2451,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
 
+        boolean ppuReadRequested = cpu.consumePerformancePpuReadHint();
+        int stableReadSpan = !statReplay && ppuReadRequested
+                ? statRegister.performanceStableReadSpanLimitAfterStatPreflight(span) : 0;
+        // Read permission must cover the packet; a shorter read horizon fences that access
+        // without shortening unrelated CPU work. Native x2 retains its independent LY proof.
+        int stableReadMask = statReplay ? 0 : stableReadSpan >= span ? 3 : 1;
+
         performanceEpochDirectRaster = gpu.isPerformanceScanlineCursorActive();
         performanceEpochSteadyRaster = !performanceEpochDirectRaster
                 && gpu.isPerformanceSteadyCursorActive();
@@ -1723,6 +2465,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochStatReplay = statReplay;
         performanceEpochStatAggregate = statAggregate;
         performanceEpochPrefixCommitted = 0;
+        performanceEpochEntryStatReadPhaseFlags = cpu.getStatReadPhaseFlags();
+        performanceEpochEntryStatReadPhaseCaptured = false;
         if (performanceEpochPrefixCommitter == null) {
             performanceEpochPrefixCommitter = this::commitPerformanceEpochPrefix;
         }
@@ -1732,8 +2476,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             elapsed = statReplay
                     ? cpu.runNativeCgbStatReplayPerformanceEpoch(span)
                     : armedHblankWait
-                    ? cpu.runNativeCgbArmedHblankWaitPerformanceEpoch(span)
-                    : cpu.runNativeCgbPerformanceEpoch(span);
+                    ? cpu.runNativeCgbArmedHblankWaitPerformanceEpoch(span, stableReadMask)
+                    : ppuPlan == PerformanceEpochPpuPlan.LCD_OFF
+                    ? cpu.runNativeCgbDoubleSpeedLcdOffPerformanceEpoch(span, stableReadMask)
+                    : cpu.runNativeCgbPerformanceEpoch(span, stableReadMask);
         } finally {
             cpu.setPerformanceEpochPrefixCommitter(null);
         }
@@ -1741,30 +2487,66 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int suffix = elapsed - performanceEpochPrefixCommitted;
-        if (suffix > 0) {
-            commitPerformanceEpochPeripherals(suffix);
+        boolean terminalLcdcOnWrite = suffix == 1
+                && cpu.hasPendingPerformanceLcdcOnWrite()
+                && isNativeCgbPerformanceEpochTopology()
+                && gpu.isLcdEnabled()
+                && !interruptManager.isIme()
+                && !performanceEpochStatReplay
+                && cpu.performanceNoPendingPpuReadPhase()
+                && interruptManager.performanceLcdcWriteReplayInputsStable()
+                && statRegister.performanceNativeCgbLcdcWriteReplaySpanLimit(1) >= 1
+                && !statRegister.hasPendingModeRegisterCapture()
+                && !cpu.hasPendingPeripheralSample()
+                && !dma.isTransferInProgress()
+                && !dma.requiresClockTick(false)
+                && !hdma.hasActiveOrPendingTransfer()
+                && hdma.isPerformanceInactiveRequestClockStable();
+        boolean journalReplayed;
+        if (terminalLcdcOnWrite) {
+            // The CPU bus already flushed every dot before the unsafe write. Keep the final
+            // independent clocks on their existing full suffix, but hold their final GPU/STAT
+            // dot until after the FF40 write so the LCDC edge has scalar pre-GPU ordering.
+            commitPerformanceEpochIndependentPeripherals(suffix);
+            journalReplayed = cpu.replayPerformanceEpochJournal();
+            if (!journalReplayed) {
+                throw new IllegalStateException(
+                        "native-CGB LCDC journal disappeared before its terminal dot");
+            }
+            commitPerformanceEpochTerminalPpuDot();
+            performanceLcdcWriteReplayPollTicks = 0;
+            performanceLcdcWriteReplayRetry = true;
+        } else {
+            if (suffix > 0) {
+                commitPerformanceEpochPeripherals(suffix);
+            }
+            // The observer defers an unsafe write. Replaying after the complete old-state
+            // prefix preserves the existing ordering for every other MMIO/control write.
+            journalReplayed = cpu.replayPerformanceEpochJournal();
         }
-        // The observer defers an unsafe write.  Replaying after the complete old-state
-        // prefix preserves the boundary semantics and guarantees one delegated write.
-        cpu.replayPerformanceEpochJournal();
         boolean divReset = timer.consumeDivReset();
         if (divReset) {
             sound.tickFrameSequencer(true);
             sound.commitFrameSequencerClock();
             serialPort.onDivReset();
         }
-        boolean halted = cpu.getState() == Cpu.State.HALTED;
+        Cpu.State finalCpuState = cpu.getState();
+        boolean halted = finalCpuState == Cpu.State.HALTED;
         if (halted) {
             hdma.reconcilePerformanceRunningEpochHaltEntryTrusted();
         }
         hdma.onCpuHaltState(halted);
         boolean pendingPeripheralSample = cpu.hasPendingPeripheralSample();
-        if (pendingPeripheralSample) {
-            // The epoch can retire HALT immediately before the caller's budget ends. Publish
-            // the otherwise-inactive OAM-DMA pause latch in the same rare branch which already
-            // owns HALT's post-peripheral sample, so ordinary epochs gain no new hot check.
-            if (halted && dma.requiresClockTick(true)) {
-                dma.tick(true, true);
+        if (halted || journalReplayed) {
+            // FF46 starts its DMA clock on the CPU write's own dot. The packet entered
+            // with DMA inactive, so its first copy/PPU ownership edge is still ahead.
+            // This is the same terminal seam as the fixed-x1 running epoch.
+            dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
+            boolean dmaCpuClockPaused = halted || finalCpuState == Cpu.State.STOPPED
+                    || finalCpuState == Cpu.State.SPEED_SWITCH || speedSwitchTailTicks > 0
+                    || hdma.pausesOamDmaForSpeedSwitchBurst();
+            if (dma.requiresClockTick(dmaCpuClockPaused)) {
+                dma.tick(dmaCpuClockPaused, halted);
             }
         }
         if (halted) {
@@ -1781,6 +2563,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         performanceEpochCount++;
         performanceEpochTicks += elapsed;
+        recordPerformanceTicks(Execution.EPOCH, elapsed);
         performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
         return elapsed;
     }
@@ -1798,23 +2581,29 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
         if (cartridgeClocked) {
-            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         if (slotCartridgeClocked) {
-            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
-        span = Math.min(span, timer.performanceEpochSpanLimit(span));
+        span = limitPerformanceSpan(span, timer.performanceEpochSpanLimit(span), Blocker.TIMER);
+        span = limitPerformanceSpan(span, serialPort.performanceEventHorizon(span), Blocker.SERIAL);
+        if (gbc) span = limitPerformanceSpan(span, infraredPort.performanceEventHorizon(span), Blocker.INFRARED);
         // This is a settled no-bus HALT transaction, so ordinary compact samples cannot race a
         // deferred CPU sound-register write. Only the synchronous host callback stays scalar.
-        span = Math.min(span, sound.performanceQuietSpanLimit(span));
-        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        span = limitPerformanceSpan(span, sound.performanceQuietSpanLimit(span), Blocker.AUDIO);
+        span = limitPerformanceSpan(span, joypad.performanceSettledHaltSpanLimit(span), Blocker.INPUT);
         if (span <= 0 || !serialPort.performanceEpochIdle(span)
                 || !infraredPort.performanceEpochIdle(span)) {
             return 0;
         }
         PerformanceEpochPpuPlan ppuPlan;
         int rasterSpan = gpu.performanceEpochSpanLimit(span);
-        if (rasterSpan > 0) {
+        if (!gpu.isLcdEnabled()) {
+            span = Math.min(span, performanceLcdOffEpochSpanLimit(span));
+            span = Math.min(span, gpu.performanceNativeCgbDoubleSpeedLcdOffSpanLimit(span));
+            ppuPlan = PerformanceEpochPpuPlan.LCD_OFF;
+        } else if (rasterSpan > 0) {
             span = Math.min(span, rasterSpan);
             ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
         } else {
@@ -1827,7 +2616,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 ppuPlan = PerformanceEpochPpuPlan.MODE2_REPLAY;
             }
         }
-        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        span = limitPerformanceSpan(span, statRegister.performanceSettledHaltSpanLimit(span), Blocker.STAT);
         if (span <= 0) {
             return 0;
         }
@@ -1850,8 +2639,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         tickPerformanceSettledNativeCgbHaltSpan(span, ppuPlan, directRaster, steadyRaster);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
+        recordPerformanceTicks(Execution.HALT, span);
         performanceBulkMaxTicks = Math.max(performanceBulkMaxTicks, span);
         return span;
+    }
+
+    private boolean isPerformanceHdmaSettledHaltStable() {
+        return hdma.isPerformanceSettledHaltClockStable()
+                && !hdma.isHaltRequestLatched()
+                && !hdma.holdsHblankSpeedSwitchTail()
+                && !hdma.pausesOamDmaForSpeedSwitchBurst()
+                && !hdma.requiresCpuHdmaPhaseFlags();
     }
 
     private boolean canStartNativeCgbSettledHaltSpan() {
@@ -1861,16 +2659,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !debugHistoryReplay
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
-                && gpu.isLcdEnabled()
+                && (gpu.isLcdEnabled() || lcdDisabled)
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(true)
-                && !hdma.hasActiveOrPendingTransfer()
-                && !hdma.hasPendingHblankTransfer()
-                && !hdma.isHaltRequestLatched()
-                && !hdma.holdsHblankSpeedSwitchTail()
-                && !hdma.pausesOamDmaForSpeedSwitchBurst()
-                && !hdma.requiresCpuHdmaPhaseFlags()
-                && hdma.isPerformanceInactiveRequestClockStable();
+                && isPerformanceHdmaSettledHaltStable();
     }
 
     private void tickPerformanceSettledNativeCgbHaltSpan(
@@ -1889,12 +2681,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         sound.commitFrameSequencerClock();
         cpu.advancePerformanceNativeCgbSettledHaltSpanTrusted(ticks);
         sound.tickPerformanceQuietSpan(ticks);
-        serialPort.tickPerformanceEpochIdle(ticks);
-        infraredPort.tickPerformanceEpochIdle(ticks);
+        serialPort.tickPerformanceEventSpanTrusted(ticks);
+        infraredPort.tickPerformanceEventSpanTrusted(ticks);
         joypad.tickPerformanceQuietSpanTrusted(ticks);
-        hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
+        hdma.advancePerformanceSettledHaltClockTrusted(ticks);
 
         switch (ppuPlan) {
+            case LCD_OFF -> {
+                gpu.advancePerformanceNativeCgbDoubleSpeedLcdOffSpanTrusted(ticks);
+                statRegister.tickPerformanceQuietSpanTrusted(ticks);
+                lcdOffTicks += ticks;
+            }
             case SGB_IDLE -> throw new IllegalStateException(
                     "native-CGB settled-HALT span has an SGB PPU plan");
             case TRUSTED_RASTER -> {
@@ -1906,6 +2703,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 statRegister.tickPerformanceQuietSpanTrusted(ticks);
             }
             case MODE2_REPLAY -> {
+                if (performanceDiagnostics != null) {
+                    performanceDiagnostics.recordReplay(Subsystem.PPU_REPLAY, ticks);
+                    performanceDiagnostics.recordReplay(Subsystem.STAT_REPLAY, ticks);
+                }
                 for (int i = 0; i < ticks; i++) {
                     gpu.tick();
                     statRegister.tick();
@@ -1985,8 +2786,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
         boolean physicalDmgLcdOffEpoch = !cgbHardware && !gpu.isLcdEnabled();
-        boolean lcdOffEpoch = physicalDmgLcdOffEpoch
-                || nativeCgbNormalSpeed && !gpu.isLcdEnabled();
+        boolean lcdOffEpoch = !gpu.isLcdEnabled();
         boolean cpuEntryEligible = nativeCgbNormalSpeed
                 ? cpu.performanceNativeCgbNormalSpeedEpochEntryEligible()
                 : cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
@@ -2000,30 +2800,27 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // Cartridge-control, external-RAM, and RTC accesses stay on the scalar boundary.
             // A clocked cartridge may join only through its independently proven arithmetic
             // horizon; the conservative MemoryController default rejects unknown hardware.
-            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         if (slotCartridgeClocked) {
-            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
-        span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
-        span = Math.min(span, nativeCgbNormalSpeed || sgb || physicalDmgLcdOffEpoch
+        span = limitPerformanceSpan(span,
+                timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware), Blocker.TIMER);
+        span = limitPerformanceSpan(span, nativeCgbNormalSpeed || sgb || physicalDmgLcdOffEpoch
                 ? sound.performanceFencedEpochSpanLimit(span)
-                : sound.performanceEpochSpanLimit(span));
-        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+                : sound.performanceEpochSpanLimit(span), Blocker.AUDIO);
+        span = limitPerformanceSpan(span, joypad.performanceSettledHaltSpanLimit(span), Blocker.INPUT);
+        span = limitPerformanceSpan(span, serialPort.performanceEventHorizon(span), Blocker.SERIAL);
         if (cgbHardware) {
-            span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, true)
-                    ? span : 0);
-            span = Math.min(span, infraredPort.performanceSettledHaltSpanLimit(span));
-        } else {
-            span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, false)
-                    ? span : 0);
+            span = limitPerformanceSpan(span, infraredPort.performanceEventHorizon(span), Blocker.INFRARED);
         }
 
         PerformanceEpochPpuPlan ppuPlan;
         if (lcdOffEpoch) {
             span = Math.min(span, performanceLcdOffEpochSpanLimit(span));
-            span = Math.min(span, nativeCgbNormalSpeed
-                    ? gpu.performanceNativeCgbNormalSpeedLcdOffSpanLimit(span)
+            span = Math.min(span, cgbHardware
+                    ? gpu.performanceCgbNormalSpeedLcdOffSpanLimit(span)
                     : gpu.performancePhysicalDmgNormalSpeedLcdOffSpanLimit(span));
             if (span <= 0) {
                 return 0;
@@ -2079,6 +2876,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
 
+        int stableReadSpan = cpu.consumePerformancePpuReadHint()
+                ? statRegister.performanceStableReadSpanLimitAfterStatPreflight(span) : 0;
+        // Keep the CPU packet's event horizon. Reads without a full-packet proof fence at
+        // their actual bus boundary and can acquire a new lease on the following packet.
+        int stableReadMask = stableReadSpan >= span ? 3 : 0;
+
         performanceEpochDirectRaster = gpu.isPerformanceScanlineCursorActive();
         performanceEpochSteadyRaster = !performanceEpochDirectRaster
                 && gpu.isPerformanceSteadyCursorActive();
@@ -2106,17 +2909,21 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             elapsed = cgbHardware
                     ? nativeCgbNormalSpeed
                             ? lcdOffEpoch
-                                    ? cpu.runNativeCgbNormalSpeedLcdOffPerformanceEpoch(span)
-                                    : cpu.runNativeCgbNormalSpeedPerformanceEpoch(span)
-                            : cpu.runCgbCompatibilityPerformanceEpoch(span)
+                                    ? cpu.runNativeCgbNormalSpeedLcdOffPerformanceEpoch(span, stableReadMask)
+                                    : hdma.isPerformanceArmedHblankWaitStable()
+                                            ? cpu.runNativeCgbNormalSpeedArmedHblankWaitPerformanceEpoch(span, stableReadMask)
+                                            : cpu.runNativeCgbNormalSpeedPerformanceEpoch(span, stableReadMask)
+                            : lcdOffEpoch
+                                    ? cpu.runCgbCompatibilityLcdOffPerformanceEpoch(span, stableReadMask)
+                                    : cpu.runCgbCompatibilityPerformanceEpoch(span, stableReadMask)
                     : physicalDmgLcdOffEpoch
-                            ? cpu.runPhysicalDmgNormalSpeedLcdOffPerformanceEpoch(span)
+                            ? cpu.runPhysicalDmgNormalSpeedLcdOffPerformanceEpoch(span, stableReadMask)
                             : performanceEpochPpuPlan
                                     == PerformanceEpochPpuPlan.PHYSICAL_DMG_MODE2_BULK
-                            ? cpu.runPhysicalDmgMode2PerformanceEpoch(span)
+                            ? cpu.runPhysicalDmgMode2PerformanceEpoch(span, stableReadMask)
                             : sgb
-                            ? cpu.runSgbPerformanceEpoch(span)
-                            : cpu.runPhysicalDmgPerformanceEpoch(span);
+                            ? cpu.runSgbPerformanceEpoch(span, stableReadMask)
+                            : cpu.runPhysicalDmgPerformanceEpoch(span, stableReadMask);
         } finally {
             cpu.setPerformanceEpochPrefixCommitter(null);
         }
@@ -2173,6 +2980,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         performanceEpochCount++;
         performanceEpochTicks += elapsed;
+        recordPerformanceTicks(Execution.EPOCH, elapsed);
         performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
         return elapsed;
     }
@@ -2195,7 +3003,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         && !hdma.holdsHblankSpeedSwitchTail()
                         && !hdma.pausesOamDmaForSpeedSwitchBurst()
                         && !hdma.requiresCpuHdmaPhaseFlags()
-                        && hdma.isPerformanceInactiveRequestClockStable()));
+                        && hdma.isPerformanceInactiveRequestClockStable())
+                        || nativeCgbNormalSpeed && hdma.isPerformanceArmedHblankWaitStable());
     }
 
     /** Leaves the exact host blank publication/reset tick on the scalar owner. */
@@ -2223,32 +3032,27 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (ticks <= 0) {
             return;
         }
-        if (cartridgeClocked) {
-            cartridge.tickPerformanceQuietSpanTrusted(ticks);
-        }
-        if (slotCartridgeClocked) {
-            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
-        }
-        timer.tickPerformanceEpochTrusted(ticks);
-        sound.tickFrameSequencer(false);
-        assert !sound.hasPendingFrameSequencerClock()
-                : "frame sequencer edge crossed a PERFORMANCE epoch";
-        sound.commitFrameSequencerClock();
-        sound.tickPerformanceQuietSpan(ticks);
-        serialPort.tickPerformanceEpochIdle(ticks);
-        infraredPort.tickPerformanceEpochIdle(ticks);
-        joypad.tickPerformanceQuietSpanTrusted(ticks);
-        hdma.advancePerformanceNativeCgbRunningEpochClockTrusted(ticks);
+        commitPerformanceEpochIndependentPeripherals(ticks);
 
         if (performanceEpochStatReplay && !performanceEpochStatAggregate) {
             // The CPU runner fences every decoded access and HALT. Replay the exact post-GPU
             // STAT evaluator dot-for-dot so internal latches remain identical while the CPU
             // cannot observe LY/STAT/IF or skip an interrupt acceptance boundary.
+            if (performanceDiagnostics != null) {
+                performanceDiagnostics.recordReplay(Subsystem.PPU_REPLAY, ticks);
+                performanceDiagnostics.recordReplay(Subsystem.STAT_REPLAY, ticks);
+            }
             for (int i = 0; i < ticks; i++) {
                 gpu.tick();
                 statRegister.tickNativeCgbPerformancePostGpu();
             }
         } else switch (performanceEpochPpuPlan) {
+            case LCD_OFF -> {
+                gpu.advancePerformanceNativeCgbDoubleSpeedLcdOffSpanTrusted(ticks);
+                statRegister.tickPerformanceQuietSpanTrusted(ticks);
+                lcdOffTicks += ticks;
+                performanceEpochLcdOffTicks += ticks;
+            }
             case SGB_IDLE -> throw new IllegalStateException(
                     "native-CGB epoch has an SGB PPU plan");
             case TRUSTED_RASTER -> {
@@ -2275,6 +3079,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 // The CPU and independently clocked peripherals have already consumed their
                 // frozen-view packet. Preserve scalar PPU ordering inside mode 2 so OAM-reader
                 // and STAT state are published dot-for-dot before the scalar hand-off tick.
+                if (performanceDiagnostics != null) {
+                    performanceDiagnostics.recordReplay(Subsystem.PPU_REPLAY, ticks);
+                    if (!performanceEpochStatAggregate) {
+                        performanceDiagnostics.recordReplay(Subsystem.STAT_REPLAY, ticks);
+                    }
+                }
                 for (int i = 0; i < ticks; i++) {
                     gpu.tick();
                     if (!performanceEpochStatAggregate) {
@@ -2288,6 +3098,47 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
             case NONE -> throw new IllegalStateException(
                     "PERFORMANCE epoch committed without a PPU plan");
+        }
+        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                gpu.isStatModeLatchRephasedBySpeedSwitch());
+    }
+
+    /** Advances native-CGB independent clocks while leaving the PPU publication dot separate. */
+    private void commitPerformanceEpochIndependentPeripherals(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        capturePerformanceEpochEntryStatReadPhase();
+        if (cartridgeClocked) {
+            cartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        if (slotCartridgeClocked) {
+            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        timer.tickPerformanceEpochTrusted(ticks);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock()
+                : "frame sequencer edge crossed a PERFORMANCE epoch";
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(ticks);
+        serialPort.tickPerformanceEventSpanTrusted(ticks);
+        infraredPort.tickPerformanceEventSpanTrusted(ticks);
+        joypad.tickPerformanceQuietSpanTrusted(ticks);
+        hdma.advancePerformanceNativeCgbRunningEpochClockTrusted(ticks);
+    }
+
+    /** Replays one final native-CGB x2 PPU/STAT dot after a terminal FF40-on write. */
+    private void commitPerformanceEpochTerminalPpuDot() {
+        if (performanceDiagnostics != null) {
+            performanceDiagnostics.recordReplay(Subsystem.PPU_REPLAY, 1);
+            performanceDiagnostics.recordReplay(Subsystem.STAT_REPLAY, 1);
+        }
+        Mode mode = gpu.isPerformanceSteadyCursorActive()
+                ? gpu.tickPerformanceSteady() : gpu.tick();
+        statRegister.tickNativeCgbPerformancePostGpu();
+        if (mode != null) {
+            assert mode != Mode.VBlank && mode != Mode.OamSearch;
+            hdma.onGpuUpdate(mode);
         }
         hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
                 gpu.isStatModeLatchRephasedBySpeedSwitch());
@@ -2342,7 +3193,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 : "frame sequencer edge crossed a fixed-x1 PERFORMANCE epoch";
         sound.commitFrameSequencerClock();
         sound.tickPerformanceQuietSpan(ticks);
-        serialPort.tickPerformanceNormalSpeedEpochIdle(ticks);
+        serialPort.tickPerformanceEventSpanTrusted(ticks);
         if (cgbHardware) {
             infraredPort.tickPerformanceQuietSpanTrusted(ticks);
         }
@@ -2351,7 +3202,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // Scalar tick() advances the PPU-to-CPU request clocks after input and before GPU.
             // The preflight admits only inactive countdowns, so their zero-clock ages are the
             // complete arithmetic transaction skipped by this fixed-x1 packet.
-            hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
+            hdma.advancePerformanceRunningEpochClockTrusted(ticks);
             switch (performanceEpochPpuPlan) {
                 case SGB_IDLE -> throw new IllegalStateException(
                         "normal-speed CGB epoch has an SGB PPU plan");
@@ -2366,7 +3217,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     performanceEpochMode2BulkTicks += ticks;
                 }
                 case LCD_OFF -> {
-                    gpu.advancePerformanceNativeCgbNormalSpeedLcdOffSpanTrusted(ticks);
+                    gpu.advancePerformanceCgbNormalSpeedLcdOffSpanTrusted(ticks);
                     performanceEpochLcdOffTicks += ticks;
                 }
                 default -> throw new IllegalStateException(
@@ -2408,6 +3259,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Selects the settled-HALT lane for the current normal-speed topology. */
     private int tryPerformanceSettledHaltSpan(long remaining) {
+        if (!gpu.isLcdEnabled()) {
+            return tryPerformanceSettledNormalSpeedLcdOffHaltSpan(remaining);
+        }
         if (isCgbCompatibilityPerformanceTopology()
                 || isNativeCgbNormalSpeedPerformanceEpochTopology()) {
             return tryPerformanceSettledCgbHaltSpan(remaining);
@@ -2416,6 +3270,81 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return tryPerformanceSettledDmgHaltSpan(remaining);
         }
         return 0;
+    }
+
+    /**
+     * Advances settled x1 HALT while the LCD timing plane is frozen. The scalar owner keeps
+     * every wake edge, LCD-disable settlement tick, and initial/recurring blank callback.
+     * Native and compatibility CGB hardware retain their infrared and HDMA clock proofs.
+     */
+    private int tryPerformanceSettledNormalSpeedLcdOffHaltSpan(long remaining) {
+        if (remaining <= 0 || !isNormalSpeedPerformanceEpochTopology()
+                || !cpu.performanceSettledHaltSpanEligible()
+                || gpu.isLcdEnabled() || !lcdDisabled
+                || warmResetRequested || speedSwitchTailTicks != 0
+                || debugHistoryReplay || debugInstrumentation != null
+                || debugRetirementTrackingActive
+                || dma.isTransferInProgress() || dma.requiresClockTick(true)
+                || gbc && !isPerformanceHdmaSettledHaltStable()) {
+            return 0;
+        }
+        int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
+        span = limitPerformanceSpan(span, timer.performanceSettledHaltSpanLimit(span), Blocker.TIMER);
+        span = limitPerformanceSpan(span, serialPort.performanceSettledHaltSpanLimit(span), Blocker.SERIAL);
+        span = limitPerformanceSpan(span, joypad.performanceSettledHaltSpanLimit(span), Blocker.INPUT);
+        span = limitPerformanceSpan(span, sound.performanceQuietSpanLimit(span), Blocker.AUDIO);
+        if (gbc) {
+            span = limitPerformanceSpan(span, infraredPort.performanceSettledHaltSpanLimit(span), Blocker.INFRARED);
+        }
+        if (cartridgeClocked) {
+            span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
+        }
+        if (slotCartridgeClocked) {
+            span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
+        }
+        span = Math.min(span, performanceLcdOffEpochSpanLimit(span));
+        span = Math.min(span, gbc
+                ? gpu.performanceCgbNormalSpeedLcdOffSpanLimit(span)
+                : gpu.performancePhysicalDmgNormalSpeedLcdOffSpanLimit(span));
+        span = limitPerformanceSpan(span, isSgbPerformanceTopology()
+                ? statRegister.performanceSgbLcdOffSpanLimit(span)
+                : statRegister.performanceSettledHaltSpanLimit(span), Blocker.STAT);
+        if (span <= 0 || warmResetRequested || !cpu.performanceNoPendingPpuReadPhase()
+                || !joypad.isPerformanceQuietSpanStillEligible()) {
+            return 0;
+        }
+
+        statRegister.capturePerformanceNoCpuReadPhaseTrusted(cpu.getStatReadPhaseFlags());
+        if (cartridgeClocked) cartridge.tickPerformanceQuietSpanTrusted(span);
+        if (slotCartridgeClocked) slotCartridge.tickPerformanceQuietSpanTrusted(span);
+        timer.tickPerformanceQuietSpanTrusted(span);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock()
+                : "frame sequencer edge crossed a normal-speed LCD-off settled-HALT span";
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(span);
+        serialPort.tickPerformanceQuietSpanTrusted(span);
+        if (gbc) infraredPort.tickPerformanceQuietSpanTrusted(span);
+        joypad.tickPerformanceQuietSpanTrusted(span);
+        cpu.advancePerformanceSettledHaltSpanTrusted(span);
+        if (gbc) {
+            hdma.advancePerformanceSettledHaltClockTrusted(span);
+            gpu.advancePerformanceCgbNormalSpeedLcdOffSpanTrusted(span);
+        } else {
+            gpu.advancePerformancePhysicalDmgNormalSpeedLcdOffSpanTrusted(span);
+        }
+        statRegister.tickPerformanceQuietSpanTrusted(span);
+        lcdOffTicks += span;
+        if (gbc) {
+            hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                    gpu.isStatModeLatchRephasedBySpeedSwitch());
+            cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+        }
+        performanceBulkSpanCount++;
+        performanceBulkTicks += span;
+        performanceBulkMaxTicks = Math.max(performanceBulkMaxTicks, span);
+        recordPerformanceTicks(Execution.HALT, span);
+        return span;
     }
 
     /**
@@ -2428,16 +3357,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
-        span = Math.min(span, timer.performanceSettledHaltSpanLimit(span));
-        span = Math.min(span, serialPort.performanceSettledHaltSpanLimit(span));
-        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
-        span = Math.min(span, sound.performanceQuietSpanLimit(span));
-        span = Math.min(span, infraredPort.performanceSettledHaltSpanLimit(span));
+        span = limitPerformanceSpan(span, timer.performanceSettledHaltSpanLimit(span), Blocker.TIMER);
+        span = limitPerformanceSpan(span, serialPort.performanceSettledHaltSpanLimit(span), Blocker.SERIAL);
+        span = limitPerformanceSpan(span, joypad.performanceSettledHaltSpanLimit(span), Blocker.INPUT);
+        span = limitPerformanceSpan(span, sound.performanceQuietSpanLimit(span), Blocker.AUDIO);
+        span = limitPerformanceSpan(span, infraredPort.performanceSettledHaltSpanLimit(span), Blocker.INFRARED);
         if (cartridgeClocked) {
-            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         if (slotCartridgeClocked) {
-            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         PerformancePhasePpuPlan ppuPlan = PerformancePhasePpuPlan.QUIET;
         int gpuSpanLimit = gpu.performanceQuietSpanLimit();
@@ -2459,19 +3388,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             span = 0;
         }
-        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        span = limitPerformanceSpan(span, statRegister.performanceSettledHaltSpanLimit(span), Blocker.STAT);
         if (span <= 3
                 || warmResetRequested
                 || speedSwitchTailTicks != 0
                 || !cpu.performanceNoPendingPpuReadPhase()
                 || dma.isTransferInProgress()
                 || dma.requiresClockTick(true)
-                || hdma.hasActiveOrPendingTransfer()
-                || hdma.hasPendingHblankTransfer()
-                || hdma.isHaltRequestLatched()
-                || hdma.holdsHblankSpeedSwitchTail()
-                || hdma.pausesOamDmaForSpeedSwitchBurst()
-                || hdma.requiresCpuHdmaPhaseFlags()
+                || !isPerformanceHdmaSettledHaltStable()
                 || !joypad.isPerformanceQuietSpanStillEligible()
                 || !canStartCgbNormalSpeedSettledHaltSpan()) {
             return 0;
@@ -2480,6 +3404,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 span, ppuPlan, directRasterSpan, steadyRasterSpan);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
+        recordPerformanceTicks(Execution.HALT, span);
         if (span > performanceBulkMaxTicks) {
             performanceBulkMaxTicks = span;
         }
@@ -2497,13 +3422,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && gpu.isLcdEnabled()
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(true)
-                && !hdma.hasActiveOrPendingTransfer()
-                && !hdma.hasPendingHblankTransfer()
-                && !hdma.isHaltRequestLatched()
-                && !hdma.holdsHblankSpeedSwitchTail()
-                && !hdma.pausesOamDmaForSpeedSwitchBurst()
-                && !hdma.requiresCpuHdmaPhaseFlags()
-                && hdma.isPerformanceInactiveRequestClockStable();
+                && isPerformanceHdmaSettledHaltStable();
     }
 
     /**
@@ -2529,7 +3448,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         infraredPort.tickPerformanceQuietSpanTrusted(ticks);
         joypad.tickPerformanceQuietSpanTrusted(ticks);
         cpu.advancePerformanceSettledHaltSpanTrusted(ticks);
-        hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
+        hdma.advancePerformanceSettledHaltClockTrusted(ticks);
         switch (ppuPlan) {
             case QUIET -> gpu.advancePerformanceQuietSpanTrusted(
                     ticks, directRasterSpan, steadyRasterSpan);
@@ -2554,22 +3473,22 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
-        span = Math.min(span, timer.performanceSettledHaltSpanLimit(span));
-        span = Math.min(span, serialPort.performanceSettledHaltSpanLimit(span));
-        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
-        span = Math.min(span, sound.performanceQuietSpanLimit(span));
+        span = limitPerformanceSpan(span, timer.performanceSettledHaltSpanLimit(span), Blocker.TIMER);
+        span = limitPerformanceSpan(span, serialPort.performanceSettledHaltSpanLimit(span), Blocker.SERIAL);
+        span = limitPerformanceSpan(span, joypad.performanceSettledHaltSpanLimit(span), Blocker.INPUT);
+        span = limitPerformanceSpan(span, sound.performanceQuietSpanLimit(span), Blocker.AUDIO);
         if (cartridgeClocked) {
-            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, cartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         if (slotCartridgeClocked) {
-            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+            span = limitPerformanceSpan(span, slotCartridge.performanceQuietSpanLimit(span), Blocker.CARTRIDGE);
         }
         int gpuSpanLimit = gpu.performanceQuietSpanLimit();
         span = Math.min(span, gpuSpanLimit);
         boolean directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
         boolean steadyRasterSpan = span > 0 && !directRasterSpan
                 && gpu.isPerformanceSteadyCursorActive();
-        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        span = limitPerformanceSpan(span, statRegister.performanceSettledHaltSpanLimit(span), Blocker.STAT);
         if (span <= 3
                 || warmResetRequested
                 || speedSwitchTailTicks != 0
@@ -2586,6 +3505,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         tickPerformanceSettledDmgHaltSpan(span, directRasterSpan, steadyRasterSpan);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
+        recordPerformanceTicks(Execution.HALT, span);
         if (span > performanceBulkMaxTicks) {
             performanceBulkMaxTicks = span;
         }
@@ -2655,7 +3575,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         // running state, or settled HALT, proves Cpu.onPeripheralsTicked() is a no-op here.
         cpu.advancePerformancePhaseOnlyTrusted(ticks);
         if (gbc) {
-            hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
+            hdma.advancePerformanceRunningEpochClockTrusted(ticks);
         }
         switch (ppuPlan) {
             case QUIET -> gpu.advancePerformanceQuietSpanTrusted(
@@ -2687,6 +3607,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Resets the session-only PERFORMANCE bulk counters at benchmark arm. */
     public void resetPerformanceBulkCounters() {
+        performanceLcdcWriteReplayTicks = 0L;
+        performanceLcdcWriteReplayWrites = 0L;
+        performanceLcdcWriteReplayQuietTicks = 0L;
         performanceBulkSpanCount = 0L;
         performanceBulkTicks = 0L;
         performanceBulkMaxTicks = 0;
@@ -3836,11 +4759,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private void restoreMachineState(GameboyState mem, boolean restoreCartridge) {
+        performanceLcdcWriteReplayRetry = false;
+        performanceLcdcWriteReplayPollTicks = 0;
         nativeCgbScalarOwner = false;
         biosShadow.restoreState(mem.biosShadowMemento());
         if (restoreCartridge) {
             cartridge.restoreState(mem.cartridgeMemento());
         }
+        // Restore clock/compatibility first so its timing listener acts on the old target
+        // state; the incoming GPU cursor is then installed under the correct cached domain.
+        speedMode.restoreState(mem.speedModeMemento());
         gpu.restoreState(mem.gpuMemento());
         statRegister.restoreState(mem.statRegisterMemento());
         mmu.restoreState(mem.mmuMemento());
@@ -3860,7 +4788,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         infraredPort.restoreState(mem.infraredPortMemento());
         codeBreakerRumble.restoreStateSilently(mem.codeBreakerRumbleMemento());
         joypad.restoreState(mem.joypadMemento());
-        speedMode.restoreState(mem.speedModeMemento());
         superGameboy.restoreState(mem.superGameboyMemento());
         background.restoreState(mem.backgroundMemento());
         vRamTransfer.restoreState(mem.vRamTransferMemento());

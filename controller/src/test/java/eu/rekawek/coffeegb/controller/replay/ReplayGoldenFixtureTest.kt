@@ -42,6 +42,7 @@ class ReplayGoldenFixtureTest {
     assertEquals(false, inspection.hasEmbeddedState)
 
     val replay = ReplayCodec.decode(bytes)
+    assertEquals(ReplayIdentity.LEGACY_REPLAY_SEMANTICS_VERSION, replay.identity.replaySemanticsVersion)
     assertContentEquals(bytes, ReplayCodec.encode(replay))
     assertEquals(
         listOf(

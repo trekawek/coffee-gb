@@ -416,7 +416,7 @@ object ReplayCodec {
     val bootstrapFlags = reader.readLong()
     val behaviorFlags = reader.readLong()
     val semantics = reader.readU16()
-    if (semantics != ReplayIdentity.REPLAY_SEMANTICS_VERSION) {
+    if (!ReplayIdentity.isSupportedReplaySemantics(semantics)) {
       throw ReplayDecodeException(
           ReplayDecodeReason.UNSUPPORTED_REPLAY_SEMANTICS,
           "Unsupported replay semantics version $semantics",

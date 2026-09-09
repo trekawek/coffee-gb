@@ -48,6 +48,10 @@ final class AndroidPerformanceBoost implements AutoCloseable {
     private boolean workCycleActive;
     private long activeWorkStartedNanos;
 
+    synchronized boolean hasActiveSession() {
+        return hintSession != null;
+    }
+
     AndroidPerformanceBoost(Context context) {
         this(new AndroidHintPlatform(Objects.requireNonNull(context, "context")));
     }

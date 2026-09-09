@@ -22,6 +22,220 @@ import static org.junit.Assert.assertTrue;
 public class StatRegisterTest {
 
     @Test
+    public void pendingRegisterCopiesBatchOnlyBeforeTheirCaptureBoundary() throws Exception {
+        for (boolean doubleSpeed : new boolean[] {false, true}) {
+            for (int scx : new int[] {0, 3, 7}) {
+                for (boolean statWrite : new boolean[] {false, true}) {
+                    Fixture scalar = new Fixture(true, doubleSpeed);
+                    Fixture bulk = new Fixture(true, doubleSpeed);
+                    for (Fixture fixture : new Fixture[] {scalar, bulk}) {
+                        fixture.gpu.setByte(GpuRegister.SCX.getAddress(), scx);
+                        fixture.advanceTo(2, 100);
+                        if (statWrite) {
+                            fixture.stat.setByte(StatRegister.ADDRESS, 0x48);
+                        } else {
+                            fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 72);
+                        }
+                        // A changed register must first run its dirty write-edge evaluator.
+                        assertEquals(0, fixture.stat.performanceSettledHaltSpanLimit(54));
+                        fixture.tick();
+                    }
+                    int accelerated = 0;
+                    for (int elapsed = 0; elapsed < 20;) {
+                        int span = bulk.stat.performanceSettledHaltSpanLimit(20 - elapsed);
+                        if (span > 0) {
+                            if (longField(bulk.stat, statWrite
+                                    ? "pendingMode0IrqStatClock" : "pendingMode0IrqLycClock")
+                                    != Long.MAX_VALUE) {
+                                accelerated += span;
+                            }
+                            for (int i = 0; i < span; i++) {
+                                scalar.tick();
+                                bulk.gpu.tick();
+                            }
+                            assertTrue(bulk.stat.tickPerformanceQuietSpan(span));
+                            elapsed += span;
+                        } else {
+                            scalar.tick();
+                            bulk.tick();
+                            elapsed++;
+                        }
+                        assertEquals("STAT after pending-copy prefix", scalar.stat.captureState(),
+                                bulk.stat.captureState());
+                        assertEquals("IF after pending-copy prefix", scalar.interrupts.captureState(),
+                                bulk.interrupts.captureState());
+                    }
+                    assertTrue("pending capture never admitted an inert prefix x2="
+                            + doubleSpeed + " scx=" + scx + " stat=" + statWrite,
+                            accelerated > 0);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void pendingCaptureSpansMatchScalarAcrossClockPhasesAndRestore() {
+        int accelerated = 0;
+        for (int profile = 0; profile < 4; profile++) {
+            for (boolean rephased : new boolean[] {false, true}) {
+                for (int scx : new int[] {0, 3, 7}) {
+                    for (boolean changedAfterMode0 : new boolean[] {false, true}) {
+                        for (int writePhase = 0; writePhase < 4; writePhase++) {
+                            Fixture scalar = new Fixture(profile != 0, profile == 2);
+                            Fixture bulk = new Fixture(profile != 0, profile == 2);
+                            for (Fixture fixture : new Fixture[] {scalar, bulk}) {
+                                if (profile == 3) {
+                                    fixture.speedMode.setDmgCompat(true);
+                                }
+                                if (rephased) {
+                                    fixture.gpu.onSpeedSwitch();
+                                }
+                                fixture.gpu.setByte(GpuRegister.SCX.getAddress(), scx);
+                                fixture.advanceTo(2, 350 + writePhase);
+                                if (changedAfterMode0) {
+                                    fixture.gpu.setByte(GpuRegister.SCX.getAddress(), scx + 1);
+                                }
+                                fixture.stat.setByte(StatRegister.ADDRESS, 0x48);
+                                // Overlapping writes leave copies with different ages.
+                                for (int age = 0; age < writePhase; age++) {
+                                    fixture.tick();
+                                }
+                                fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 72);
+                                fixture.tick();
+                            }
+                            String context = "profile=" + profile + " rephased=" + rephased
+                                    + " scx=" + scx + " changed=" + changedAfterMode0
+                                    + " phase=" + writePhase;
+                            for (int elapsed = 0; elapsed < 16;) {
+                                // Restore while at least some CGB copies are still pending.
+                                if (elapsed == 0) {
+                                    for (Fixture fixture : new Fixture[] {scalar, bulk}) {
+                                        var gpuState = fixture.gpu.captureState();
+                                        var statState = fixture.stat.captureState();
+                                        var interruptState = fixture.interrupts.captureState();
+                                        fixture.gpu.restoreState(gpuState);
+                                        fixture.stat.restoreState(statState);
+                                        fixture.interrupts.restoreState(interruptState);
+                                    }
+                                }
+                                int span = bulk.stat.performanceSettledHaltSpanLimit(16 - elapsed);
+                                if (span > 0) {
+                                    for (int i = 0; i < span; i++) {
+                                        scalar.tick();
+                                        bulk.gpu.tick();
+                                    }
+                                    assertTrue(context, bulk.stat.tickPerformanceQuietSpan(span));
+                                    elapsed += span;
+                                    accelerated += span;
+                                } else {
+                                    scalar.tick();
+                                    bulk.tick();
+                                    elapsed++;
+                                }
+                                assertEquals(context, scalar.stat.captureState(), bulk.stat.captureState());
+                                assertEquals(context, scalar.interrupts.captureState(),
+                                        bulk.interrupts.captureState());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assertTrue("clock-phase matrix did not exercise arithmetic spans", accelerated > 0);
+    }
+
+    @Test
+    public void trustedReadLeaseMatchesStandaloneProofAfterOwnerPreflight() {
+        int positiveLeases = 0;
+        for (int profile = 0; profile < 4; profile++) {
+            for (int enable = 0; enable < 16; enable++) {
+                Fixture fixture = new Fixture(profile != 0, profile == 2);
+                if (profile == 3) {
+                    fixture.speedMode.setDmgCompat(true);
+                }
+                fixture.stat.setByte(StatRegister.ADDRESS, enable << 3);
+                fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 2);
+                for (int[] point : new int[][] {
+                        {2, 12}, {2, 13}, {2, 68}, {2, 72}, {2, 83}, {2, 100},
+                        {2, 260}, {2, 350}, {2, 439}, {2, 440}, {2, 451}, {2, 452},
+                        {143, 439}, {144, 0}, {144, 13}, {153, 0}, {153, 4}, {153, 13}}) {
+                    fixture.advanceTo(point[0], point[1]);
+                    var before = fixture.stat.captureState();
+                    int ownerSpan = fixture.stat.performanceSettledHaltSpanLimit(54);
+                    if (ownerSpan > 0) {
+                        int standalone = fixture.stat.performanceStableReadSpanLimit(ownerSpan);
+                        int trusted = fixture.stat.performanceStableReadSpanLimitAfterStatPreflight(ownerSpan);
+                        assertEquals("profile=" + profile + " mask=" + enable + " line="
+                                + point[0] + " dot=" + point[1], standalone, trusted);
+                        positiveLeases += trusted > 0 ? 1 : 0;
+                    }
+                    assertEquals("preflight must not change persisted state", before,
+                            fixture.stat.captureState());
+                }
+            }
+        }
+        assertTrue("matrix did not exercise trusted read leases", positiveLeases > 0);
+    }
+
+    @Test
+    public void stableReadLeaseCoversAllEnableMasksAndHighCoincidenceLevels() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            for (boolean doubleSpeed : new boolean[] {false, true}) {
+                if (!gbc && doubleSpeed) {
+                    continue;
+                }
+                for (int enable = 0; enable < 16; enable++) {
+                    for (int[] point : new int[][] {{2, 20}, {2, 350}, {145, 20}}) {
+                        Fixture fixture = new Fixture(gbc, doubleSpeed);
+                        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), point[0]);
+                        fixture.stat.setByte(StatRegister.ADDRESS, enable << 3);
+                        fixture.advanceTo(point[0], point[1]);
+                        var state = fixture.stat.captureState();
+                        int span = fixture.stat.performanceStableReadSpanLimit(20);
+                        assertEquals("lease preflight changed emulated state", state,
+                                fixture.stat.captureState());
+                        assertEquals("stable interior mask=" + enable + " gbc=" + gbc
+                                + " x2=" + doubleSpeed, 20, span);
+                        fixture.stat.beginCpuReadPhase(0);
+                        int stat = fixture.stat.getByte(StatRegister.ADDRESS);
+                        int ly = fixture.gpu.getByte(GpuRegister.LY.getAddress());
+                        for (int i = 0; i < span; i++) {
+                            fixture.tick();
+                            fixture.stat.beginCpuReadPhase(0);
+                            assertEquals("leased STAT changed", stat,
+                                    fixture.stat.getByte(StatRegister.ADDRESS));
+                            assertEquals("leased LY changed", ly,
+                                    fixture.gpu.getByte(GpuRegister.LY.getAddress()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void disabledStatCheckpointAggregateMatchesScalarAtLineStartAndTail() {
+        for (int[] point : new int[][] {{10, 0, 13}, {10, 447, 8}}) {
+            Fixture scalar = new Fixture(true, true);
+            Fixture bulk = new Fixture(true, true);
+            for (Fixture fixture : new Fixture[] {scalar, bulk}) {
+                fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 72);
+                fixture.stat.setByte(StatRegister.ADDRESS, 0);
+                fixture.advanceTo(point[0], point[1]);
+            }
+            assertEquals("disabled sources should aggregate", point[2],
+                    bulk.stat.performanceNativeCgbCheckpointAggregateSpanLimit(point[2]));
+            for (int i = 0; i < point[2]; i++) {
+                scalar.tick();
+                bulk.gpu.tick();
+            }
+            bulk.stat.advancePerformanceNativeCgbCheckpointAggregateSpanTrusted(point[2]);
+            assertEquals(scalar.stat.captureState(), bulk.stat.captureState());
+            assertEquals(scalar.interrupts.captureState(), bulk.interrupts.captureState());
+        }
+    }
+
+    @Test
     public void quietTicksLeaveTimingStaleUntilAStatConsumerNeedsIt() throws Exception {
         Fixture quiet = quietFixture();
         int staleTicksInLine = statTiming(quiet.stat).ticksInLine;

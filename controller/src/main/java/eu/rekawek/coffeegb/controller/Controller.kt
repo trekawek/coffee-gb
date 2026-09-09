@@ -69,6 +69,27 @@ interface Controller : AutoCloseable {
   /** Cancels a started work cycle which stopped before its complete controller tick budget. */
   object PerformanceWorkAbortedEvent : Event
 
+  /** Opt-in continuous measurements under ordinary pacing; independent of benchmark policy. */
+  data class SetPerformanceSoakEnabledEvent(val enabled: Boolean) : Event
+
+  data class PerformanceSoakSampleEvent(
+      val sessionGeneration: Long,
+      val hostTimeNanos: Long,
+      val masterTicks: Long,
+      val nativeFrames: Long,
+      val renderedFrames: Long,
+      val suppressedFrames: Long,
+      val workP95Nanos: Long,
+      val workMaxNanos: Long,
+      val pacingDebt: Boolean,
+      val clockNumerator: Long,
+      val clockDenominator: Long,
+      val hardwareProfile: String,
+      val speed: Int,
+      val executionMode: String,
+      val dmgCompat: Boolean,
+  ) : Event
+
   data class LoadRomEvent
   @JvmOverloads
   constructor(

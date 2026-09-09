@@ -270,6 +270,32 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         return advancePositiveTicks(1);
     }
 
+    /**
+     * Owner-thread master-clock interval before a visible idle outcome or timeout cancellation.
+     * Published backend results are consumed only by explicit polling/serial byte boundaries;
+     * neither this query nor the matching commit observes backend state.
+     */
+    int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0 || !serialByteObserved) {
+            return Math.max(0, requested);
+        }
+        long remaining = idleBoundaryPhaseUnits - idlePhaseUnits;
+        long ticks = remaining / phaseUnitsPerTick;
+        // At an integral clock boundary, a partial parser first exposes IDLE_BOUNDARY_WAIT.
+        // A rational clock may jump straight across that point to the timeout reset instead.
+        if (packetCount > 0 && remaining > 0 && remaining % phaseUnitsPerTick == 0) {
+            ticks--;
+        }
+        return (int) Math.min(requested, ticks);
+    }
+
+    /** Advances only the private idle clock after the owner has established the horizon. */
+    void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks > 0 && serialByteObserved) {
+            idlePhaseUnits += (long) ticks * phaseUnitsPerTick;
+        }
+    }
+
     private boolean advancePositiveTicks(long ticks) {
         if (ticks == 0 || !serialByteObserved) {
             return false;

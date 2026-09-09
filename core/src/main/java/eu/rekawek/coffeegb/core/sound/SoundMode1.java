@@ -134,16 +134,18 @@ public class SoundMode1 extends AbstractSoundMode {
         if (ticks <= 0) {
             return getCurrentOutput();
         }
-        // A delayed sweep calculation can disable CH1 at an exact master tick. This is a rare
-        // control-pipeline event, so retain the scalar channel ordering for this bounded span;
-        // ordinary spans (the hot path) are handled as 2-MHz events below.
+        // A calculation can disable CH1 before the coincident pulse clock. Advance only
+        // the prefix arithmetically, apply that one scalar event, then batch the suffix.
         int calculationAt = frequencySweep.calculationExpiryOffset(ticks);
         if (calculationAt > 0) {
-            int output = getCurrentOutput();
-            for (int i = 0; i < ticks; i++) {
-                output = tick(false);
+            int prefix = calculationAt - 1;
+            if (prefix > 0) {
+                frequencySweep.tickPerformanceSpan(prefix);
+                advancePulseSpan(prefix);
             }
-            return output;
+            int output = tick(false);
+            int suffix = ticks - calculationAt;
+            return suffix == 0 ? output : tickPerformanceSpan(suffix);
         }
 
         frequencySweep.tickPerformanceSpan(ticks);
@@ -163,22 +165,23 @@ public class SoundMode1 extends AbstractSoundMode {
         if (!e) {
             return 0;
         }
-        // The normal tone periods are much longer than one compact window. When no pulse edge
-        // can occur, subtract the whole 2-MHz edge count arithmetically and avoid a loop whose
-        // body would otherwise run once per APU edge for every lazy span.
+        // A constant frequency lets every waveform expiry be counted directly. Preserve the
+        // final reload's timestamp because an immediately following trigger/frequency write
+        // observes its four-dot latch, even when several duty positions were crossed.
         if (freqDivider >= edgeCount) {
             freqDivider -= edgeCount;
         } else {
-            for (int edge = 0; edge < edgeCount; edge++) {
-                if (freqDivider-- == 0) {
-                    justReloadedFromSweep = frequencySweep.consumeFrequencyUpdate();
-                    resetFreqDivider();
-                    i = (i + 1) % 8;
-                    lastOutput = ((getDuty() & (1 << i)) >> i);
-                    sampleSuppressed = false;
-                    reloadedAt = firstEdgePosition + edge * 2;
-                }
-            }
+            int period = getFrequency() * 2;
+            int afterFirst = edgeCount - freqDivider - 1;
+            int reloads = 1 + afterFirst / period;
+            int tail = afterFirst % period;
+            boolean frequencyUpdated = frequencySweep.consumeFrequencyUpdate();
+            justReloadedFromSweep = reloads == 1 && frequencyUpdated;
+            freqDivider = period - 1 - tail;
+            i = (i + reloads) & 7;
+            lastOutput = (getDuty() >>> i) & 1;
+            sampleSuppressed = false;
+            reloadedAt = firstEdgePosition + (edgeCount - tail - 1) * 2;
         }
         if (reloadedAt != 0) {
             justReloadedTicks = Math.max(0, 4 - (ticks - reloadedAt));

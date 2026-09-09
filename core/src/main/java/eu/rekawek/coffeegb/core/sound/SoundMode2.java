@@ -115,21 +115,21 @@ public class SoundMode2 extends AbstractSoundMode {
         if (!channelEnabled || !dacEnabled) {
             return 0;
         }
-        // A normal pulse period is commonly longer than the compact window. A whole quiet
-        // window with no expiry is just a divider subtraction; retain the loop only when an
-        // actual waveform edge can occur inside it.
+        // A constant frequency lets every waveform expiry be counted directly. Preserve the
+        // final reload's timestamp because an immediately following trigger/frequency write
+        // observes its four-dot latch, even when several duty positions were crossed.
         if (freqDivider >= edgeCount) {
             freqDivider -= edgeCount;
         } else {
-            for (int edge = 0; edge < edgeCount; edge++) {
-                if (freqDivider-- == 0) {
-                    resetFreqDivider();
-                    i = (i + 1) % 8;
-                    lastOutput = ((getDuty() & (1 << i)) >> i);
-                    sampleSuppressed = false;
-                    reloadedAt = firstEdgePosition + edge * 2;
-                }
-            }
+            int period = getFrequency() * 2;
+            int afterFirst = edgeCount - freqDivider - 1;
+            int reloads = 1 + afterFirst / period;
+            int tail = afterFirst % period;
+            freqDivider = period - 1 - tail;
+            i = (i + reloads) & 7;
+            lastOutput = (getDuty() >>> i) & 1;
+            sampleSuppressed = false;
+            reloadedAt = firstEdgePosition + (edgeCount - tail - 1) * 2;
         }
         if (reloadedAt != 0) {
             justReloadedTicks = Math.max(0, 4 - (ticks - reloadedAt));

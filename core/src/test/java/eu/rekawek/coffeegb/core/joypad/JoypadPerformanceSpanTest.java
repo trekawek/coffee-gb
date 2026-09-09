@@ -12,6 +12,7 @@ import org.junit.Test;
 import java.util.Random;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
@@ -254,7 +255,7 @@ public class JoypadPerformanceSpanTest {
     }
 
     @Test
-    public void sgbMultiplayerHeldHubInputStaysScalarUntilPollAndReleaseReestablishes() {
+    public void sgbMultiplayerHeldHubInputSettlesAfterPollAndReleaseReestablishes() {
         PlayerInputHub hub = new PlayerInputHub();
         PlayerInputHub.SourceHandle source = hub.openSource(0);
         source.update(java.util.Set.of());
@@ -277,14 +278,14 @@ public class JoypadPerformanceSpanTest {
 
             joypad.tick();
             assertSame(held, joypad.getSampledInput());
-            assertEquals("held Hub input must not enter the SGB performance path", 0,
+            assertEquals("the changed Hub poll must remain scalar", 0,
                     joypad.performanceQuietSpanLimit(54));
             assertFalse(joypad.isPerformanceQuietSpanStillEligible());
             for (int tick = 0; tick < 4 * Joypad.JOYP_CLOCK_TICKS + 2; tick++) {
                 joypad.tick();
             }
-            assertEquals("settled held Hub input must remain scalar", 0,
-                    joypad.performanceSettledHaltSpanLimit(54));
+            assertTrue("settled held Hub input must recover the SGB performance path",
+                    joypad.performanceSettledHaltSpanLimit(54) > 0);
 
             source.update(java.util.Set.of());
             PlayerInputSnapshot releasedAgain = hub.sample();
@@ -495,6 +496,165 @@ public class JoypadPerformanceSpanTest {
                 joypad.performanceSettledHaltSpanLimit(54));
         joypad.tick();
         assertTrue(joypad.performanceSettledHaltSpanLimit(54) > 3);
+    }
+
+    @Test
+    public void everyHeldLegacyMaskAndSelectorRecoversAfterItsFilterSettles() {
+        for (int mask = 1; mask <= JoypadButtonMask.ALL; mask++) {
+            for (int selector : new int[]{0x00, 0x10, 0x20, 0x30}) {
+                for (int phase = 0; phase < Joypad.JOYP_CLOCK_TICKS; phase++) {
+                    InterruptManager scalarInterrupts = new InterruptManager(false);
+                    InterruptManager bulkInterrupts = new InterruptManager(false);
+                    // The reference custom source is sampled every tick and cannot enter any
+                    // cached input shortcut. Only the candidate is eligible for default spans.
+                    Joypad scalar = new Joypad(scalarInterrupts, EventBus.NULL_EVENT_BUS,
+                            false, PlayerInputSnapshot::released);
+                    Joypad bulk = new Joypad(bulkInterrupts, EventBus.NULL_EVENT_BUS, false);
+                    for (int tick = 0; tick < phase; tick++) {
+                        scalar.tick();
+                        bulk.tick();
+                    }
+                    scalar.setByte(0xff00, selector);
+                    bulk.setByte(0xff00, selector);
+                    scalar.setPressedButtons(JoypadButtonMask.toButtons(mask));
+                    bulk.setPressedButtons(JoypadButtonMask.toButtons(mask));
+                    assertEquals(0, bulk.performanceSettledHaltSpanLimit(54));
+                    settleSgbPerformancePair(scalar, bulk);
+                    assertEquals("a held legacy mask must not permanently veto batching", 54,
+                            bulk.performanceSettledHaltSpanLimit(54));
+                    int batched = runHeldInputPair(scalar, bulk, scalarInterrupts,
+                            bulkInterrupts, 512);
+                    assertEquals("settled default input needs no periodic polling", 512, batched);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void heldSgbPlayersAndLegacyUnionRetainExactPollHorizonsAndReleaseFiltering() {
+        int[][] cases = {{1, 0}, {1, 1}, {2, 0}, {3, 0}, {3, 1}, {3, 2}, {3, 3}};
+        for (int[] testCase : cases) {
+            for (int selector : new int[]{0x00, 0x10, 0x20, 0x30}) {
+                try (EventBusImpl scalarBus = new EventBusImpl(null, null, false);
+                     EventBusImpl bulkBus = new EventBusImpl(null, null, false)) {
+                    PlayerInputHub hub = new PlayerInputHub();
+                    PlayerInputHub.SourceHandle[] sources = new PlayerInputHub.SourceHandle[4];
+                    for (int player = 0; player < 4; player++) {
+                        sources[player] = hub.openSource(player);
+                        sources[player].update(JoypadButtonMask.toButtons(0x11 << player));
+                    }
+                    InterruptManager scalarInterrupts = new InterruptManager(false);
+                    InterruptManager bulkInterrupts = new InterruptManager(false);
+                    Joypad scalar = new Joypad(scalarInterrupts, scalarBus, true, hub);
+                    Joypad bulk = new Joypad(bulkInterrupts, bulkBus, true, hub);
+                    scalarBus.post(mltReq(testCase[0]));
+                    bulkBus.post(mltReq(testCase[0]));
+                    for (int player = 0; player < testCase[1]; player++) {
+                        selectNextPlayer(scalar);
+                        selectNextPlayer(bulk);
+                    }
+                    scalar.setByte(0xff00, selector);
+                    bulk.setByte(0xff00, selector);
+                    scalar.setPressedButtons(java.util.Set.of(Button.B, Button.LEFT));
+                    bulk.setPressedButtons(java.util.Set.of(Button.B, Button.LEFT));
+                    settleSgbPerformancePair(scalar, bulk);
+
+                    for (int phase = 0; phase < Joypad.PLAYER_INPUT_HUB_POLL_TICKS; phase++) {
+                        int horizon = hubPollDistance(bulk) - 1;
+                        for (int budget = 1; budget <= 54; budget++) {
+                            assertEquals(Math.min(budget, horizon),
+                                    bulk.performanceSettledHaltSpanLimit(budget));
+                        }
+                        scalar.tick();
+                        bulk.tick();
+                        assertFullJoypadStateEquals(scalar, bulk);
+                    }
+                    int batched = runHeldInputPair(scalar, bulk, scalarInterrupts,
+                            bulkInterrupts, 4_096);
+                    assertTrue("held multiplayer input should batch between its 64-dot polls",
+                            batched > 3_900);
+
+                    for (PlayerInputHub.SourceHandle source : sources) {
+                        source.update(java.util.Set.of());
+                    }
+                    scalar.setPressedButtons(java.util.Set.of());
+                    bulk.setPressedButtons(java.util.Set.of());
+                    assertFalse(bulk.isPerformanceQuietSpanStillEligible());
+                    runHeldInputPair(scalar, bulk, scalarInterrupts, bulkInterrupts, 128);
+                    assertEquals(PlayerInputSnapshot.RELEASED, bulk.getSampledInput());
+                    assertTrue("release must recover the span after filtering",
+                            bulk.performanceSettledHaltSpanLimit(54) > 0);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void restoringHeldInputStateRebuildsEligibilityAndKeepsCurrentPhysicalButtons() {
+        InterruptManager scalarInterrupts = new InterruptManager(false);
+        InterruptManager bulkInterrupts = new InterruptManager(false);
+        Joypad scalar = new Joypad(scalarInterrupts, EventBus.NULL_EVENT_BUS, false,
+                PlayerInputSnapshot::released);
+        Joypad bulk = new Joypad(bulkInterrupts, EventBus.NULL_EVENT_BUS, false);
+        scalar.setPressedButtons(java.util.Set.of(Button.A));
+        bulk.setPressedButtons(java.util.Set.of(Button.A));
+        settleSgbPerformancePair(scalar, bulk);
+        ComponentState<Joypad> scalarState = scalar.captureState();
+        ComponentState<Joypad> bulkState = bulk.captureState();
+        ComponentState<InterruptManager> scalarInterruptState = scalarInterrupts.captureState();
+        ComponentState<InterruptManager> bulkInterruptState = bulkInterrupts.captureState();
+        runHeldInputPair(scalar, bulk, scalarInterrupts, bulkInterrupts, 157);
+        scalar.setPressedButtons(java.util.Set.of(Button.B));
+        bulk.setPressedButtons(java.util.Set.of(Button.B));
+        scalar.restoreState(scalarState);
+        bulk.restoreState(bulkState);
+        scalarInterrupts.restoreState(scalarInterruptState);
+        bulkInterrupts.restoreState(bulkInterruptState);
+        assertFalse("held-state restore must revoke the old cached proof",
+                bulk.isPerformanceQuietSpanStillEligible());
+        assertEquals(java.util.Set.of(Button.B), bulk.getLegacyPressedButtons());
+        int batched = runHeldInputPair(scalar, bulk, scalarInterrupts, bulkInterrupts, 512);
+        assertTrue("the changed physical mask must settle and recover after restore", batched > 490);
+        assertEquals(0x0d, bulk.getByte(0xff00) & 0x0f);
+    }
+
+    private static int runHeldInputPair(Joypad scalar, Joypad bulk,
+                                       InterruptManager scalarInterrupts,
+                                       InterruptManager bulkInterrupts, int ticks) {
+        int batched = 0;
+        for (int elapsed = 0; elapsed < ticks;) {
+            int span = bulk.performanceSettledHaltSpanLimit(Math.min(54, ticks - elapsed));
+            if (span == 0) {
+                scalar.tick();
+                bulk.tick();
+                span = 1;
+            } else {
+                for (int tick = 0; tick < span; tick++) {
+                    scalar.tick();
+                }
+                bulk.tickPerformanceQuietSpanTrusted(span);
+                batched += span;
+            }
+            elapsed += span;
+            assertFullJoypadStateEquals(scalar, bulk);
+            assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+        }
+        return batched;
+    }
+
+    private static void assertFullJoypadStateEquals(Joypad scalar, Joypad bulk) {
+        assertEquivalent(scalar, bulk);
+        ComponentState<Joypad> expected = scalar.captureState();
+        ComponentState<Joypad> actual = bulk.captureState();
+        for (var field : expected.getClass().getRecordComponents()) {
+            Object expectedValue = stateField(expected, field.getName());
+            Object actualValue = stateField(actual, field.getName());
+            if (expectedValue instanceof int[] expectedArray) {
+                assertArrayEquals(field.getName(), expectedArray, (int[]) actualValue);
+            } else {
+                assertEquals(field.getName(), expectedValue, actualValue);
+            }
+        }
     }
 
     private static void assertEquivalent(Joypad scalar, Joypad bulk) {

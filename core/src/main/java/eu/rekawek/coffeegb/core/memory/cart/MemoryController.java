@@ -7,6 +7,20 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import java.util.Objects;
 
 public interface MemoryController extends AddressSpace, StatefulComponent<MemoryController> {
+    /** True only when ROM-window reads have no emulated side effects under a bounded lease. */
+    default boolean isPerformanceRomPeekSafe() {
+        return false;
+    }
+
+    /**
+     * Opt-in for exact CPU data accesses to A000-BFFF during a bounded epoch. Implementations
+     * must preserve ordinary RAM masks/dirty state and reject clock-visible device windows.
+     * ROM/mapper-control writes remain terminal, so the selected data window cannot change.
+     */
+    default boolean isPerformanceRamAccessSafe() {
+        return false;
+    }
+
     /** Whether this mapper has hardware that must be advanced by every master tick. */
     default boolean isClocked() {
         return false;
@@ -20,8 +34,8 @@ public interface MemoryController extends AddressSpace, StatefulComponent<Memory
      * scalar clock path.  Clocked controllers must opt in explicitly; this conservative default
      * keeps newly added mapper hardware on the exact scheduler until its clock contract is known.
      * Opting in also certifies that CPU ROM reads commute with the deferred arithmetic clock
-     * advance; cartridge-control, external-RAM, and RTC accesses are pre-fenced or terminate
-     * after an exact committed clock prefix.
+     * advance. Device-window and cartridge-control accesses are pre-fenced or terminate after
+     * an exact committed clock prefix; ordinary RAM data requires its separate access proof.
      */
     default int performanceQuietSpanLimit(int requested) {
         if (requested <= 0) {

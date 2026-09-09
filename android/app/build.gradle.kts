@@ -235,6 +235,7 @@ dependencies {
   androidTestImplementation("androidx.test:core:1.7.0")
   androidTestImplementation("androidx.test.ext:junit:1.3.0")
   androidTestImplementation("androidx.test:runner:1.7.0")
+  testImplementation("org.json:json:20240303")
 }
 
 // AGP creates variant configurations after this script is evaluated. Keep the lookup lazy so the

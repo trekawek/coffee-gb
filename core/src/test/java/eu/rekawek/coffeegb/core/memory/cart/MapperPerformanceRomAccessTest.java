@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 public class MapperPerformanceRomAccessTest {
 
@@ -15,6 +16,9 @@ public class MapperPerformanceRomAccessTest {
 
         assertEquals(-1, access.physicalOffset(0x1234));
         assertEquals(0xff, access.readPhysicalByte(0x1234));
+        assertEquals(-1, access.peekCpuByte(0x1234));
+        assertEquals("unknown lookahead must not invoke the mapper", 0, mapper.reads);
+        assertFalse(access.canAccessRam());
         assertEquals(0x34, access.readCpuByte(0x1234));
         assertEquals(0x35, access.readCpuByte(0x1234));
         assertEquals(2, mapper.reads);

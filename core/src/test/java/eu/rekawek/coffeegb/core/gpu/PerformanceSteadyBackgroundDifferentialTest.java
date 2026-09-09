@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.Ram;
+import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.sgb.Commands;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
@@ -190,6 +191,140 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 }
             }
         }
+    }
+
+    @Test
+    public void nativeCgbDoubleSpeedOamDmaPreservesEveryFineScrollAndPartialReplay()
+            throws Exception {
+        for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
+            for (int scx = 0; scx < 8; scx++) {
+                for (int tail : new int[]{1, 2, 7, 63, 169}) {
+                    try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, scx);
+                            Session performance = new Session(ExecutionMode.PERFORMANCE, profile, scx)) {
+                        enableDoubleSpeed(accuracy);
+                        enableDoubleSpeed(performance);
+                        enterSteadyLine(accuracy);
+                        enterSteadyLine(performance);
+                        accuracy.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+                        performance.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+                        tickPair(accuracy, performance);
+                        assertTrue("exact x2 cursor must arm while OAM DMA starts",
+                                lazyCursor(performance.gpu));
+                        assertTrue(outputCursor(performance.gpu));
+                        for (int i = 1; i < tail; i++) tickPair(accuracy, performance);
+                        if (tail < 160) {
+                            assertTrue("OAM ownership must not discard the background cursor",
+                                    lazyCursor(performance.gpu));
+                        }
+                        assertSameState(accuracy, performance,
+                                profile.id() + " x2 OAM acquisition scx=" + scx + " tail=" + tail);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void ownedOamCopyCanAdvanceExactBackgroundAsOnePpuSpan() throws Exception {
+        for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
+            for (int scx = 0; scx < 8; scx++) {
+                for (int tail : new int[]{1, 2, 7, 63, 160}) {
+                    try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, scx);
+                            Session performance = new Session(ExecutionMode.PERFORMANCE, profile, scx)) {
+                        enableDoubleSpeed(accuracy);
+                        enableDoubleSpeed(performance);
+                        enterSteadyLine(accuracy);
+                        enterSteadyLine(performance);
+                        accuracy.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+                        performance.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+                        // Ownership acquisition and its persistent reader-source update remain
+                        // scalar. The following interval excludes both acquisition and release.
+                        for (int i = 0; i < 5; i++) tickPair(accuracy, performance);
+                        assertTrue(lazyCursor(performance.gpu));
+                        performance.gpu.setPerformanceScanlineEnabled(true);
+                        int span = Math.min(tail, performance.gpu
+                                .performanceNativeCgbOamReplayQuietSpanLimit(tail));
+                        assertEquals("owned background interval must admit this prefix", tail, span);
+                        Dma scalarDma = dmaForFixture(accuracy.gameboy);
+                        Dma bulkDma = dmaForFixture(performance.gameboy);
+                        for (int i = 0; i < span; i++) {
+                            scalarDma.tick();
+                            accuracy.gpu.tick();
+                            bulkDma.tick();
+                        }
+                        performance.gpu.advancePerformanceNativeCgbOamReplayQuietSpanTrusted(span);
+                        assertTrue("bulk span retains exact deferred replay",
+                                lazyCursor(performance.gpu));
+                        assertSameState(accuracy, performance,
+                                profile.id() + " owned OAM exact span scx=" + scx + " tail=" + tail);
+                        // Captures above materialize every FIFO, fetcher, reader and output-ring
+                        // field. A write after that boundary must continue from the same state.
+                        accuracy.gpu.setByte(0xff43, scx ^ 7);
+                        performance.gpu.setByte(0xff43, scx ^ 7);
+                        for (int i = 0; i < 200; i++) {
+                            scalarDma.tick();
+                            accuracy.gpu.tick();
+                            bulkDma.tick();
+                            performance.gpu.tick();
+                        }
+                        assertSameState(accuracy, performance,
+                                profile.id() + " owned OAM span write continuation");
+                    }
+                }
+            }
+        }
+    }
+
+    private static Dma dmaForFixture(Gameboy gameboy) throws Exception {
+        var field = Gameboy.class.getDeclaredField("dma");
+        field.setAccessible(true);
+        return (Dma) field.get(gameboy);
+    }
+
+    @Test
+    public void nativeCgbDoubleSpeedOamReleaseReplaysFullOutputAndReaderState()
+            throws Exception {
+        for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
+            try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, 5);
+                    Session performance = new Session(ExecutionMode.PERFORMANCE, profile, 5)) {
+                enableDoubleSpeed(accuracy);
+                enableDoubleSpeed(performance);
+                while (accuracy.gpu.getLine() != 0 || accuracy.gpu.getTicksInLine() != 300) {
+                    tickPair(accuracy, performance);
+                }
+                accuracy.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+                performance.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+                enterSteadyLine(accuracy);
+                enterSteadyLine(performance);
+                tickPair(accuracy, performance);
+                assertTrue(lazyCursor(performance.gpu));
+                while (accuracy.gpu.getTicksInLine() < 200) tickPair(accuracy, performance);
+                assertFalse("fixture crosses the release edge inside mode 3",
+                        oamDmaActive(performance.gameboy));
+                assertTrue("release must retain exact background replay", lazyCursor(performance.gpu));
+                while (accuracy.gpu.getLine() != 2) tickPair(accuracy, performance);
+                assertSameState(accuracy, performance, profile.id() + " x2 OAM release and next search");
+                for (int i = 0; i < 70_224; i++) tickPair(accuracy, performance);
+                assertEquals(accuracy.events.frameCount, performance.events.frameCount);
+                assertEquals(accuracy.events.frameHash, performance.events.frameHash);
+                assertSameState(accuracy, performance, profile.id() + " x2 OAM full frame");
+            }
+        }
+    }
+
+    private static boolean oamDmaActive(Gameboy gameboy) throws Exception {
+        var field = Gameboy.class.getDeclaredField("dma");
+        field.setAccessible(true);
+        return ((eu.rekawek.coffeegb.core.memory.Dma) field.get(gameboy)).isTransferInProgress();
+    }
+
+    private static void enableDoubleSpeed(Session session) throws Exception {
+        var speed = session.gameboy.getSpeedMode();
+        speed.setByte(0xff4d, 1);
+        var switchClock = speed.getClass().getDeclaredMethod("onStop");
+        switchClock.setAccessible(true);
+        assertTrue((boolean) switchClock.invoke(speed));
+        assertEquals(2, speed.getSpeedMode());
     }
 
     @Test

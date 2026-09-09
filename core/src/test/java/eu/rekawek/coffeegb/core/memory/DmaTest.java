@@ -110,6 +110,46 @@ public class DmaTest {
     }
 
     @Test
+    public void detailedCpuReplayBorrowsOnlyNativeDoubleSpeedWramSourceInteriors() {
+        for (int page = 0; page < 256; page++) {
+            Fixture fixture = new Fixture(true, 2);
+            fixture.dma.setByte(0xff46, page);
+            assertEquals(0, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+            fixture.tick(4);
+            assertEquals("source page " + page, page >= 0xc0 && page < 0xe0 ? 54 : 0,
+                    fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        }
+        for (Fixture fixture : new Fixture[]{new Fixture(false, 1), new Fixture(true, 1)}) {
+            fixture.dma.setByte(0xff46, 0xc0);
+            fixture.tick(8);
+            assertEquals(0, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        }
+    }
+
+    @Test
+    public void detailedReplayStopsAtReleaseAndCannotSurvivePauseRestartOrBusCollision() {
+        Fixture fixture = new Fixture(true, 2);
+        fixture.dma.setByte(0xff46, 0xc0);
+        fixture.tick(4);
+        var interior = fixture.dma.captureState();
+        fixture.tick(317);
+        assertEquals(1, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        fixture.tick(1);
+        assertEquals(0, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        fixture.dma.restoreState(interior);
+        assertEquals(54, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        fixture.dma.tick(true);
+        assertEquals(0, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        fixture.dma.restoreState(interior);
+        fixture.dma.setByte(0xff46, 0xc0);
+        fixture.tick(4);
+        assertEquals(0, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+        fixture.dma.restoreState(interior);
+        fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0xc000, 0x44));
+        assertEquals(0, fixture.dma.performanceNativeCgbWramReplaySpanLimit(54));
+    }
+
+    @Test
     public void completedDmaRequiresExactlyOneOwnershipDrainTick() {
         Fixture fixture = new Fixture();
         fixture.start();

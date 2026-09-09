@@ -428,6 +428,14 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
                 & ~cpuPhasedPpuInterrupts & PPU_INTERRUPT_MASK) != 0;
     }
 
+    public boolean performanceLcdcWriteReplayInputsStable() {
+        return ((cpuPhasedPpuInterrupts | cpuPhasedMode2Interrupts
+                | cpuFirstLineMode2Interrupts | cpuBlockedInterrupts
+                | haltBlockedInterrupts | cpuInstructionBlockedInterrupts)
+                & PPU_INTERRUPT_MASK) == 0
+                && !hasPendingCpuReadPhase() && !hasPpuTickSignals();
+    }
+
     public boolean isPhasedMode2InterruptRequested() {
         return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
                 & cpuPhasedMode2Interrupts) != 0;

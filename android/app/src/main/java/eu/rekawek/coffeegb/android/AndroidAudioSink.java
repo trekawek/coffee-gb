@@ -151,6 +151,15 @@ final class AndroidAudioSink implements AutoCloseable {
         }
     }
 
+    /**
+     * Ordinary-soak observation captured away from the controller and audio-consumer threads.
+     * The timestamp fields are deliberately separate from the controller event timestamp.
+     */
+    record SoakDiagnosticSnapshot(Stats stats, long requestedAtNanos, long capturedAtNanos,
+                                  long completedAtNanos, long routeGeneration,
+                                  boolean available, boolean coherent) {
+    }
+
     /** Absolute audio counters captured at the host ARM boundary; no queue mutation occurs. */
     record AudioBaseline(long inputEvents, long inputFrames, long enqueuedBytes, long enqueuedFrames,
                          long writtenBytes, long writtenFrames, long writeFailures,
@@ -499,6 +508,108 @@ final class AndroidAudioSink implements AutoCloseable {
                 active == null ? 0 : active.queuedFrames(), false, false, muted, volume, 0L,
                 -1L, -1, -1, true, active == null ? 0 : active.capacityFrames(),
                 active == null ? 0 : active.maximumFrameBytes());
+    }
+
+    /**
+     * Captures one ordinary-soak observation without holding the PCM ledger monitor across host
+     * calls. Benchmark arm baselines continue to use {@link #benchmarkBaseline()} unchanged.
+     */
+    SoakDiagnosticSnapshot snapshotForSoak(long requestedAtNanos) {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return new SoakDiagnosticSnapshot(null, requestedAtNanos, -1L, -1L,
+                    -1L, false, false);
+        }
+        SnapshotInputs inputs;
+        try {
+            synchronized (pcmAccounting) {
+                BoundedPcmQueue active = queue;
+                inputs = new SnapshotInputs(
+                        routeGeneration.get(), activeOutput, active, pcmAccounting.snapshot(),
+                        reopenRequested.get(), pauseFlushGeneration.get(),
+                        pcmPolicyGeneration.get(),
+                        sampleRate, pcmQueueEmptyPolls.get(), restarts.get(), paused, running.get(),
+                        minimumBufferBytes, configuredBufferBytes, actualBufferBytes, outputOpen,
+                        outputPlaying, muted, volume, effectiveBufferFrames,
+                        outputStartThresholdFrames, active == null ? 0L : active.overruns());
+            }
+            // These reads may enter AudioTrack and the Android media service. They are intentionally
+            // outside pcmAccounting so neither the producer nor the consumer waits on the service.
+            PlaybackEvidence evidence = readSoakPlaybackEvidence(inputs.output());
+            long capturedAtNanos = evidence.playbackCapturedAtNanos();
+            long completedAtNanos = System.nanoTime();
+            boolean coherent = routeGeneration.get() == inputs.routeGeneration()
+                    && activeOutput == inputs.output() && queue == inputs.queue()
+                    && !inputs.reopenPending()
+                    && reopenRequested.get() == inputs.reopenPending()
+                    && pauseFlushGeneration.get() == inputs.pauseFlushGeneration()
+                    && pcmPolicyGeneration.get() == inputs.pcmPolicyGeneration()
+                    && running.get() == inputs.running() && paused == inputs.paused()
+                    && outputOpen == inputs.outputOpen() && outputPlaying == inputs.outputPlaying();
+            Stats stats = soakStats(inputs, evidence);
+            return new SoakDiagnosticSnapshot(stats, requestedAtNanos, capturedAtNanos,
+                    completedAtNanos, inputs.routeGeneration(), evidence.available(), coherent);
+        } catch (RuntimeException unavailable) {
+            return new SoakDiagnosticSnapshot(null, requestedAtNanos, -1L, -1L,
+                    -1L, false, false);
+        }
+    }
+
+    private Stats soakStats(SnapshotInputs inputs, PlaybackEvidence evidence) {
+        PcmSnapshot snapshot = inputs.pcmSnapshot();
+        return new Stats(inputs.sampleRate(), inputs.overruns(), inputs.pcmQueueEmptyPolls(),
+                evidence.outputUnderruns(), inputs.restarts(), inputs.paused(), inputs.running(),
+                inputs.minimumBufferBytes(), inputs.configuredBufferBytes(), inputs.actualBufferBytes(),
+                snapshot.inputEvents(), snapshot.inputFrames(), snapshot.enqueuedBytes(),
+                snapshot.enqueuedFrames(), snapshot.writtenBytes(), snapshot.writtenFrames(),
+                snapshot.writeFailures(), snapshot.discardedBytes(), snapshot.pendingBytes(),
+                -1L, -1, inputs.outputOpen(),
+                evidence.outputPlaying(), inputs.muted(), inputs.volume(), snapshot.routeFailures(),
+                evidence.playbackPositionFrames(), evidence.systemVolume(), evidence.systemVolumeMax(),
+                evidence.systemMusicMuted(), inputs.queue() == null ? 0 : inputs.queue().capacityFrames(),
+                inputs.queue() == null ? 0 : inputs.queue().maximumFrameBytes(),
+                inputs.output() == null ? 0L
+                        : Integer.toUnsignedLong(System.identityHashCode(inputs.output())),
+                inputs.queue() == null ? 0L
+                        : Integer.toUnsignedLong(System.identityHashCode(inputs.queue())),
+                snapshot.pcmQueueEmptyEpisodes(), snapshot.pcmQueueEmptyLowRunwayPolls(),
+                snapshot.pcmQueueEmptyUnknownRunwayPolls(),
+                snapshot.pcmQueueEmptyTrackUnderrunEdges(), inputs.effectiveBufferFrames(),
+                inputs.outputStartThresholdFrames());
+    }
+
+    private PlaybackEvidence readSoakPlaybackEvidence(Output output) {
+        long playbackPosition = -1L;
+        long playbackCapturedAtNanos = -1L;
+        long underruns = -1L;
+        boolean playing = false;
+        boolean outputAvailable = output != null;
+        if (output != null) {
+            try {
+                playbackPosition = output.playbackPositionFrames();
+                playbackCapturedAtNanos = System.nanoTime();
+                underruns = output.outputUnderrunCount();
+                playing = output.isPlaying();
+                outputAvailable = playbackPosition >= 0L && underruns >= 0L;
+            } catch (RuntimeException unavailable) {
+                outputAvailable = false;
+            }
+        }
+        int volume = -1;
+        int maximumVolume = -1;
+        boolean muted = true;
+        boolean systemAvailable = audioManager != null;
+        if (audioManager != null) {
+            try {
+                volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                muted = android.os.Build.VERSION.SDK_INT >= 23
+                        && audioManager.isStreamMute(AudioManager.STREAM_MUSIC);
+            } catch (RuntimeException unavailable) {
+                systemAvailable = false;
+            }
+        }
+        return new PlaybackEvidence(playbackPosition, playbackCapturedAtNanos, underruns, playing,
+                volume, maximumVolume, muted, outputAvailable && systemAvailable);
     }
 
     private Stats diagnosticStats(BoundedPcmQueue active) {
@@ -1605,6 +1716,24 @@ final class AndroidAudioSink implements AutoCloseable {
         } catch (RuntimeException ignored) {
             // Release must not retain the service because a route vanished during teardown.
         }
+    }
+
+    private record SnapshotInputs(long routeGeneration, Output output, BoundedPcmQueue queue,
+                                  PcmSnapshot pcmSnapshot, boolean reopenPending,
+                                  long pauseFlushGeneration, long pcmPolicyGeneration,
+                                  int sampleRate,
+                                  long pcmQueueEmptyPolls, long restarts, boolean paused,
+                                  boolean running, int minimumBufferBytes,
+                                  int configuredBufferBytes, int actualBufferBytes,
+                                  boolean outputOpen, boolean outputPlaying, boolean muted,
+                                  int volume, int effectiveBufferFrames,
+                                  int outputStartThresholdFrames, long overruns) {
+    }
+
+    private record PlaybackEvidence(long playbackPositionFrames, long playbackCapturedAtNanos,
+                                    long outputUnderruns, boolean outputPlaying, int systemVolume,
+                                    int systemVolumeMax, boolean systemMusicMuted,
+                                    boolean available) {
     }
 
     private interface PcmAccounting {

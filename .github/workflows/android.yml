@@ -30,6 +30,7 @@ jobs:
         run: |
           bash ./upload_to_android-test.sh
           sh ./android/benchmark-device-matrix-test.sh
+          python3 -m unittest discover -s android -p test_performance_soak.py -v
       - name: Test, lint, and assemble debug and R8 release APKs
         run: >-
           ./android/gradlew -p android --no-daemon

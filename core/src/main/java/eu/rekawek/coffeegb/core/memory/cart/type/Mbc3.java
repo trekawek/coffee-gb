@@ -19,6 +19,18 @@ import java.util.Arrays;
 
 public class Mbc3 implements MemoryController {
 
+    @Override
+    public boolean isPerformanceRamAccessSafe() {
+        return getClass() == Mbc3.class && debugHooks == null
+                && (!ramEnabled || isRamBankSelected());
+    }
+
+    @Override
+    public boolean isPerformanceRomPeekSafe() {
+        // Subclasses may transform reads or implement handshakes; they must opt in separately.
+        return getClass() == Mbc3.class;
+    }
+
     private final int[] cartridge;
 
     private final int[] ram;

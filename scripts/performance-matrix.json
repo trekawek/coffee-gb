@@ -1,0 +1,183 @@
+{
+  "schema": "coffee-gb-authored-performance-matrix-v1",
+  "id": "coverage-39-v1",
+  "description": "Pinned original 39 authored scenario/profile cases. This is a discovery matrix, not a hardware or sustained Android acceptance gate.",
+  "protocol": {
+    "trials": 3,
+    "warmup_ticks": 2097152,
+    "measured_ticks": 8388608,
+    "shuffle_seed": 80571,
+    "diagnostic_window_ticks": 4194304,
+    "bootstrap": "SKIP",
+    "execution": "PERFORMANCE",
+    "rtc_millis": 0,
+    "battery_persistence": false,
+    "held_input": [
+      "A",
+      "RIGHT"
+    ],
+    "jvm_flags": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:+UseSerialGC"
+    ]
+  },
+  "cases": [
+    {
+      "scenario": "CPU",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "CGB0"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "CGB0_COMPAT"
+    },
+    {
+      "scenario": "CPU",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "MASKED_IRQ",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "MASKED_IRQ",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "MASKED_IRQ",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "STAT_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "STAT_POLL",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "STAT_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "STAT_POLL",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "LY_POLL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "LY_POLL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "LYC_WRITES",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "RASTER_WRITES",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "LCDC_WRITES",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "LCDC_WRITES",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "HBLANK_DMA",
+      "profile": "CGB"
+    },
+    {
+      "scenario": "HBLANK_DMA",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "LCD_OFF",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "LCD_OFF",
+      "profile": "CGB_COMPAT"
+    },
+    {
+      "scenario": "LCD_OFF_HALT",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "LCD_OFF_HALT",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "LCD_OFF_HALT",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "SERIAL",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "SERIAL",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "SRAM",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "SRAM",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "TIMER",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "TIMER",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "AUDIO",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "AUDIO",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "OAM_DMA",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "OAM_DMA",
+      "profile": "CGB_X2"
+    },
+    {
+      "scenario": "HELD_INPUT",
+      "profile": "DMG"
+    },
+    {
+      "scenario": "HELD_INPUT",
+      "profile": "SGB"
+    },
+    {
+      "scenario": "SPEED_SWITCH",
+      "profile": "CGB"
+    }
+  ]
+}

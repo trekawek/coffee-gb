@@ -7,6 +7,20 @@ import java.util.function.IntUnaryOperator;
 
 public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
 
+    int PERFORMANCE_CLOCK_IDLE = 1;
+    int PERFORMANCE_CLOCK_INTERNAL = 2;
+    int PERFORMANCE_CLOCK_EXTERNAL_WAIT = 4;
+
+    /**
+     * Metadata for opt-in diagnostics, never an admission proof. Bits describe the endpoint's
+     * advertised clock contracts even when an actual event makes their current horizon zero.
+     * A missing bit denotes an unbounded or unadvertised contract for that port state. The
+     * event-horizon methods remain authoritative; this query must not poll or advance a device.
+     */
+    default int performanceClockCapabilities() {
+        return 0;
+    }
+
     /** Stable zero-based player index for an in-process link, or {@code -1}. */
     default int linkPlayerIndex() {
         return -1;
@@ -39,6 +53,32 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
      */
     default int performanceExternalClockWaitSpanLimit(int requested) {
         return 0;
+    }
+
+    /**
+     * Endpoint master-clock horizon while the Game Boy supplies the serial clock. The port keeps
+     * every falling-bit exchange scalar, so this capability only omits {@link #tick()} calls
+     * between those edges. Unlike the external-clock contract, it makes no promise about
+     * {@link #recvBit()}, which is not called in this state. The input pin must remain unchanged
+     * and no callback may become due inside the span. Unknown endpoints stay scalar; endpoints
+     * already advertising an ordinary quiet horizon satisfy this narrower contract too.
+     */
+    default int performanceInternalClockSpanLimit(int requested) {
+        return performanceQuietSpanLimit(requested);
+    }
+
+    /**
+     * Stable serial-input pin horizon for RP bit 4. SerialPort independently bounds and advances
+     * the endpoint's clock; this read-only capability promises that the exposed pin does not
+     * change in the interval. It does not permit omitting recvBit or other serial callbacks.
+     */
+    default int performanceInputPinSpanLimit(int requested) {
+        return performanceQuietSpanLimit(requested);
+    }
+
+    /** Advances a preflighted endpoint interval between Game Boy supplied clock edges. */
+    default void tickPerformanceInternalClockSpanTrusted(int ticks) {
+        tickPerformanceQuietSpanTrusted(ticks);
     }
 
     /** Returns whether the endpoint is quiet for the requested PERFORMANCE span. */
@@ -175,6 +215,12 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
                 @Override
                 public int performanceQuietSpanLimit(int requested) {
                     return requested > 0 ? requested : 0;
+                }
+
+                @Override
+                public int performanceClockCapabilities() {
+                    return PERFORMANCE_CLOCK_IDLE | PERFORMANCE_CLOCK_INTERNAL
+                            | PERFORMANCE_CLOCK_EXTERNAL_WAIT;
                 }
 
                 @Override

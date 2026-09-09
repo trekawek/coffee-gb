@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.memory.PerformanceHramReadAccess;
 import eu.rekawek.coffeegb.core.memory.PerformanceRomAccessProvider;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -78,12 +79,30 @@ public class Genie implements AddressSpace, StatefulComponent<Genie>, Performanc
     }
 
     @Override
+    public PerformanceRomAccess acquirePerformanceDetailedPpuRomAccess() {
+        if (patchesPresent
+                || !(delegate instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceDetailedPpuRomAccess();
+    }
+
+    @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         if (patchesPresent
                 || !(delegate instanceof PerformanceRomAccessProvider provider)) {
             return null;
         }
         return provider.acquirePerformanceRomAccess();
+    }
+
+    @Override
+    public PerformanceHramReadAccess acquirePerformanceDetailedPpuHramReadAccess(int requestedMasterTicks) {
+        if (getClass() != Genie.class || patchesPresent
+                || !(delegate instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceDetailedPpuHramReadAccess(requestedMasterTicks);
     }
 
     private int applyPatches(int address, int value) {

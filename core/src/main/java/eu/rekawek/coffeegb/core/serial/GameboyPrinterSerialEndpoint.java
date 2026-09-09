@@ -93,6 +93,22 @@ public class GameboyPrinterSerialEndpoint implements SerialEndpoint {
         this.callback = callback;
     }
 
+    /** Printer commands and callbacks advance only at supplied byte/bit boundaries. */
+    @Override
+    public int performanceQuietSpanLimit(int requested) {
+        return Math.max(0, requested);
+    }
+
+    @Override
+    public int performanceClockCapabilities() {
+        return PERFORMANCE_CLOCK_IDLE | PERFORMANCE_CLOCK_INTERNAL | PERFORMANCE_CLOCK_EXTERNAL_WAIT;
+    }
+
+    @Override
+    public int performanceExternalClockWaitSpanLimit(int requested) {
+        return Math.max(0, requested);
+    }
+
     @Override
     public void setSb(int sb) {
         this.sb = sb & 0xff;

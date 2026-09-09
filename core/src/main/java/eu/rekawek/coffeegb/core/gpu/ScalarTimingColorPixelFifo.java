@@ -37,6 +37,28 @@ public final class ScalarTimingColorPixelFifo implements PixelFifo {
         enqueuePending();
     }
 
+    /** Exact structural entry point for a sprite-free eight-dot background fetch. */
+    boolean isSteadyBackgroundTileEntry() {
+        return background.size() == 8 && clearedBackground.size() == 0 && spriteFifo.isEmpty()
+                && linePixels <= 152;
+    }
+
+    /**
+     * Same output-before-pop sequence as count scalar dots, without payload publication.
+     * Used in 4/2/2 groups so the fetcher's map/D0/D1 reads retain their original clocks.
+     */
+    void advanceSteadyBackgroundPixelsTrusted(int count) {
+        if (count <= 0 || count > 8 || linePixels + count > 160) {
+            throw new IllegalStateException("Invalid timing background pixel span");
+        }
+        background.dequeueSpanTrusted(count);
+        spriteFifo.popEmptySpanTrusted(count);
+        outputTicks += count;
+        linePixels += count;
+        delayHead = (delayHead + delaySize + count - 1) & 7;
+        delaySize = 1;
+    }
+
     @Override
     public void putClearedBgToScreen() {
         linePixels++;

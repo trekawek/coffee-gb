@@ -59,7 +59,7 @@ object ReplayCompatibility {
       replayIdentity: ReplayIdentity,
       configuration: Gameboy.GameboyConfiguration,
   ) {
-    if (replayIdentity.replaySemanticsVersion != ReplayIdentity.REPLAY_SEMANTICS_VERSION) {
+    if (!ReplayIdentity.isSupportedReplaySemantics(replayIdentity.replaySemanticsVersion)) {
       incompatible(
           ReplayCompatibilityReason.REPLAY_SEMANTICS_MISMATCH,
           "Replay semantics version is not supported",

@@ -101,7 +101,7 @@ class ReplayPlayer private constructor(
     while (nextCheckpointIndex < replay.checkpoints.size &&
         replay.checkpoints[nextCheckpointIndex].tick == executedTick) {
       val expected = replay.checkpoints[nextCheckpointIndex++]
-      val actual = machine.hashes()
+      val actual = machine.hashes(replay.identity.replaySemanticsVersion)
       if (actual != expected.hashes) {
         val divergence =
             ReplayDivergence(

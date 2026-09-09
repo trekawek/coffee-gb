@@ -892,10 +892,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 || nextLycIrqEvent == lycIrqClock + 1
                 || pendingLycWriteIrq == lycIrqClock + 1
                 || pendingLycComparatorIrq == lycIrqClock + 1
-                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingModeRegisterSpanLimit(1) < 1
                 || pendingCgbMode2PublicationClock == lycIrqClock + 1
                 || pendingCgbMode0Interrupt
                 || interruptManager.hasPpuTickSignals()) {
@@ -912,10 +909,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     public boolean canTickPerformanceQuietSpan(int ticks) {
         if (ticks <= 0 || statEvaluationDirty || gpu.isStatEventCheckpointForTick()
                 || gpu.isStatEventCheckpointWithin(ticks)
-                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingModeRegisterSpanLimit(ticks) < ticks
                 || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
                 || pendingCgbMode0Interrupt
                 || interruptManager.hasPpuTickSignals()) {
@@ -950,16 +944,12 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     /** Same checkpoint walk for settled HALT packets, without the ordinary three-dot cap. */
     public int performanceSettledHaltSpanLimit(int requested) {
         if (requested <= 0 || statEvaluationDirty || gpu.isStatEventCheckpointForTick()
-                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
                 || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
                 || pendingCgbMode0Interrupt
                 || interruptManager.hasPpuTickSignals()) {
             return 0;
         }
-        int limit = requested;
+        int limit = pendingModeRegisterSpanLimit(requested);
         int gpuDistance = gpu.performanceStatCheckpointDistance();
         if (gpuDistance != Integer.MAX_VALUE) {
             limit = Math.min(limit, gpuDistance - 1);
@@ -993,21 +983,53 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     }
 
     /**
+     * Stable CPU read lease for both FF44 (mask value 1) and FF41 (mask value 2). A positive
+     * result permits their canonical reads inside that many master dots of an ordinary epoch.
+     * The CPU must retain all write/lifecycle fences, and replay epochs must not use this lease.
+     */
+    public int performanceStableReadSpanLimit(int requested) {
+        int limit = gpu.performanceStableReadSpanLimit(requested);
+        return limit > 0 ? performanceSettledHaltSpanLimit(limit) : 0;
+    }
+
+    /**
+     * Completes the CPU read proof after the owner has already established STAT's invariant
+     * horizon for this interval. The same-state settled-STAT or SGB LCD-off preflight must cover
+     * {@code requested}; no CPU, GPU, register or interrupt mutation may intervene. The GPU read
+     * mux still needs its separate proof, but checking STAT's pending captures and checkpoints
+     * again cannot further constrain the already-admitted span. Replay plans must not use this.
+     */
+    public int performanceStableReadSpanLimitAfterStatPreflight(int requested) {
+        return gpu.performanceStableReadSpanLimit(requested);
+    }
+
+    /** Same established checkpoint rails with every STAT source disabled. LCD-on writes cannot enable one. */
+    public int performanceNativeCgbLcdcWriteReplaySpanLimit(int requested) {
+        return enableBits == 0 && !intLine && !intCoincidence && !coincidence
+                ? performanceNativeCgbCheckpointReplaySpanLimit(requested, 152) : 0;
+    }
+
+    /**
      * Returns a bounded native-CGB x2 span for which the CPU may run against its frozen
      * peripheral view while the owner replays every PPU/STAT dot exactly.
      *
      * <p>This is deliberately narrower than the scalar evaluator: only a fully settled,
-     * LYC-only source with mutually consistent register copies is admitted. The equality line,
+     * disabled or LYC-only sources with mutually consistent register copies are admitted. The
+     * equality line,
      * its preceding comparator line, and all frame/VBlank handoffs stay scalar. Callers must
      * additionally fence every decoded memory boundary (including FF41/FF44/FF0F) and HALT.</p>
      */
     public int performanceNativeCgbCheckpointReplaySpanLimit(int requested) {
+        return performanceNativeCgbCheckpointReplaySpanLimit(requested, 142);
+    }
+
+    private int performanceNativeCgbCheckpointReplaySpanLimit(int requested, int lastLine) {
         if (requested <= 0 || !gbc || statEvaluationDirty
-                || enableBits != 0x40
-                || lycIrqStatSource != 0x40
-                || lycIrqStatLatch != 0x40
-                || modeIrqStatLatch != 0x40
-                || mode0IrqStatLatch != 0x40
+                || (enableBits & ~0x40) != 0
+                || lycIrqStatSource != enableBits
+                || lycIrqStatLatch != enableBits
+                || modeIrqStatLatch != enableBits
+                || mode0IrqStatLatch != enableBits
                 || lycIrqValueSource != lycIrqValueLatch
                 || lycIrqValueSource != modeIrqLycLatch
                 || lycIrqValueSource != mode0IrqLycLatch
@@ -1032,7 +1054,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         int currentLine = timing.line;
         int lyc = lycIrqValueSource;
         if (!timing.nativeDoubleSpeed || !timing.lcdEnabled || timing.firstLine
-                || currentLine < 1 || currentLine > 142
+                || currentLine < 1 || currentLine > lastLine
                 || currentLine == lyc || currentLine + 1 == lyc) {
             return 0;
         }
@@ -1176,10 +1198,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     private boolean canTickPerformanceQuietSpanStateOnly(int ticks) {
         if (ticks <= 0 || statEvaluationDirty
-                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
-                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingModeRegisterSpanLimit(ticks) < ticks
                 || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
                 || pendingCgbMode0Interrupt
                 || interruptManager.hasPpuTickSignals()) {
@@ -1190,6 +1209,54 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 && (pendingLycWriteIrq == NO_LYC_IRQ_EVENT || pendingLycWriteIrq > endClock)
                 && (pendingLycComparatorIrq == NO_LYC_IRQ_EVENT
                 || pendingLycComparatorIrq > endClock);
+    }
+
+    /** Whether a short, scheduled mode-source register copy has yet to be captured. */
+    public boolean hasPendingModeRegisterCapture() {
+        return pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT;
+    }
+
+    /** Pending register copies remain inert until their actual capture clock. */
+    private int pendingModeRegisterSpanLimit(int requested) {
+        return hasPendingModeRegisterCapture()
+                ? pendingModeRegisterSpanLimitWithCaptures(requested) : requested;
+    }
+
+    // Keep the common no-capture guard small enough to inline in quiet-span checks.
+    private int pendingModeRegisterSpanLimitWithCaptures(int requested) {
+        refreshGpuTiming();
+        // One master dot contains exactly one or two CPU clocks. Share that phase proof
+        // across the pending copies; an arithmetic shift is floor division even for the
+        // DMG zero-delay capture viewed from the rephased normal-speed slot (-1).
+        int clockShift = timing.doubleSpeed ? 1 : 0;
+        int clockPhase = getNormalSpeedClockPhase();
+        int limit = requested;
+        if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT && limit > 0) {
+            limit = pendingRegisterSpanLimit(limit, pendingModeIrqStatClock,
+                    ((gbc ? 2 : 0) - clockPhase) >> clockShift);
+        }
+        if (pendingModeIrqLycClock != NO_LYC_IRQ_EVENT && limit > 0) {
+            int delay = gbc ? timing.doubleSpeed ? 5 : 6 : 1;
+            limit = pendingRegisterSpanLimit(limit, pendingModeIrqLycClock,
+                    (delay - clockPhase) >> clockShift);
+        }
+        if (pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT && limit > 0) {
+            limit = pendingRegisterSpanLimit(limit, pendingMode0IrqStatClock,
+                    (mode0StatCaptureDelay() - clockPhase) >> clockShift);
+        }
+        if (pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT && limit > 0) {
+            limit = pendingRegisterSpanLimit(limit, pendingMode0IrqLycClock,
+                    (mode0LycCaptureDelay() - clockPhase) >> clockShift);
+        }
+        return limit;
+    }
+
+    private int pendingRegisterSpanLimit(int requested, long writeClock, int lastSafeAge) {
+        long safeDots = lastSafeAge - Math.max(0, lycIrqClock - writeClock);
+        return (int) Math.max(0, Math.min(requested, safeDots));
     }
 
     public void onLcdEnabled() {
@@ -1732,32 +1799,33 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     private boolean commitPendingMode0IrqRegisters() {
         boolean changed = false;
-        int statCaptureDelay;
-        if (!gbc) {
-            statCaptureDelay = 0;
-        } else if (timing.doubleSpeed) {
-            statCaptureDelay = 6;
-        } else if ((registers.get(SCX) & 7) == 0) {
-            statCaptureDelay = 6;
-        } else {
-            statCaptureDelay = scxChangedSinceMode0Event ? 4 : 8;
-        }
         if (pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
-                && cpuCyclesSince(pendingMode0IrqStatClock) > statCaptureDelay) {
+                && cpuCyclesSince(pendingMode0IrqStatClock) > mode0StatCaptureDelay()) {
             mode0IrqStatLatch = pendingMode0IrqStat;
             pendingMode0IrqStatClock = NO_LYC_IRQ_EVENT;
             changed = true;
         }
-        int lycCaptureDelay = gbc
-                ? (timing.doubleSpeed || scxChangedSinceMode0Event ? 8 : 10)
-                : 1;
         if (pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
-                && cpuCyclesSince(pendingMode0IrqLycClock) > lycCaptureDelay) {
+                && cpuCyclesSince(pendingMode0IrqLycClock) > mode0LycCaptureDelay()) {
             mode0IrqLycLatch = pendingMode0IrqLyc;
             pendingMode0IrqLycClock = NO_LYC_IRQ_EVENT;
             changed = true;
         }
         return changed;
+    }
+
+    private int mode0StatCaptureDelay() {
+        if (!gbc) {
+            return 0;
+        }
+        if (timing.doubleSpeed || (registers.get(SCX) & 7) == 0) {
+            return 6;
+        }
+        return scxChangedSinceMode0Event ? 4 : 8;
+    }
+
+    private int mode0LycCaptureDelay() {
+        return gbc ? timing.doubleSpeed || scxChangedSinceMode0Event ? 8 : 10 : 1;
     }
 
     private long cpuCyclesSince(long clock) {

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.headless
 
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.replay.ReplayIdentity
 import eu.rekawek.coffeegb.controller.replay.ReplayPosition
 import eu.rekawek.coffeegb.controller.replay.ReplayStateHasher
 import eu.rekawek.coffeegb.controller.replay.ReplayStateHashes
@@ -147,9 +148,13 @@ internal class HeadlessMachineSession(
         match.breakpoint(), match.matchMasterTick(), inspection.snapshot(), true)
   }
 
-  fun hashes(): ReplayStateHashes {
+  fun hashes(): ReplayStateHashes = hashes(ReplayIdentity.REPLAY_SEMANTICS_VERSION)
+
+  fun hashes(
+      replaySemanticsVersion: Int,
+  ): ReplayStateHashes {
     checkOwnerAndOpen()
-    return ReplayStateHasher.hash(session)
+    return ReplayStateHasher.hash(session, replaySemanticsVersion)
   }
 
   fun latestFrame(): HeadlessFrame? {

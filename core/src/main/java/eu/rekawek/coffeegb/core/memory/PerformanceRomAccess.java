@@ -34,4 +34,23 @@ public interface PerformanceRomAccess {
         int offset = physicalOffset(cpuAddress);
         return offset < 0 ? -1 : readPhysicalByte(offset);
     }
+
+    /**
+     * Whether the current cartridge data window is plain RAM or an inert disabled/open view.
+     * The CPU snapshots this proof once per epoch and still performs each access through the
+     * real bus. Mapper-control writes end the epoch; RTC, EEPROM and other device windows must
+     * retain the default false. This grants no permission to execute cartridge RAM.
+     */
+    default boolean canAccessRam() {
+        return false;
+    }
+
+    /**
+     * Optional side-effect-free lookahead within this lease. A logical mapper must explicitly
+     * prove this capability; ordinary authoritative reads alone do not permit speculation.
+     */
+    default int peekCpuByte(int cpuAddress) {
+        int offset = physicalOffset(cpuAddress);
+        return offset < 0 ? -1 : readPhysicalByte(offset);
+    }
 }

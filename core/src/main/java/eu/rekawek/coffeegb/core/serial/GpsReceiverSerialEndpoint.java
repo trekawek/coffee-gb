@@ -177,6 +177,11 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
     }
 
     @Override
+    public int performanceClockCapabilities() {
+        return PERFORMANCE_CLOCK_IDLE | PERFORMANCE_CLOCK_INTERNAL | PERFORMANCE_CLOCK_EXTERNAL_WAIT;
+    }
+
+    @Override
     public int performanceExternalClockWaitSpanLimit(int requested) {
         return performanceQuietSpanLimit(requested);
     }

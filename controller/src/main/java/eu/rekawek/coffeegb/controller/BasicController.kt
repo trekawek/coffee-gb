@@ -539,6 +539,8 @@ class BasicController private constructor(
   /** Correlates authoritative playback events with the currently committed UI lifecycle. */
   private var playbackSessionGeneration: Long? = null
 
+  private var performanceSoakSampler: PerformanceSoakSampler? = null
+
   private var isRewinding = false
 
   private val patches = mutableListOf<CheatPatch>()
@@ -601,6 +603,9 @@ class BasicController private constructor(
 
   init {
     require(closeTimeoutMillis > 0) { "Controller close timeout must be positive" }
+    eventQueue.register<Controller.SetPerformanceSoakEnabledEvent> {
+      performanceSoakSampler = if (it.enabled) PerformanceSoakSampler() else null
+    }
     eventQueue.register<AddPatches> {
       // start() republishes this exact controller-owned list to initialize the new core. It is not
       // a user mutation and must not terminate a recorder that already owns clean-boot tick zero.
@@ -1111,6 +1116,11 @@ class BasicController private constructor(
             timingTicker.hasPacingDebt,
     )
     val gameboy = session?.gameboy
+    val soak = performanceSoakSampler
+    playbackSessionGeneration?.let { generation ->
+      if (gameboy != null) soak?.beginFrame(generation, gameboy)
+    }
+    var soakWorkNanos = 0L
     var emulatedTicks = 0
     if (gameboy != null && !benchmarkExecutionFrozen && !replayPlaybackCompleted
         && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
@@ -1120,6 +1130,7 @@ class BasicController private constructor(
       performanceWorkSession?.let {
         postSessionEventSafely(it, Controller.PerformanceWorkStartedEvent)
       }
+      val soakWorkStart = if (soak != null) System.nanoTime() else 0L
       try {
         val exactBenchmarkScenarioFrame = benchmarkGameplayScenarioActive
         if (exactBenchmarkScenarioFrame) {
@@ -1158,6 +1169,7 @@ class BasicController private constructor(
           }
         }
       } finally {
+        if (soak != null) soakWorkNanos = System.nanoTime() - soakWorkStart
         performanceWorkSession?.let {
           postSessionEventSafely(
               it,
@@ -1175,6 +1187,11 @@ class BasicController private constructor(
       finishBenchmarkGameplayScenarioEndpoint()
     }
     timingTicker.runFrame(clockSpec)
+    if (soak != null && gameboy != null) {
+      soak.record(gameboy, emulatedTicks, soakWorkNanos, timingTicker.hasPacingDebt)?.let { event ->
+        session?.let { postSessionEventSafely(it, event) }
+      }
+    }
     if (emulatedTicks > 0) {
       debugMasterTick = Math.addExact(debugMasterTick, emulatedTicks.toLong())
     }

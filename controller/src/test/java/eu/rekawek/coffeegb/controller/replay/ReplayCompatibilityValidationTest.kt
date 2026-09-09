@@ -62,6 +62,24 @@ class ReplayCompatibilityValidationTest {
   }
 
   @Test
+  fun legacyReplaySemanticsRemainAcceptedWhileNewIdentityUsesCurrentVersion() {
+    val configuration = StateCodecTestSupport.configuration()
+    val current = ReplayCompatibility.identity(configuration)
+    assertEquals(ReplayIdentity.REPLAY_SEMANTICS_VERSION, current.replaySemanticsVersion)
+
+    val legacy =
+        copyIdentity(
+            current,
+            semantics = ReplayIdentity.LEGACY_REPLAY_SEMANTICS_VERSION,
+        )
+    ReplayCompatibility.validateIdentity(legacy, configuration)
+    assertEquals(
+        ReplayIdentity.LEGACY_REPLAY_SEMANTICS_VERSION,
+        legacy.replaySemanticsVersion,
+    )
+  }
+
+  @Test
   fun recordingRejectsSerialInfraredAndSensorInputsWithoutMutation() {
     val configuration = StateCodecTestSupport.configuration()
     Session(
@@ -200,6 +218,7 @@ class ReplayCompatibilityValidationTest {
       clocks: ReplayClockIdentity = source.clocks,
       bootstrap: Long = source.bootstrapFlags,
       behavior: Long = source.behaviorFlags,
+      semantics: Int = source.replaySemanticsVersion,
   ): ReplayIdentity =
       ReplayIdentity(
           primary,
@@ -208,7 +227,7 @@ class ReplayCompatibilityValidationTest {
           clocks,
           bootstrap,
           behavior,
-          source.replaySemanticsVersion,
+          semantics,
           source.requiredStateFileVersion,
       )
 

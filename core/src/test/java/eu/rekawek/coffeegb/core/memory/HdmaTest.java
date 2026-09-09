@@ -330,7 +330,7 @@ public class HdmaTest {
     }
 
     @Test
-    public void normalSpeedArmedHblankWaitRemainsOutsideTheNativeCgbEpochLease() {
+    public void normalSpeedArmedHblankWaitAdvancesWithoutChangingRequestState() {
         Fixture fixture = new Fixture(1);
         fixture.hdma.onLcdSwitch(true);
         fixture.hdma.onGpuTiming(3, 120);
@@ -338,8 +338,11 @@ public class HdmaTest {
         fixture.startTransfer(0x81);
 
         assertTrue(fixture.hdma.hasPendingHblankTransfer());
-        assertFalse(fixture.hdma.isPerformanceArmedHblankWaitStable());
-        assertFalse(fixture.hdma.isPerformanceNativeCgbRunningEpochStable());
+        assertTrue(fixture.hdma.isPerformanceArmedHblankWaitStable());
+        assertTrue(fixture.hdma.isPerformanceRunningEpochStable());
+        var before = hdmaState(fixture);
+        fixture.hdma.advancePerformanceRunningEpochClockTrusted(54);
+        assertSameHdmaState(before, hdmaState(fixture));
     }
 
     @Test

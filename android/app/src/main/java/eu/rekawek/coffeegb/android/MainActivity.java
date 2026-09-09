@@ -184,6 +184,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuStackSnapshot deferredMenuFocusRestore = MenuStackSnapshot.hidden();
     private boolean activityResumed;
     private DiagnosticsOptions diagnosticsOptions = DiagnosticsOptions.disabled();
+    /** Restore only the keep-awake flag installed by this Activity's optional soak. */
+    private boolean soakKeepScreenOnApplied;
     private boolean benchmarkRecentLaunchRequested;
     private boolean benchmarkAnchorRequested;
     private long benchmarkAnchorSessionGeneration;
@@ -255,6 +257,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             bound = true;
             runtime.addObserver(MainActivity.this);
             video.attach(runtime.frames(), runtime.input());
+            applySoakIntent(getIntent());
             runtime.setAudioMuted(diagnosticsOptions.enabled ? false : getPreferences(MODE_PRIVATE)
                     .getBoolean("audio.muted", false));
             runtime.setAudioVolume(diagnosticsOptions.enabled ? 100 : getPreferences(MODE_PRIVATE)
@@ -349,6 +352,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (!BuildConfig.DIAGNOSTICS_ENABLED) {
             return;
         }
+        applySoakIntent(intent);
         String token = DiagnosticsOptions.benchmarkArmToken(intent);
         if (token == null) {
             return;
@@ -357,6 +361,23 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         pendingBenchmarkArm.put(token, observedState.sessionGeneration());
         if (active != null && bound) {
             armPendingBenchmarkIfReady(active);
+        }
+    }
+
+    private void applySoakIntent(Intent intent) {
+        if (BuildConfig.DIAGNOSTICS_ENABLED && intent != null && runtime != null
+                && !diagnosticsOptions.enabled
+                && intent.hasExtra(AndroidSoakDiagnostics.EXTRA_ENABLED)) {
+            boolean enabled = intent.getBooleanExtra(AndroidSoakDiagnostics.EXTRA_ENABLED, false);
+            if (enabled && (getWindow().getAttributes().flags
+                    & android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) == 0) {
+                getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                soakKeepScreenOnApplied = true;
+            } else if (!enabled && soakKeepScreenOnApplied) {
+                getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                soakKeepScreenOnApplied = false;
+            }
+            runtime.setPerformanceSoakEnabled(enabled);
         }
     }
 

@@ -248,10 +248,14 @@ public class SerialPortPerformanceSpanTest {
     }
 
     @Test
-    public void quietSpanFailsClosedForTransfersEndpointsAndDebugHooks() {
+    public void quietSpanFailsClosedAtTransferEdgesAndUnknownEndpointsAndDebugHooks() {
         SerialPort internalTransfer = new SerialPort(
                 new InterruptManager(true), true, new SpeedMode(true));
         internalTransfer.setByte(0xff02, 0x81);
+        // A transfer is quiet between edges; its first falling edge is still a scalar tick.
+        for (int tick = 0; tick < 511; tick++) {
+            internalTransfer.tick();
+        }
         var transferState = internalTransfer.captureState();
         assertFalse(internalTransfer.canTickPerformanceQuietSpan(1));
         assertFalse(internalTransfer.tickPerformanceQuietSpan(1));

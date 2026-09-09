@@ -54,6 +54,11 @@ final class NativeFrameStore implements AutoCloseable {
     private final CopyOnWriteArraySet<Listener> listeners = new CopyOnWriteArraySet<>();
     private final AndroidBenchmarkDiagnostics diagnostics;
     private final LongConsumer benchmarkBoundary;
+    private volatile AndroidSoakDiagnostics soakDiagnostics;
+
+    void setSoakDiagnostics(AndroidSoakDiagnostics value) {
+        soakDiagnostics = value;
+    }
 
     private long nextSequence;
     private long nextReservationToken;
@@ -329,6 +334,10 @@ final class NativeFrameStore implements AutoCloseable {
     /** Records a Surface BufferQueue submission after the canvas post has completed. */
     synchronized void frameSubmitted(Frame frame) {
         if (frame != null) {
+            AndroidSoakDiagnostics soak = soakDiagnostics;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && soak != null) {
+                soak.submitted();
+            }
             frame.slot.presentationConsumed = true;
             if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
                     && diagnostics.acceptsFrameEpoch(frame.epoch())) {
@@ -356,6 +365,10 @@ final class NativeFrameStore implements AutoCloseable {
 
     synchronized void framePresentationLate(Frame frame) {
         if (frame != null) {
+            AndroidSoakDiagnostics soak = soakDiagnostics;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && soak != null) {
+                soak.submissionFailed();
+            }
             frame.slot.presentationConsumed = true;
             if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
                     && diagnostics.acceptsFrameEpoch(frame.epoch())) {
@@ -366,6 +379,10 @@ final class NativeFrameStore implements AutoCloseable {
 
     synchronized void framePresentationCorrupt(Frame frame) {
         if (frame != null) {
+            AndroidSoakDiagnostics soak = soakDiagnostics;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && soak != null) {
+                soak.submissionFailed();
+            }
             frame.slot.presentationConsumed = true;
             if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
                     && diagnostics.acceptsFrameEpoch(frame.epoch())) {
