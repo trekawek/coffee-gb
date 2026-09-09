@@ -408,8 +408,9 @@ class ApplicationSettingsStoreTest {
     }
 
     assertTrue(original.contentEquals(Files.readAllBytes(path)))
+    // Recovery still coordinates with other processes without rewriting the settings document.
     Files.list(directory).use { entries ->
-      assertEquals(listOf(path), entries.toList())
+      assertEquals(setOf(path, directory.resolve(".coffeegb.lock")), entries.toList().toSet())
     }
 
     ApplicationSettingsStore(path, debounceMillis = 0).use { store ->
@@ -532,7 +533,9 @@ class ApplicationSettingsStoreTest {
     }
 
     assertTrue(Files.isDirectory(path))
-    Files.list(directory).use { entries -> assertEquals(listOf(path), entries.toList()) }
+    Files.list(directory).use { entries ->
+      assertEquals(setOf(path, directory.resolve(".coffeegb.lock")), entries.toList().toSet())
+    }
   }
 
   @Test
