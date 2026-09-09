@@ -203,7 +203,7 @@ class StateRepositoryTest {
         .save(ref, fixture.plain, StateSaveMetadata("old", SAVE_TIME))
 
     val result =
-        StateRepository(layout, SelectiveFailureWriter(failMetadata = true))
+        StateRepository(layout, SelectiveFailureWriter(layout.gameDirectory, failMetadata = true))
             .save(
                 ref,
                 fixture.deflated,
@@ -234,7 +234,7 @@ class StateRepositoryTest {
         StateStorageLayout(Files.createTempDirectory("state-repository-thumbnail-failures"))
     val ref = StateRef.Slot(6)
     val repository =
-        StateRepository(layout, SelectiveFailureWriter(failMetadata = true))
+        StateRepository(layout, SelectiveFailureWriter(layout.gameDirectory, failMetadata = true))
     val thumbnail =
         StatePngCodec.encode(
             StateImage(2, 1, intArrayOf(0x112233, 0xaabbcc)).thumbnail())
@@ -324,7 +324,7 @@ class StateRepositoryTest {
     repository.save(ref, fixture.plain, StateSaveMetadata("old", SAVE_TIME))
 
     assertFailsWith<IOException> {
-      StateRepository(layout, SelectiveFailureWriter(failState = true))
+      StateRepository(layout, SelectiveFailureWriter(layout.gameDirectory, failState = true))
           .save(
               ref,
               fixture.deflated,
@@ -736,9 +736,10 @@ class StateRepositoryTest {
   )
 
   private class SelectiveFailureWriter(
+      gameDirectory: Path,
       private val failState: Boolean = false,
       private val failMetadata: Boolean = false,
-  ) : AtomicFileWriter() {
+  ) : AtomicFileWriter(gameDirectory) {
     override fun write(target: Path, intendedBytes: ByteArray) {
       if (failState && target.fileName.toString() == StateStorageLayout.STATE_FILE) {
         throw IOException("injected state disk-full failure")
@@ -746,7 +747,7 @@ class StateRepositoryTest {
       if (failMetadata && target.fileName.toString() == StateStorageLayout.METADATA_FILE) {
         throw IOException("injected metadata read-only failure")
       }
-      AtomicFileWriter.system().write(target, intendedBytes)
+      super.write(target, intendedBytes)
     }
   }
 

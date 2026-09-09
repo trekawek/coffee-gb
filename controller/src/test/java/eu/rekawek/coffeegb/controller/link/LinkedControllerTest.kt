@@ -335,7 +335,7 @@ class LinkedControllerTest {
       Files.deleteIfExists(directory.resolve("settings-true.properties"))
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -394,7 +394,7 @@ class LinkedControllerTest {
       Files.deleteIfExists(directory.resolve("settings.properties"))
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -441,7 +441,7 @@ class LinkedControllerTest {
       Files.list(directory).use { files ->
         files.forEach { Files.deleteIfExists(it) }
       }
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -1415,7 +1415,7 @@ class LinkedControllerTest {
       Files.deleteIfExists(directory.resolve("settings.properties"))
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -1689,12 +1689,12 @@ class LinkedControllerTest {
     } catch (unsupported: UnsupportedOperationException) {
       Files.deleteIfExists(secret)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
       Assume.assumeNoException("symbolic links are unsupported", unsupported)
     } catch (unsupported: IOException) {
       Files.deleteIfExists(secret)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
       Assume.assumeNoException("symbolic links are unavailable", unsupported)
     }
     val eventBus = EventBusImpl()
@@ -1733,7 +1733,7 @@ class LinkedControllerTest {
       Files.deleteIfExists(battery)
       Files.deleteIfExists(secret)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -1776,7 +1776,7 @@ class LinkedControllerTest {
       properties.close()
       Files.deleteIfExists(slot)
       Files.deleteIfExists(settings)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -1812,7 +1812,7 @@ class LinkedControllerTest {
       properties.close()
       Files.deleteIfExists(slot)
       Files.deleteIfExists(settings)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -2006,7 +2006,7 @@ class LinkedControllerTest {
       Files.deleteIfExists(directory.resolve("settings.properties"))
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -2023,7 +2023,7 @@ class LinkedControllerTest {
     } catch (_: Exception) {
       Files.deleteIfExists(outside)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
       return
     }
     val eventBus = EventBusImpl()
@@ -2057,7 +2057,7 @@ class LinkedControllerTest {
       Files.deleteIfExists(battery)
       Files.deleteIfExists(outside)
       Files.deleteIfExists(rom)
-      Files.deleteIfExists(directory)
+      deleteTestDirectory(directory)
     }
   }
 
@@ -4415,6 +4415,12 @@ class LinkedControllerTest {
       assertEquals(before, sut.captureDetachedState())
     }
     eventBus.close()
+  }
+
+  private fun deleteTestDirectory(directory: Path) {
+    // All fixture controllers are closed before removing their permanent coordination file.
+    Files.deleteIfExists(directory.resolve(".coffeegb.lock"))
+    Files.deleteIfExists(directory)
   }
 
   private companion object {

@@ -30,7 +30,7 @@ import kotlin.concurrent.withLock
  */
 class StateRepository(
     val layout: StateStorageLayout,
-    private val persistence: AtomicFileWriter = AtomicFileWriter.system(),
+    private val persistence: AtomicFileWriter = AtomicFileWriter.inDirectory(layout.gameDirectory),
 ) {
   /**
    * Validates and atomically commits one portable machine state. Metadata failure never rolls back

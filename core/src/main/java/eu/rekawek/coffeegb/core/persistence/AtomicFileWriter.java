@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
@@ -19,6 +20,7 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -27,7 +29,8 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * <p>The caller must materialize the complete intended bytes before calling {@link #write}. Reads
  * performed with {@link #read} share the target's lock with writes and run recovery first, so they
- * cannot observe the temporary missing-target interval of the non-atomic fallback.
+ * cannot observe the temporary missing-target interval of the non-atomic fallback. Filesystem locks
+ * also exclude other emulator processes, including readers performing crash recovery.
  */
 public class AtomicFileWriter {
 
@@ -42,6 +45,11 @@ public class AtomicFileWriter {
 
     private static final int MAX_STALE_TEMPS = 32;
 
+    private static final String LOCK_FILE = ".coffeegb.lock";
+
+    private static final ThreadLocal<Set<Path>> HELD_FILE_LOCKS =
+            ThreadLocal.withInitial(HashSet::new);
+
     static {
         for (int i = 0; i < LOCKS.length; i++) {
             LOCKS[i] = new ReentrantLock();
@@ -52,14 +60,27 @@ public class AtomicFileWriter {
 
     private final StageListener stageListener;
 
+    private final Path lockDirectory;
+
     /** Constructor for test subclasses that override the public operations. */
     protected AtomicFileWriter() {
         this(new NioFileOperations(), StageListener.NOOP);
     }
 
+    /** Constructor for test subclasses that retain a repository's storage-root lock scope. */
+    protected AtomicFileWriter(Path directory) {
+        this(new NioFileOperations(), StageListener.NOOP, directory.toAbsolutePath().normalize());
+    }
+
     AtomicFileWriter(FileOperations operations, StageListener stageListener) {
+        this(operations, stageListener, null);
+    }
+
+    AtomicFileWriter(
+            FileOperations operations, StageListener stageListener, Path lockDirectory) {
         this.operations = operations;
         this.stageListener = stageListener;
+        this.lockDirectory = lockDirectory == null ? null : lockDirectory.toAbsolutePath().normalize();
     }
 
     public static AtomicFileWriter system() {
@@ -67,8 +88,18 @@ public class AtomicFileWriter {
     }
 
     /**
-     * Returns whether {@code candidate} names a deterministic recovery backup or temporary file
-     * that this writer may remove while recovering or replacing {@code target}.
+     * Uses one permanent lock in a caller-owned storage root. All accesses to files below that root
+     * must use the same scope. Keeping the lock outside removable state entries allows their
+     * directories to be deleted without unlinking a lock another process may already have open.
+     */
+    public static AtomicFileWriter inDirectory(Path directory) {
+        return new AtomicFileWriter(
+                new NioFileOperations(), StageListener.NOOP, directory.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Returns whether {@code candidate} names a recovery backup, temporary file, or the permanent
+     * coordination file reserved by this writer while recovering or replacing {@code target}.
      *
      * <p>This is a lexical, side-effect-free classification. Callers that accept owner-selected
      * files can use it to reject a source before a transaction could mistake that source for one
@@ -86,6 +117,9 @@ public class AtomicFileWriter {
             return false;
         }
         String candidateName = normalizedCandidate.getFileName().toString();
+        if (candidateName.equalsIgnoreCase(LOCK_FILE)) {
+            return true;
+        }
         String backupName = backupPath(normalizedTarget).getFileName().toString();
         if (candidateName.equalsIgnoreCase(backupName)) {
             return true;
@@ -130,6 +164,11 @@ public class AtomicFileWriter {
             throw new NullPointerException("intendedBytes");
         }
         Path normalized = normalizeTarget(target);
+        if (ownerOnly) {
+            // Reject an untrusted parent before creating even the empty coordination file.
+            operations.createDirectories(normalized.getParent());
+            operations.verifyOwnerOnlyParent(normalized.getParent());
+        }
         withLock(normalized, () -> {
             writeLocked(normalized, intendedBytes, ownerOnly);
             return null;
@@ -445,11 +484,36 @@ public class AtomicFileWriter {
         return LOCKS[(target.hashCode() & Integer.MAX_VALUE) % LOCKS.length];
     }
 
-    private static <T> T withLock(Path target, IoCallable<T> callable) throws IOException {
-        ReentrantLock lock = lock(target);
+    private <T> T withLock(Path target, IoCallable<T> callable) throws IOException {
+        Path directory = lockDirectory == null ? target.getParent() : lockDirectory;
+        if (!target.startsWith(directory)
+                || target.getFileName().toString().equalsIgnoreCase(LOCK_FILE)) {
+            throw new IOException("Persistence target is outside its storage scope or is its lock");
+        }
+        operations.createDirectories(directory);
+        // Physical paths ensure aliases in one JVM use the same monitor before FileChannel.lock().
+        Path lockPath = directory.toRealPath().resolve(LOCK_FILE);
+        ReentrantLock lock = lock(lockPath);
         lock.lock();
         try {
-            return callable.call();
+            Set<Path> held = HELD_FILE_LOCKS.get();
+            if (held.contains(lockPath)) {
+                return callable.call();
+            }
+            refuseNonRegularArtifact(lockPath);
+            // Never delete this file: a waiter may already have its inode open. Replacing it would
+            // let a third process acquire a different lock while the original waiter is running.
+            try (FileChannel channel = operations.openFile(lockPath,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
+                    FileLock ignored = channel.lock(0, 1, false)) {
+                held.add(lockPath);
+                try {
+                    return callable.call();
+                } finally {
+                    held.remove(lockPath);
+                    if (held.isEmpty()) HELD_FILE_LOCKS.remove();
+                }
+            }
         } finally {
             lock.unlock();
         }

@@ -47,6 +47,7 @@ public class AtomicFileWriterTest {
                     target,
                     directory.resolve(backup.getFileName().toString().toUpperCase())));
             assertTrue(AtomicFileWriter.isTransactionArtifact(target, temp));
+            assertTrue(AtomicFileWriter.isTransactionArtifact(target, directory.resolve(".coffeegb.lock")));
             assertTrue(AtomicFileWriter.isTransactionArtifact(
                     target,
                     directory.resolve((prefix + "ABC.PART").toUpperCase())));
@@ -55,6 +56,42 @@ public class AtomicFileWriterTest {
                     target, directory.resolve(prefix + "123.part.extra")));
             assertFalse(AtomicFileWriter.isTransactionArtifact(
                     target, directory.resolve("other").resolve(temp.getFileName())));
+        });
+    }
+
+    @Test
+    public void nestedRecoveryUsesTheHeldFilesystemLock() throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("state.bin");
+            AtomicFileWriter writer = AtomicFileWriter.inDirectory(directory);
+            writer.write(target, OLD);
+            Path alias = directory.resolve("alias");
+            Files.createSymbolicLink(alias, directory.toAbsolutePath());
+            assertArrayEquals(OLD, writer.read(target,
+                    path -> AtomicFileWriter.inDirectory(alias)
+                            .read(alias.resolve(path.getFileName()), Files::readAllBytes)));
+        });
+    }
+
+    @Test
+    public void storageScopeRejectsEscapesAndLockReplacement() throws Exception {
+        withDirectory(directory -> {
+            AtomicFileWriter writer = AtomicFileWriter.inDirectory(directory.resolve("game"));
+            expectFailure(() -> writer.write(directory.resolve("outside.bin"), NEW));
+            expectFailure(() -> writer.write(directory.resolve("game/.coffeegb.lock"), NEW));
+            assertFalse(Files.exists(directory.resolve("game")));
+            assertFalse(Files.exists(directory.resolve("outside.bin")));
+        });
+    }
+
+    @Test
+    public void refusesSymlinkedCoordinationFile() throws Exception {
+        withDirectory(directory -> {
+            Path victim = directory.resolve("victim.bin");
+            Files.write(victim, OLD);
+            Files.createSymbolicLink(directory.resolve(".coffeegb.lock"), victim.getFileName());
+            expectFailure(() -> AtomicFileWriter.system().write(directory.resolve("state.bin"), NEW));
+            assertArrayEquals(OLD, Files.readAllBytes(victim));
         });
     }
 
