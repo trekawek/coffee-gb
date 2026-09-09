@@ -558,6 +558,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 restoreSachenBootLogoForSkippedBoot();
             }
             cartridge.skipBoot();
+            // Both boot ROMs leave NR51 routing all channels left and channels 1/2 right.
+            // Software such as GBVisualizer relies on this without writing NR51 itself.
+            sound.setByte(0xff25, 0xf3);
             // the Datel Action Replay's ASIC presents a valid CGB header to the console,
             // so the machine boots native-colour despite the dump's garbage flag byte
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
