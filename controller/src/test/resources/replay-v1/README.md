@@ -1,7 +1,8 @@
 # Replay v1 golden fixture
 
 `synthetic-input.cgbreplay` is the exact canonical `CGBR` v1 output of
-`ReplayGoldenFixture.create` in `ReplayGoldenFixtureTest`. The generator creates all data in the
+`ReplayGoldenFixture.create` in `ReplayGoldenFixtureTest`, retaining replay semantics v1's legacy
+Fetcher hash projection. The generator creates all data in the
 test process; it does not read a ROM, save, StateFile, replay, or third-party fixture from disk.
 The committed replay contains no ROM bytes and no embedded StateFile.
 
@@ -25,7 +26,7 @@ Format: explicit big-endian `CGBR` v1 sections encoded only by `ReplayCodec`; no
 serialization. License: generated Coffee GB test data under the repository license.
 
 - Size: `945` bytes
-- SHA-256: `316b08b9942674c1a46ac053c77dbad7ff53798b85f0e6092e0d4d3d6288325c`
+- SHA-256: `73527087d8e2f9320e39c7e3f391657439b03c7e726bc80a48139709cf5f4dcb`
 
 Exact inspector summary:
 
@@ -42,8 +43,12 @@ section=4 version=1 required=true compression=DEFLATE encoded=501 decoded=550
 section=5 version=1 required=false compression=NONE encoded=86 decoded=86
 ```
 
+The checkpoints include the corrected deterministic SKIP register presets (including audio
+routing, the faded chime, BGP, and JOYP selection). The input timeline, checkpoint positions,
+format, and legacy replay hashing semantics are unchanged.
+
 Normal tests only inspect, decode, byte-for-byte re-encode, and play the committed file. Regenerate
-it only for an intentional reviewed format change by running from the repository root:
+it only for an intentional reviewed format or emulated hardware change by running from the repository root:
 
 ```sh
 mvn -B -pl controller -am \

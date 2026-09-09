@@ -42,6 +42,11 @@ reconstruct boot-written logo tiles, tile maps, working/high RAM, display histor
 SGB boot command history. Existing cartridge-specific compatibility handling still applies.
 Use NORMAL or FAST_FORWARD when that boot history or a title-specific colorization is needed.
 
+Correcting these initial values changes canonical state and replay checkpoint hashes for freshly
+started SKIP sessions. Older SKIP boot-reference recordings can therefore report divergence.
+The synthetic state and replay baselines include the new register values; their file formats,
+checkpoint positions, and replay hash semantics are unchanged.
+
 ## Coverage
 
 `GameboySkippedBootRegistersTest` compares every FF00–FF7F readback except the three timing
