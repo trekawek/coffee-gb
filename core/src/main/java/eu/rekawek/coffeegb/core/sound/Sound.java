@@ -236,6 +236,29 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         this.eventBus = eventBus;
     }
 
+    /**
+     * Installs the boot-ROM register values without playing its chime. The DMG/CGB chime
+     * channel remains enabled after its envelope has faded to zero; SGB never triggers it.
+     * Standalone component fixtures and authentic power-on retain their existing defaults.
+     */
+    public void initializePostBootRegisters(boolean sgb) {
+        // Use component initialization rather than an NR52 power-on edge: SKIP retains
+        // its separately calibrated DIV/frame-sequencer phase.
+        stop();
+        for (AbstractSoundMode mode : allModes) {
+            mode.start();
+        }
+        enabled = true;
+        setByte(0xff24, 0x77);
+        setByte(0xff25, 0xf3);
+        setByte(0xff11, 0x80);
+        setByte(0xff12, 0xf3);
+        if (!sgb) {
+            mode1.initializeCompletedBootChime();
+        }
+        mixerDirty = true;
+    }
+
     public void tick() {
         tick(timer.consumeDivReset());
     }

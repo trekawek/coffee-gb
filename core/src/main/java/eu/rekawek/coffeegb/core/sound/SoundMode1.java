@@ -88,6 +88,12 @@ public class SoundMode1 extends AbstractSoundMode {
         volumeEnvelope.clockTick();
     }
 
+    void initializeCompletedBootChime() {
+        setNr3(0xc1);
+        setNr4(0x87);
+        volumeEnvelope.finishBootFadeOut();
+    }
+
     @Override
     public void tickEnvelopeClock(int frameSequencerStep) {
         volumeEnvelope.apuClockTick(frameSequencerStep);
