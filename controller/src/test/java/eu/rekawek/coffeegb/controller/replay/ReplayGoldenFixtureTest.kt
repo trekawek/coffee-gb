@@ -132,20 +132,20 @@ class ReplayGoldenFixtureTest {
   private companion object {
     const val RESOURCE_PATH = "/replay-v1/synthetic-input.cgbreplay"
     const val UPDATE_PROPERTY = "coffeeGb.updateReplayGolden"
-    const val EXPECTED_SIZE = 944
+    const val EXPECTED_SIZE = 945
     const val EXPECTED_SHA256 =
-        "e71af449b3acebc4e184407648cd5551cbb517307fd0568a9278eeae9ae254e8"
+        "73527087d8e2f9320e39c7e3f391657439b03c7e726bc80a48139709cf5f4dcb"
     val EXPECTED_INSPECTION =
         """
         magic=CGBR format=1 checksum=true
-        required-features=0x0 optional-features=0x0 payload=872 decoded-sections=846 profile="dmg"
+        required-features=0x0 optional-features=0x0 payload=873 decoded-sections=846 profile="dmg"
         initial=BOOT_REFERENCE tick=0 frame=0 rtc=946684800000
         inputs=7 checkpoints=2 final-tick=69911 final-frame=1 embedded-state=false
         producer="coffee-gb-test/replay-v1" created=1700000123456 note="repository-owned synthetic input timeline"
         section=1 version=1 required=true compression=NONE encoded=92 decoded=92
         section=2 version=1 required=true compression=NONE encoded=28 decoded=28
         section=3 version=1 required=true compression=DEFLATE encoded=46 decoded=90
-        section=4 version=1 required=true compression=DEFLATE encoded=500 decoded=550
+        section=4 version=1 required=true compression=DEFLATE encoded=501 decoded=550
         section=5 version=1 required=false compression=NONE encoded=86 decoded=86
         """
             .trimIndent() + "\n"
@@ -197,8 +197,35 @@ private object ReplayGoldenFixture {
                 val ticksToFirstFrame =
                     session.gameboy.clockSpec.controllerTicksPerFrame() - recorder.tickCount.toInt()
                 repeat(ticksToFirstFrame) { recorder.tick() }
+                val semantics = ReplayIdentity.LEGACY_REPLAY_SEMANTICS_VERSION
+                val firstHashes = ReplayStateHasher.hash(session, semantics)
                 repeat(TAIL_TICKS) { recorder.tick() }
-                return ReplayCodec.encode(recorder.finish())
+                val finalHashes = ReplayStateHasher.hash(session, semantics)
+                val recorded = recorder.finish()
+                check(recorded.checkpoints.size == 2)
+                // The recorder uses current hashing semantics. Keep this fixture's legacy
+                // Fetcher projection when refreshing checkpoints after a hardware correction.
+                val identity = recorded.identity
+                return ReplayCodec.encode(
+                    ReplayFile(
+                        ReplayIdentity(
+                            identity.primaryRomSha256,
+                            identity.slotRomSha256,
+                            identity.canonicalProfileId,
+                            identity.clocks,
+                            identity.bootstrapFlags,
+                            identity.behaviorFlags,
+                            semantics,
+                            identity.requiredStateFileVersion,
+                        ),
+                        recorded.initialConditions,
+                        recorded.inputs,
+                        listOf(
+                            recorded.checkpoints[0].copy(hashes = firstHashes),
+                            recorded.checkpoints[1].copy(hashes = finalHashes),
+                        ),
+                        recorded.metadata,
+                    ))
               }
         }
       }
