@@ -69,7 +69,7 @@ class LinkedFrameStepperTest {
       assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
       assertNull(
           LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
-          "the resulting machine phase is the persisted one-shot marker",
+          "the completed contender no longer conflicts with the remaining master",
       )
     }
   }
@@ -174,10 +174,45 @@ class LinkedFrameStepperTest {
   }
 
   @Test
-  fun unequalMachineOrCablePhaseDoesNotTriggerAnEscape() {
+  fun matchingInternalRequestsResolveAfterTheirMachinePhasesHaveDiverged() {
+    PairFixture().use { fixture ->
+      // A passive startup already separated the machines. The user has released the menu
+      // confirmation by the time its delayed handshake begins, so no held input identifies it.
+      fixture.armBoth(0x80)
+      LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec)
+      fixture.armBoth(0x81)
+      assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
+      assertTrue(fixture.first.heldButtons.isEmpty())
+      assertTrue(fixture.second.heldButtons.isEmpty())
+      val before = dividerDelta(fixture.second, fixture.first)
+
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.INTERNAL_CLOCK_COLLISION,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+
+      val expectedLead = 13L * fixture.clockSpec.controllerTicksPerFrame()
+      assertEquals(
+          (before + expectedLead.toInt()) and 0xffff,
+          dividerDelta(fixture.second, fixture.first),
+      )
+      assertNull(LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec))
+    }
+  }
+
+  @Test
+  fun unequalPassivePhasesOrDifferentOutgoingBytesDoNotTriggerAnEscape() {
     PairFixture().use { fixture ->
       fixture.first.gameboy.tick()
+      fixture.armBoth(0x80)
+      assertNull(
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+    }
+
+    PairFixture().use { fixture ->
       fixture.armBoth(0x81)
+      fixture.second.gameboy.addressSpace.setByte(0xff01, 0x34)
       assertNull(
           LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
       )
@@ -189,6 +224,17 @@ class LinkedFrameStepperTest {
       assertNull(
           LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
       )
+    }
+  }
+
+  @Test
+  fun masterAndListenerKeepTheirExistingSchedule() {
+    PairFixture().use { fixture ->
+      fixture.armBoth(0x81)
+      fixture.second.gameboy.addressSpace.setByte(0xff02, 0x80)
+      val before = dividerDelta(fixture.second, fixture.first)
+      assertNull(LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec))
+      assertEquals(before, dividerDelta(fixture.second, fixture.first))
     }
   }
 

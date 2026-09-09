@@ -7,13 +7,13 @@ import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import org.slf4j.LoggerFactory
 
 /**
- * Advances one linked controller frame while resolving an otherwise perfectly mirrored software
- * role election. Real consoles never reach a link handshake with identical CPU, DIV, PPU, and
- * serial phase; two emulated copies can, and then both ROMs can make the same master/slave choice.
+ * Advances one linked controller frame while resolving competing software clock-role elections.
+ * Matching internal-clock requests can collide even after the machines have acquired different
+ * CPU, DIV, PPU, and serial phases, for example when both players confirm the same menu choice.
  *
- * The escape is deliberately conditional and deterministic. Ordinary asymmetric links retain the
- * exact scalar P1-then-P2 schedule, while rollback replay observes the same canonical-player
- * decision as live execution regardless of which player is local.
+ * The escape is conditional and deterministic. A master and listener retain the exact scalar
+ * P1-then-P2 schedule; passive external listeners still require a mirrored election. Rollback
+ * replay observes the same canonical-player decision regardless of which player is local.
  */
 internal object LinkedFrameStepper {
 
@@ -73,7 +73,11 @@ internal object LinkedFrameStepper {
             second.gameboy.isFastSerialClockSelectedForActiveTransfer &&
             first.heldButtons.isNotEmpty() &&
             first.heldButtons == second.heldButtons
-    if (!sameTimingPhase && !mirroredFastInputActivation) return null
+    // Two masters sending the same byte are a clock collision even with unequal machine
+    // phases. Requiring identical phases here misses menu confirmations whose handshake is
+    // delayed until after the input was released (Mach Go Go Go). The matching endpoint state
+    // above keeps different-byte traffic out of this election escape.
+    if (!sameTimingPhase && !bothInternal && !mirroredFastInputActivation) return null
 
     val mirroredFastInternalTransfer =
         bothInternal &&
