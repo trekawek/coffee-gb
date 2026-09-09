@@ -48,7 +48,7 @@ public class GameboyBootStateTest {
             AddressSpace bus = gameboy.getAddressSpace();
 
             assertArrayEquals(
-                        new int[]{0xe1, 0x77, 0xf3, 0xf0},
+                        new int[]{0xe1, 0x77, 0xf3, 0xf1},
                         new int[]{bus.getByte(0xff0f), bus.getByte(0xff24),
                                 bus.getByte(0xff25), bus.getByte(0xff26)});
             assertTrue(gameboy.isBootstrapReady());

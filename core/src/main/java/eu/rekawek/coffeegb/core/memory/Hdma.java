@@ -368,6 +368,11 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         return 0xff;
     }
 
+    /** Completed boot DMA reads FF; an FF55 write would incorrectly start a new transfer. */
+    public void initializePostBootRegisters() {
+        length = 0x7f;
+    }
+
     public void onGpuUpdate(Mode newGpuMode) {
         this.gpuMode = newGpuMode;
         if (newGpuMode == Mode.HBlank) {

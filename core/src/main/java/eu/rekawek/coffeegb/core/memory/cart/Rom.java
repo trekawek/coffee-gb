@@ -228,6 +228,20 @@ public class Rom {
         return image;
     }
 
+    /** B left by the CGB boot ROM's Nintendo-licensee title lookup in DMG compatibility mode. */
+    public int getCgbBootTitleChecksum() {
+        int[] header = cartridgeProperties.getHeader(rom);
+        boolean nintendo = header[0x14b] == 1 || (header[0x14b] == 0x33
+                && header[0x144] == '0' && header[0x145] == '1');
+        int titleSum = 0;
+        if (nintendo) {
+            for (int address = 0x134; address <= 0x143; address++) {
+                titleSum = (titleSum + header[address]) & 0xff;
+            }
+        }
+        return titleSum;
+    }
+
     public int[] getRom() {
         return rom;
     }

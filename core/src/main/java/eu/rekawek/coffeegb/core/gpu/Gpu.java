@@ -501,6 +501,35 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         return videoRam1;
     }
 
+    /**
+     * Fixed no-input boot palettes. SKIP uses the default compatibility colors rather than
+     * executing the boot ROM's title/licensee-dependent colorization lookup.
+     */
+    public void initializePostBootPalettes(boolean dmgCompat) {
+        bgPalette.setByte(0xff68, 0x80);
+        for (int color = 0; color < 32; color++) {
+            bgPalette.setByte(0xff69, 0xff);
+            bgPalette.setByte(0xff69, 0x7f);
+        }
+        oamPalette.initializeCgbBootValues();
+        if (dmgCompat) {
+            bgPalette.setByte(0xff68, 0x80);
+            for (int color : new int[]{0x7fff, 0x1bef, 0x6180, 0x0000}) {
+                bgPalette.setByte(0xff69, color & 0xff);
+                bgPalette.setByte(0xff69, color >> 8);
+            }
+            oamPalette.setByte(0xff6a, 0x80);
+            for (int palette = 0; palette < 2; palette++) {
+                for (int color : new int[]{0x7fff, 0x421f, 0x1cf2, 0x0000}) {
+                    oamPalette.setByte(0xff6b, color & 0xff);
+                    oamPalette.setByte(0xff6b, color >> 8);
+                }
+            }
+        } else {
+            oamPalette.setByte(0xff6a, 0x81);
+        }
+    }
+
     /** Core boot-state helper that does not expose a retained mutable RAM alias. */
     public void writeVideoRam0ForCore(int address, int value) {
         materializeSteadyTiming();

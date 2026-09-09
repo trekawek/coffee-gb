@@ -57,6 +57,14 @@ public class VolumeEnvelope implements StatefulComponent<VolumeEnvelope> {
         pendingEnvelopeClock = false;
     }
 
+    /** The boot chime has finished, although NR12 still retains its initial volume. */
+    void finishBootFadeOut() {
+        volume = 0;
+        timer = sweep;
+        finished = true;
+        pendingEnvelopeClock = false;
+    }
+
     public void clockTick() {
         if (finished) {
             return;

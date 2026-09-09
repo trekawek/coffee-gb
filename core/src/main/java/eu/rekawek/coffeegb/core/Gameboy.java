@@ -565,6 +565,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // so the machine boots native-colour despite the dump's garbage flag byte
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
                     && !cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
+            if (configuration.bootstrapMode == BootstrapMode.SKIP) {
+                applySkippedBootRegisters(configuration.rom);
+            }
             if (configuration.bootstrapMode == BootstrapMode.SKIP && gbc) {
                 // SKIP starts with the GPU's post-boot LCD level and executes no transition
                 // from which the scheduler could publish it to the fresh DMA controller.
@@ -657,6 +660,28 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         r.setHL(hardwareProfile.bootSpec().postBootHl());
         r.setSP(0xfffe);
         r.setPC(0x0100);
+    }
+
+    /** Fixed register presets, without executing the boot ROM or changing the clock anchors. */
+    private void applySkippedBootRegisters(Rom rom) {
+        boolean sgb = hardwareProfile.capabilities().superGameboyCommands();
+        boolean dmgCompat = speedMode.isDmgCompat();
+        sound.initializePostBootRegisters(sgb);
+        gpu.setByte(0xff47, 0xfc);
+        // CGB compatibility setup and SGB command transmission leave JOYP deselected.
+        joypad.setByte(0xff00, sgb || dmgCompat ? 0x30 : 0x00);
+        if (gbc) {
+            hdma.initializePostBootRegisters();
+            gpu.initializePostBootPalettes(dmgCompat);
+            mmu.setByte(0xff6c, dmgCompat ? 1 : 0);
+            if (dmgCompat) {
+                // The compatibility path leaves the title sum in B for Nintendo-licensed
+                // cartridges, then ends its palette copy with DE=0008 and HL=007C.
+                cpu.getRegisters().setBC(rom.getCgbBootTitleChecksum() << 8);
+                cpu.getRegisters().setDE(0x0008);
+                cpu.getRegisters().setHL(0x007c);
+            }
+        }
     }
 
     // a cartridge-requested console reset (the Datel launch pulls the cart bus's /RES pin);
