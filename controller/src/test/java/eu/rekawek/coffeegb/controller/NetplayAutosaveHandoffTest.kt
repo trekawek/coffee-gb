@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
+import eu.rekawek.coffeegb.controller.link.createNetplayLoadEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
@@ -141,7 +142,7 @@ object NetplayAutosavePeer {
     val linked = LinkedController(bus, properties, null, LinkMode.NORMAL, localPlayer = localPlayer)
     try {
       linked.timingTicker.disabled = true
-      bus.post(Controller.LoadRomEvent(state.rom.image, state.state))
+      bus.post(createNetplayLoadEvent(state, LinkMode.NORMAL))
       awaitSessions(linked, 1)
       val configuration = Controller.createGameboyConfig(properties, state.rom)
       bus.post(PeerLoadedGameEvent(
