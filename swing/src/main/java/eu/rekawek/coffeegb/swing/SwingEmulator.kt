@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
+import eu.rekawek.coffeegb.controller.link.createNetplayLoadEvent
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationSink
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
@@ -224,7 +225,7 @@ class SwingEmulator(
     linkedControllerActive = true
     eventBus.post(ControllerOwnershipCommittedEvent())
     if (state != null) {
-      eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
+      eventBus.post(createNetplayLoadEvent(state, mode))
     }
   }
 

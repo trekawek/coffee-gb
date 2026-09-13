@@ -114,6 +114,8 @@ public final class CartridgeProperties {
      * may still match the same ROM and add their flags.
      */
     private static final List<Profile> PROFILES = List.of(
+            linkAtBoot("Razor Freestyle Scooter startup link detection",
+                    CartridgeProperties::isRazorFreestyleScooter),
             features("Pocket Voice V2.0", CartridgeProperties::isPocketVoice,
                     Feature.POCKET_VOICE),
             mapper("Pocket Camera debug tester", CartridgeProperties::isPocketCameraDebugTester,
@@ -232,10 +234,14 @@ public final class CartridgeProperties {
 
     private final List<String> profiles;
 
-    private CartridgeProperties(Mapper mapper, Set<Feature> features, List<String> profiles) {
+    private final boolean linkRequiredAtBoot;
+
+    private CartridgeProperties(Mapper mapper, Set<Feature> features, List<String> profiles,
+                                boolean linkRequiredAtBoot) {
         this.mapper = mapper;
         this.features = Collections.unmodifiableSet(features);
         this.profiles = Collections.unmodifiableList(profiles);
+        this.linkRequiredAtBoot = linkRequiredAtBoot;
     }
 
     public static CartridgeProperties detect(int[] rom) {
@@ -243,17 +249,19 @@ public final class CartridgeProperties {
         Mapper mapper = Mapper.STANDARD;
         EnumSet<Feature> features = EnumSet.noneOf(Feature.class);
         List<String> profiles = new ArrayList<>();
+        boolean linkRequiredAtBoot = false;
         for (Profile profile : PROFILES) {
             if (!profile.matcher.matches(info)) {
                 continue;
             }
             profiles.add(profile.name);
             features.addAll(profile.features);
+            linkRequiredAtBoot |= profile.linkRequiredAtBoot;
             if (mapper == Mapper.STANDARD && profile.mapper != Mapper.STANDARD) {
                 mapper = profile.mapper;
             }
         }
-        return new CartridgeProperties(mapper, features, profiles);
+        return new CartridgeProperties(mapper, features, profiles, linkRequiredAtBoot);
     }
 
     public Mapper getMapper() {
@@ -266,6 +274,15 @@ public final class CartridgeProperties {
 
     public List<String> getProfiles() {
         return profiles;
+    }
+
+    /**
+     * Whether netplay must begin with both cartridges freshly booted on the connected link.
+     * This frontend startup policy deliberately is not a Feature: it changes neither hardware
+     * behavior nor the serialized machine identity of existing saves.
+     */
+    public boolean isLinkRequiredAtBoot() {
+        return linkRequiredAtBoot;
     }
 
     int[] getHeader(int[] rom) {
@@ -291,7 +308,19 @@ public final class CartridgeProperties {
                                    Feature... features) {
         EnumSet<Feature> featureSet = EnumSet.noneOf(Feature.class);
         Collections.addAll(featureSet, features);
-        return new Profile(name, matcher, mapper, featureSet);
+        return new Profile(name, matcher, mapper, featureSet, false);
+    }
+
+    private static Profile linkAtBoot(String name, Matcher matcher) {
+        return new Profile(name, matcher, Mapper.STANDARD, Set.of(), true);
+    }
+
+    private static boolean isRazorFreestyleScooter(RomInfo info) {
+        return info.data.length == 0x100000
+                && info.title().startsWith("RAZOR FREESBRZE")
+                && info.byteAt(0x0143) == 0xc0
+                && info.rawType() == 0x19
+                && info.byteAt(0x014a) == 1;
     }
 
     private static boolean isPocketVoice(RomInfo info) {
@@ -940,7 +969,8 @@ public final class CartridgeProperties {
         boolean matches(RomInfo info);
     }
 
-    private record Profile(String name, Matcher matcher, Mapper mapper, Set<Feature> features) {
+    private record Profile(String name, Matcher matcher, Mapper mapper, Set<Feature> features,
+                           boolean linkRequiredAtBoot) {
     }
 
     private static final class RomInfo {

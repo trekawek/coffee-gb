@@ -191,9 +191,40 @@ an emulated tick, and **Stop Input Recording** remains available while paused. R
 same input timeline; cartridge RTC wall time is frozen across that pause. A clean-boot recording or
 loaded playback always starts its replacement session running, even when the previous session was
 paused. State loads, reset, ROM changes, peripheral changes, debugger pauses, and closing finish the
-recording before their lifecycle boundary. Linked play, real serial/infrared devices,
+recording before their lifecycle boundary. CGBR recording during linked play, real serial/infrared devices,
 host-time/sensor cartridges, reverse debugging, and starting a current-session recording while
 paused are rejected with an actionable reason.
+
+### Recording a netplay problem
+
+During netplay, **Game > Input Recording** provides a diagnostic input log. Press **Record** (🔴),
+choose a `.jsonl` destination, reproduce the problem, then press **Stop** (⏹️). The status bar shows
+the saved path. Disconnecting or closing the emulator also saves an active log. Recording on the
+host captures the inputs for every player; optionally record on the client too to compare arrival
+timing on the two machines. This works with both the two-player cable and four-player adapter.
+
+The log contains button presses/releases, emulated frame numbers, elapsed monotonic time, remote
+input arrival order, rollbacks, periodic frame progress, and machine configuration/reset boundaries.
+It includes recent inputs from before Record was pressed, making it useful to start recording just
+after connecting. It contains no ROM bytes, ROM hashes, save states, cartridge RAM, filesystem paths,
+or network addresses. Recording neither restarts the machines nor loads a save state.
+
+Netplay logs are diagnostic JSON Lines files, separate from `.cgbreplay` playback. Load, Play, and
+Reset-and-record remain unavailable during netplay. An existing destination is never overwritten;
+if saving fails, the completed log stays in memory and **Record** lets you choose another file.
+
+The version-1 header identifies `coffee-gb-netplay-input`, the link mode, local player, platform,
+and the number of discarded pre-recording events (`droppedEvents`). Players are numbered from zero.
+Each subsequent row has a strictly increasing `sequence`, `elapsedNanos` measured since the linked
+controller was created, and the controller's `frame`. For an `input` row, `inputFrame` is the frame
+the buttons apply to; a remote input may arrive at a later `frame`, followed by a `rollback` row.
+`pressed` and `released` contain button names. Empty input rows preserve network heartbeats.
+No initial machine state is embedded, so the log does not by itself guarantee deterministic replay
+of a session that started from an existing save or checkpoint.
+
+History before recording is limited to 4,096 events. Active capture automatically stops and saves
+at 100,000 events; its final `recording_stopped` row reports `reason: "record_limit"`. Ordinary stops
+report `user` or `session_closed`. Filesystem writes run outside the emulation and Swing threads.
 
 ## Rewind bounds
 
