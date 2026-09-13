@@ -10,14 +10,26 @@ import java.awt.Window
 import java.awt.event.KeyEvent
 import java.nio.file.Path
 import javax.swing.AbstractAction
+import javax.swing.Action
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JDialog
+import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
 import javax.swing.WindowConstants
+
+internal const val INPUT_RECORDING_VISIBLE_KEY = "coffee-gb.input-recording-visible"
+
+/** Keep the native Game menu and command-bar overflow synchronized with the same action. */
+internal fun inputRecordingMenuItem(action: Action): JMenuItem = JMenuItem(action).apply {
+  isVisible = action.getValue(INPUT_RECORDING_VISIBLE_KEY) != false
+  action.addPropertyChangeListener { event ->
+    if (event.propertyName == INPUT_RECORDING_VISIBLE_KEY) isVisible = event.newValue != false
+  }
+}
 
 internal data class InputRecordingControlState(
     val ejectEnabled: Boolean,
@@ -31,6 +43,9 @@ internal fun inputRecordingControlState(
     presentation: DesktopCommandPresentation,
     replaySelected: Boolean,
 ): InputRecordingControlState {
+  if (!presentation.inputRecordingVisible) {
+    return InputRecordingControlState(false, false, false, false, false)
+  }
   val transportIdle =
       presentation.recordingPhase == ReplayRecordingPhase.IDLE &&
           presentation.inputPlaybackPhase == ReplayPlaybackPhase.IDLE
@@ -155,6 +170,7 @@ internal class InputRecordingWindow(
 
   fun show() {
     requireEdt("Input recording window opening")
+    if (!presentation.inputRecordingVisible) return
     if (!shown) {
       dialog.setLocationRelativeTo(dialog.owner)
       shown = true
@@ -166,6 +182,7 @@ internal class InputRecordingWindow(
   fun render(next: DesktopCommandPresentation) {
     requireEdt("Input recording window update")
     presentation = next
+    if (!next.inputRecordingVisible) dialog.isVisible = false
     val controls = inputRecordingControlState(next, replaySelection.path != null)
     eject.isEnabled = controls.ejectEnabled
     playPause.isEnabled = controls.playPauseEnabled

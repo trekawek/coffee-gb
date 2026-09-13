@@ -10,8 +10,21 @@ import org.junit.Test
 
 class InputRecordingWindowTest {
   @Test
+  fun `netplay transport stays unavailable without the diagnostic flag in every recording phase`() {
+    for (phase in ReplayRecordingPhase.entries) {
+      val presentation = DesktopCommandPresentation(
+          gameLoaded = true, netplaySession = true, netplayRecordingPhase = phase,
+          stateCommandsAvailable = true, inputPlaybackPhase = ReplayPlaybackPhase.PLAYING)
+      assertFalse(presentation.inputRecordingVisible)
+      assertEquals(InputRecordingControlState(false, false, false, false, false),
+          inputRecordingControlState(presentation, replaySelected = true))
+    }
+  }
+
+  @Test
   fun `netplay can record all players while state capture and playback remain unavailable`() {
-    val presentation = DesktopCommandPresentation(gameLoaded = true, netplaySession = true)
+    val presentation = DesktopCommandPresentation(
+        gameLoaded = true, netplaySession = true, netplayRecordingEnabled = true)
     val idle = inputRecordingControlState(presentation, replaySelected = true)
     assertTrue(idle.recordEnabled)
     assertFalse(idle.resetRecordEnabled)

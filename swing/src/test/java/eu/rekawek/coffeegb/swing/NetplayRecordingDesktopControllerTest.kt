@@ -23,7 +23,7 @@ class NetplayRecordingDesktopControllerTest {
     bus.register<NetplayRecordingRetryEvent> { retries.add(it) }
     val controller = NetplayRecordingDesktopController(null, bus, statuses::add, messages::add, { path })
     fun status(event: NetplayRecordingStatusEvent) {
-      bus.post(event)
+      bus.post(event.copy(enabled = true))
       SwingUtilities.invokeAndWait {}
     }
     try {
@@ -56,8 +56,38 @@ class NetplayRecordingDesktopControllerTest {
     bus.register<NetplayRecordingStartEvent> { requests++ }
     val controller = NetplayRecordingDesktopController(null, bus, {}, {}, { null })
     try {
-      bus.post(NetplayRecordingStatusEvent(1, ReplayRecordingPhase.IDLE))
+      bus.post(NetplayRecordingStatusEvent(1, ReplayRecordingPhase.IDLE, enabled = true))
       SwingUtilities.invokeAndWait { controller.start() }
+      assertEquals(0, requests)
+    } finally {
+      SwingUtilities.invokeAndWait { controller.close() }
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `disabled diagnostics cannot open a chooser or send recording commands`() {
+    val bus = EventBusImpl()
+    var choosers = 0
+    var requests = 0
+    bus.register<NetplayRecordingStartEvent> { requests++ }
+    bus.register<NetplayRecordingStopEvent> { requests++ }
+    bus.register<NetplayRecordingRetryEvent> { requests++ }
+    val controller = NetplayRecordingDesktopController(null, bus, {}, {}, {
+      choosers++
+      Path.of("disabled.jsonl")
+    })
+    try {
+      for (phase in listOf(ReplayRecordingPhase.IDLE, ReplayRecordingPhase.UNSAVED,
+          ReplayRecordingPhase.RECORDING)) {
+        bus.post(NetplayRecordingStatusEvent(1, phase))
+        SwingUtilities.invokeAndWait {
+          assertTrue(controller.isLinked)
+          controller.start()
+          controller.stop()
+        }
+      }
+      assertEquals(0, choosers)
       assertEquals(0, requests)
     } finally {
       SwingUtilities.invokeAndWait { controller.close() }
