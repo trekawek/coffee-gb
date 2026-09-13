@@ -225,6 +225,10 @@ internal class DesktopUiCoordinator(
   fun inputPlayback(phase: eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase) =
       update { it.copy(commands = it.commands.copy(inputPlaybackPhase = phase)) }
 
+  fun netplayRecording(status: eu.rekawek.coffeegb.controller.replay.NetplayRecordingStatusEvent) =
+      update { it.copy(commands = it.commands.copy(
+          netplaySession = status.available, netplayRecordingPhase = status.phase)) }
+
   fun netplaySummary(summary: String) {
     require(summary.isNotBlank())
     update { it.copy(netplaySummary = summary) }

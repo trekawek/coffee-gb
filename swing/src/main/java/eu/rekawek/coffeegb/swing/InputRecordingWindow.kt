@@ -32,26 +32,35 @@ internal fun inputRecordingControlState(
     replaySelected: Boolean,
 ): InputRecordingControlState {
   val transportIdle =
-      presentation.inputRecordingPhase == ReplayRecordingPhase.IDLE &&
+      presentation.recordingPhase == ReplayRecordingPhase.IDLE &&
           presentation.inputPlaybackPhase == ReplayPlaybackPhase.IDLE
   val ordinarySessionReady =
       presentation.gameLoaded &&
+          !presentation.netplaySession &&
           presentation.stateCommandsAvailable &&
           !presentation.sessionBusy
   val playbackControllable =
       presentation.gameLoaded &&
+          !presentation.netplaySession &&
           presentation.inputPlaybackPhase == ReplayPlaybackPhase.PLAYING &&
           !presentation.sessionBusy
   val recordingActive =
-      presentation.inputRecordingPhase == ReplayRecordingPhase.ARMING ||
-          presentation.inputRecordingPhase == ReplayRecordingPhase.RECORDING
-  val playbackActive = presentation.inputPlaybackPhase != ReplayPlaybackPhase.IDLE
+      presentation.recordingPhase == ReplayRecordingPhase.ARMING ||
+          presentation.recordingPhase == ReplayRecordingPhase.RECORDING
+  val playbackActive =
+      !presentation.netplaySession && presentation.inputPlaybackPhase != ReplayPlaybackPhase.IDLE
   return InputRecordingControlState(
       ejectEnabled = ordinarySessionReady && transportIdle,
       playPauseEnabled =
           playbackControllable || (ordinarySessionReady && transportIdle && replaySelected),
-      stopEnabled = presentation.gameLoaded && (recordingActive || playbackActive),
-      recordEnabled = ordinarySessionReady && transportIdle && !presentation.paused,
+      stopEnabled =
+          (presentation.netplaySession && recordingActive) ||
+              (presentation.gameLoaded && (recordingActive || playbackActive)),
+      recordEnabled =
+          (ordinarySessionReady && transportIdle && !presentation.paused) ||
+              (presentation.netplaySession && !presentation.sessionBusy &&
+                  ((presentation.gameLoaded && transportIdle) ||
+                      presentation.recordingPhase == ReplayRecordingPhase.UNSAVED)),
       resetRecordEnabled = ordinarySessionReady && transportIdle,
   )
 }
@@ -163,6 +172,16 @@ internal class InputRecordingWindow(
     stop.isEnabled = controls.stopEnabled
     record.isEnabled = controls.recordEnabled
     resetRecord.isEnabled = controls.resetRecordEnabled
+    record.toolTipText = when {
+      next.netplaySession && next.recordingPhase == ReplayRecordingPhase.UNSAVED ->
+          "Save retained netplay input log to another file"
+      next.netplaySession -> "Record all netplay players and timing to a diagnostic log"
+      else -> "Record from current moment"
+    }
+    record.accessibleContext.accessibleName = record.toolTipText
+    resetRecord.toolTipText = if (next.netplaySession) {
+      "Reset and record is available for local games"
+    } else "Reset and record from boot"
     playPause.toolTipText =
         when {
           next.inputPlaybackPhase != ReplayPlaybackPhase.PLAYING ->
@@ -170,7 +189,8 @@ internal class InputRecordingWindow(
           next.paused -> "Resume input playback"
           else -> "Pause input playback"
         }
-    dialog.title = replaySelection.path?.fileName?.let { "$BASE_TITLE — $it" } ?: BASE_TITLE
+    dialog.title = if (next.netplaySession) "$BASE_TITLE — Netplay log" else
+        replaySelection.path?.fileName?.let { "$BASE_TITLE — $it" } ?: BASE_TITLE
   }
 
   fun selectRecordedReplay(path: Path) {

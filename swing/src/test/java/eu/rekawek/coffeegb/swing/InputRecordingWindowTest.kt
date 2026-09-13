@@ -10,6 +10,41 @@ import org.junit.Test
 
 class InputRecordingWindowTest {
   @Test
+  fun `netplay can record all players while state capture and playback remain unavailable`() {
+    val presentation = DesktopCommandPresentation(gameLoaded = true, netplaySession = true)
+    val idle = inputRecordingControlState(presentation, replaySelected = true)
+    assertTrue(idle.recordEnabled)
+    assertFalse(idle.resetRecordEnabled)
+    assertFalse(idle.playPauseEnabled)
+    assertFalse(idle.ejectEnabled)
+    assertFalse(idle.stopEnabled)
+    assertFalse(inputRecordingControlState(
+        presentation.copy(inputPlaybackPhase = ReplayPlaybackPhase.PLAYING), true,
+    ).playPauseEnabled)
+    val recording = inputRecordingControlState(
+        presentation.copy(netplayRecordingPhase = ReplayRecordingPhase.RECORDING), true)
+    assertTrue(recording.stopEnabled)
+    assertFalse(recording.recordEnabled)
+    assertTrue(inputRecordingControlState(
+        presentation.copy(gameLoaded = false, netplayRecordingPhase = ReplayRecordingPhase.RECORDING),
+        true,
+    ).stopEnabled)
+    val saving = inputRecordingControlState(
+        presentation.copy(netplayRecordingPhase = ReplayRecordingPhase.SAVING), true)
+    assertFalse(saving.stopEnabled)
+    assertFalse(saving.recordEnabled)
+    val unsaved = inputRecordingControlState(
+        presentation.copy(netplayRecordingPhase = ReplayRecordingPhase.UNSAVED), true)
+    assertTrue(unsaved.recordEnabled)
+    assertFalse(unsaved.stopEnabled)
+    assertTrue(inputRecordingControlState(
+        presentation.copy(gameLoaded = false, netplayRecordingPhase = ReplayRecordingPhase.UNSAVED),
+        true,
+    ).recordEnabled)
+    assertFalse(inputRecordingControlState(presentation.copy(sessionBusy = true), true).recordEnabled)
+  }
+
+  @Test
   fun `loading a replay selects and immediately plays it`() {
     val selection = InputReplaySelection()
     val selected = Path.of("loaded.cgbreplay")

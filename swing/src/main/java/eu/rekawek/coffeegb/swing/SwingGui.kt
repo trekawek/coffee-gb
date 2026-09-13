@@ -118,6 +118,8 @@ class SwingGui private constructor(
 
   private lateinit var inputRecordingWindow: InputRecordingWindow
 
+  private lateinit var netplayRecordingController: NetplayRecordingDesktopController
+
   private lateinit var debuggerController: DesktopDebuggerController
 
   private lateinit var netplayWindow: NetplayWindowHost
@@ -173,6 +175,7 @@ class SwingGui private constructor(
           runDesktopEdtStep(netplayWindow::close)
           runDesktopEdtStep(mobileAdapterWindow::close)
           runDesktopEdtStep(inputRecordingWindow::close)
+          runDesktopEdtStep(netplayRecordingController::close)
           runDesktopEdtStep(stateUxController::close)
           recentGamePreviewLoader.close()
           console?.stop()
@@ -331,14 +334,27 @@ class SwingGui private constructor(
             },
             dialogFactory = desktopDialogFactory,
         )
+    netplayRecordingController = NetplayRecordingDesktopController(
+        owner = mainWindow,
+        rootEventBus = eventBus,
+        onStatus = { status ->
+          if (::desktopUiCoordinator.isInitialized) desktopUiCoordinator.netplayRecording(status)
+        },
+        onMessage = { message ->
+          if (::desktopUiCoordinator.isInitialized) desktopUiCoordinator.warning(message)
+        },
+    )
     inputRecordingWindow =
         InputRecordingWindow(
             owner = mainWindow,
             chooseReplay = stateUxController::chooseInputRecording,
             playReplay = stateUxController::playInputRecording,
             setPlaybackPaused = stateUxController::setInputPlaybackPaused,
-            stopTransport = stateUxController::stopInputRecording,
-            startRecording = stateUxController::startInputRecording,
+            stopTransport = ::stopInputRecording,
+            startRecording = { mode ->
+              if (netplayRecordingController.isLinked) netplayRecordingController.start()
+              else stateUxController.startInputRecording(mode)
+            },
         )
     debuggerController =
         DesktopDebuggerController(
@@ -406,6 +422,7 @@ class SwingGui private constructor(
           { runDesktopEdtStep(netplayWindow::close) },
           { runDesktopEdtStep(mobileAdapterWindow::close) },
           { runDesktopEdtStep(inputRecordingWindow::close) },
+          { runDesktopEdtStep(netplayRecordingController::close) },
           {
             if (::desktopUiStateController.isInitialized) {
               runDesktopEdtStep(desktopUiStateController::close)
@@ -457,7 +474,7 @@ class SwingGui private constructor(
                 setFullscreen = displayController::setFullscreen,
                 screenshot = stateUxController::takeScreenshot,
                 inputRecording = inputRecordingWindow::show,
-                stopInputRecording = stateUxController::stopInputRecording,
+                stopInputRecording = ::stopInputRecording,
                 loadInputRecording = stateUxController::loadInputRecording,
                 setCommandBarVisible = ::setCommandBarVisible,
                 selectStateSlot = { slot ->
@@ -854,6 +871,11 @@ class SwingGui private constructor(
       current.copy(desktop = current.desktop.copy(commandBarVisible = visible))
     }
     desktopUiCoordinator.commandBarVisible(visible)
+  }
+
+  private fun stopInputRecording() {
+    if (netplayRecordingController.isLinked) netplayRecordingController.stop()
+    else stateUxController.stopInputRecording()
   }
 
   private fun confirmNetplayPeripheralHandoff(
