@@ -30,7 +30,7 @@ public class JoypadHotPathTest {
             new AtomicReference<>();
 
     @Test
-    public void everyPhysicalButtonMaskMatchesSelectorElectricalLevels() {
+    public void everyPhysicalButtonMaskMatchesSelectorLevelsWithDirectionPriority() {
         AtomicReference<PlayerInputSnapshot> input =
                 new AtomicReference<>(PlayerInputSnapshot.released());
         Joypad joypad = new Joypad(
@@ -637,6 +637,10 @@ public class JoypadHotPathTest {
     private static int expectedInputLines(int selector, Set<Button> buttons) {
         int inputLines = 0x0f;
         for (Button button : buttons) {
+            if (button == Button.LEFT && buttons.contains(Button.RIGHT)
+                    || button == Button.DOWN && buttons.contains(Button.UP)) {
+                continue;
+            }
             if ((button.getLine() & selector) == 0) {
                 inputLines &= ~button.getMask();
             }
