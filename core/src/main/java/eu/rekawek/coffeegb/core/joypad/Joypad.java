@@ -181,10 +181,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     }
 
     /**
-     * The effective P1 set of currently-held buttons. It combines the historical event stream
-     * with the latest live-source latch and is intentionally not part of machine state (see
-     * {@link #captureState()}). Rollback netplay snapshots only the event-owned subset; the live
-     * service remains current across restore.
+     * The raw P1 set of currently-held buttons, before resolving opposing directions. It combines
+     * the historical event stream with the latest live-source latch and is intentionally not part
+     * of machine state (see {@link #captureState()}). Rollback netplay snapshots only the event-owned
+     * subset; the live service remains current across restore.
      */
     public Set<Button> getPressedButtons() {
         Set<Button> pressed = new java.util.HashSet<>(buttons);
@@ -431,26 +431,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             refreshReleasedInputFastPathEligibility();
             return;
         }
-        int inputLines;
-        if (players > 0 && (p1 & 0x30) == 0x30) {
-            LOG.atDebug().log("Returning player {} as current player", currentPlayer);
-            inputLines = 0x0f - currentPlayer;
-        } else {
-            int pressedButtonMask = (sampledInput.packedButtonMasks >>> (currentPlayer * Byte.SIZE))
-                    & JoypadButtonMask.ALL;
-            int pressedInputLines = 0;
-            if ((p1 & 0x10) == 0) {
-                pressedInputLines |= pressedButtonMask & 0x0f;
-            }
-            if ((p1 & 0x20) == 0) {
-                pressedInputLines |= (pressedButtonMask >>> 4) & 0x0f;
-            }
-            inputLines = 0x0f & ~pressedInputLines & 0x0f;
-            // The historical event-driven API remains P1-only for controller/netplay replay.
-            if (currentPlayer == 0 && !buttons.isEmpty()) {
-                inputLines = applyButtons(inputLines, buttons);
-            }
-        }
+        int inputLines = getInputLines();
         if (!isJoypadClockRising()) {
             refreshInputFastPathEligibility(inputLines);
             return;
@@ -724,6 +705,21 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
         int pressedButtonMask = (sampledInput.packedButtonMasks >>> (currentPlayer * Byte.SIZE))
                 & JoypadButtonMask.ALL;
+        // The historical event-driven API remains P1-only for controller/netplay replay.
+        if (currentPlayer == 0 && !buttons.isEmpty()) {
+            pressedButtonMask |= JoypadButtonMask.fromButtons(buttons);
+        }
+        // Host devices can hold opposing directions, which breaks games such as Razor's link
+        // protocol. Match SameBoy's default input policy: RIGHT wins over LEFT, UP over DOWN.
+        // Resolve the complete source union before projecting onto the shared JOYP lines so
+        // action buttons remain independent. Keep raw inputs intact for releases and replay;
+        // fixed priority requires no press-order state that could diverge during rollback.
+        if ((pressedButtonMask & JoypadButtonMask.RIGHT) != 0) {
+            pressedButtonMask &= ~JoypadButtonMask.LEFT;
+        }
+        if ((pressedButtonMask & JoypadButtonMask.UP) != 0) {
+            pressedButtonMask &= ~JoypadButtonMask.DOWN;
+        }
         int pressedInputLines = 0;
         if ((p1 & 0x10) == 0) {
             pressedInputLines |= pressedButtonMask & 0x0f;
@@ -731,22 +727,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if ((p1 & 0x20) == 0) {
             pressedInputLines |= (pressedButtonMask >>> 4) & 0x0f;
         }
-        int result = 0x0f & ~pressedInputLines & 0x0f;
-        // The historical event-driven API remains P1-only for controller/netplay replay.
-        if (currentPlayer == 0 && !buttons.isEmpty()) {
-            result = applyButtons(result, buttons);
-        }
-        return result;
-    }
-
-    private int applyButtons(int inputLines, Collection<Button> pressedButtons) {
-        int result = inputLines;
-        for (Button button : pressedButtons) {
-            if ((button.getLine() & p1) == 0) {
-                result &= 0xff & ~button.getMask();
-            }
-        }
-        return result;
+        return 0x0f & ~pressedInputLines;
     }
 
     @Override
