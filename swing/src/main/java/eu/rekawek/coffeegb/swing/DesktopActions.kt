@@ -56,7 +56,12 @@ internal data class DesktopCommandPresentation(
     val exactWindowScaleOne: Boolean = false,
     val inputRecordingPhase: ReplayRecordingPhase = ReplayRecordingPhase.IDLE,
     val inputPlaybackPhase: ReplayPlaybackPhase = ReplayPlaybackPhase.IDLE,
+    val netplaySession: Boolean = false,
+    val netplayRecordingPhase: ReplayRecordingPhase = ReplayRecordingPhase.IDLE,
 ) {
+  val recordingPhase: ReplayRecordingPhase
+    get() = if (netplaySession) netplayRecordingPhase else inputRecordingPhase
+
   init {
     require(stateSlot in 0..9)
     require(loadableStateSlots.all { it in 0..9 })
@@ -513,13 +518,14 @@ internal class DesktopActionRegistry(
         DesktopCommand.OPEN_SAVE_FOLDER,
         DesktopCommand.SCREENSHOT -> state.stateBrowserAvailable && !state.sessionBusy
         DesktopCommand.INPUT_RECORDING ->
-            state.gameLoaded
+            state.gameLoaded || state.netplaySession
         DesktopCommand.STOP_INPUT_RECORDING ->
-            (state.inputRecordingPhase == ReplayRecordingPhase.ARMING ||
-                state.inputRecordingPhase == ReplayRecordingPhase.RECORDING) &&
-                state.gameLoaded
+            (state.recordingPhase == ReplayRecordingPhase.ARMING ||
+                state.recordingPhase == ReplayRecordingPhase.RECORDING) &&
+                (state.gameLoaded || state.netplaySession)
         DesktopCommand.LOAD_INPUT_RECORDING ->
             state.gameLoaded &&
+                !state.netplaySession &&
                 state.inputRecordingPhase == ReplayRecordingPhase.IDLE &&
                 state.inputPlaybackPhase == ReplayPlaybackPhase.IDLE &&
                 !state.sessionBusy

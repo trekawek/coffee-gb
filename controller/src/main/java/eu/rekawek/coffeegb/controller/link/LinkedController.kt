@@ -8,6 +8,10 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.replay.NetplayInputLog
+import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStartEvent
+import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStopEvent
+import eu.rekawek.coffeegb.controller.replay.NetplayRecordingRetryEvent
 import eu.rekawek.coffeegb.controller.PreparedSession
 import eu.rekawek.coffeegb.controller.RetainedClosePersistence
 import eu.rekawek.coffeegb.controller.RomSessionPreparer
@@ -143,6 +147,9 @@ class LinkedController(
 ) : Controller {
 
   private val eventBus = parentEventBus.fork("session")
+
+  private val inputLog = NetplayInputLog(mode, localPlayer, ::postHostEventSafely)
+  private var loggedConfigs: List<GameboyConfiguration?> = emptyList()
 
   /** One ingress sequence preserves arrival order across the control and peer event queues. */
   private val incomingEventSequence = AtomicLong()
@@ -435,6 +442,7 @@ class LinkedController(
       lastInput = null
       rebaseHistoryToLiveState()
       rollbackMetrics.recordCheckpoint(NetplayRollbackReason.CHECKPOINT)
+      logInputBoundary(NetplayRollbackReason.CHECKPOINT.name)
     } catch (failure: Throwable) {
       try {
         rollback.forEach { (_, session, prepared) ->
@@ -508,6 +516,7 @@ class LinkedController(
       rebaseHistoryToLiveState()
       syncV9RemoteButtons()
       rollbackMetrics.recordCheckpoint(NetplayRollbackReason.RESYNCHRONIZATION)
+      logInputBoundary(NetplayRollbackReason.RESYNCHRONIZATION.name)
     } catch (failure: Throwable) {
       try {
         links = oldLinks
@@ -787,6 +796,12 @@ class LinkedController(
   init {
     require(localPlayer in 0 until mode.playerCount)
 
+    localOpenEventQueue.register<NetplayRecordingStartEvent> { inputLog.start(it, frame) }
+    localOpenEventQueue.register<NetplayRecordingStopEvent> {
+      if (it.sessionId == inputLog.sessionId) inputLog.stop(frame)
+    }
+    localOpenEventQueue.register<NetplayRecordingRetryEvent>(inputLog::retry)
+
     localOpenEventQueue.register<LoadedLocalConfigEvent> { e ->
       beginLocalReplacement(e)
     }
@@ -922,6 +937,7 @@ class LinkedController(
           e.player in sessions.indices &&
           validateRuntimeFrame(e.frame, e.source)) {
         stateHistory.addSecondaryInput(e.player, e.frame, e.input)
+        inputLog.input(e.frame, frame, e.player, e.input, remote = true)
         eventBus.postAsync(ValidatedPeerButtonStateEvent(e))
       }
     }
@@ -1059,6 +1075,7 @@ class LinkedController(
       eventQueue.discardSource(it.source)
       disconnectedSources += it.source
     }
+    inputLog.announce()
   }
 
   override fun startController() {
@@ -1082,6 +1099,11 @@ class LinkedController(
     // the preceding ordinary frame. The paced forward path installs its new request later.
     sessions.forEach { it?.gameboy?.requestFrameRenderSuppression(false) }
     processPendingWorkAtSafePoint()
+    inputLog.poll()
+    if (configs.indices.any { loggedConfigs.getOrNull(it) !== configs[it] }) {
+      logInputBoundary("configuration")
+      loggedConfigs = configs.toList()
+    }
 
     // Local preparation and battery persistence are deliberately owned by a worker. Hold every
     // linked machine and its queued topology/rollback commands at the last completed frame until
@@ -1128,6 +1150,7 @@ class LinkedController(
     sessions[localPlayer]?.let { effectiveInput.send(it.eventBus) }
 
     if (!effectiveInput.isEmpty() || lastSync.elapsedNow() > 5.seconds) {
+      inputLog.input(frame, frame, localPlayer, effectiveInput, remote = false)
       eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput, localPlayer))
       lastSync = TimeSource.Monotonic.markNow()
     }
@@ -1143,6 +1166,7 @@ class LinkedController(
 
     frame++
     workProgressFrame++
+    if (workProgressFrame % 60 == 0L) inputLog.event("progress", frame)
   }
 
   /**
@@ -2345,6 +2369,7 @@ class LinkedController(
       installUnsupportedDebugPort()
     }
     rollbackMetrics.recordCheckpoint(NetplayRollbackReason.CHECKPOINT)
+    logInputBoundary(NetplayRollbackReason.CHECKPOINT.name)
     rollbackMetrics.updateHistory(stateHistory.entryCount())
     return true
   }
@@ -2529,6 +2554,7 @@ class LinkedController(
               value.player,
           )
       stateHistory.addSecondaryInput(value.player, value.frame, translated.input)
+      inputLog.input(value.frame, frame, value.player, translated.input, remote = true)
       eventBus.postAsync(ValidatedPeerButtonStateEvent(translated))
       event.completion.complete(null)
     } catch (_: Exception) {
@@ -3007,6 +3033,12 @@ class LinkedController(
   /** Applies every accepted old-generation patch before a topology snapshot is captured. */
   private fun reconcileHistory() {
     val merge = stateHistory.mergeDetailed(configs) ?: return
+    inputLog.event(
+        "rollback", frame,
+        "framesRewound" to merge.framesRewound,
+        "framesResimulated" to merge.framesResimulated,
+        "resultFrame" to stateHistory.getHead().frame,
+    )
     val head = stateHistory.getHead()
     for (player in sessions.indices) {
       val session = sessions[player]
@@ -3044,6 +3076,22 @@ class LinkedController(
     runtimeFrameFloor = frame
     rebaseHistoryToLiveState()
     if (record) rollbackMetrics.recordCheckpoint(reason)
+    if (record) logInputBoundary(reason.name)
+  }
+
+  private fun logInputBoundary(reason: String) {
+    inputLog.event(
+        "boundary", frame, "reason" to reason,
+        "players" to configs.mapIndexed { player, config ->
+          mapOf(
+              "player" to player,
+              "present" to (sessions[player] != null),
+              "hardwareProfile" to config?.hardwareProfile?.id(),
+              "bootstrapMode" to config?.bootstrapMode?.name,
+              "held" to sessions[player]?.heldButtons?.sorted()?.map { it.name },
+          )
+        },
+    )
   }
 
   private fun rebaseHistoryToLiveState() {
@@ -3109,6 +3157,20 @@ class LinkedController(
     console?.setDebugPort(null)
     doStop = true
     awaitTimingThread(closeDeadlineNanos)
+    // A failed close retains a stopped owner. Honor a replacement log destination selected
+    // during that barrier before retrying persistence, without dispatching machine mutations.
+    while (localOpenEventQueue.dispatchFirstMatching { it is NetplayRecordingRetryEvent }) {
+      // Only recording persistence requests are safe while the machines remain stopped.
+    }
+    try {
+      inputLog.finish(frame, closeDeadlineNanos)
+    } catch (failure: Exception) {
+      if (failure is InterruptedException) Thread.currentThread().interrupt()
+      throw closeBarrierFailure(
+          "The netplay input log could not be saved before closing. The recording remains retained; close can be retried.",
+          failure,
+      )
+    }
 
     // The close caller owns retry presentation. Cancel without lifecycle callbacks, retain the
     // exact current machine generation, and queue its writer behind any cancelled worker body.

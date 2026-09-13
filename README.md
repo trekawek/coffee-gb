@@ -122,6 +122,10 @@ For link-cable multiplayer, open **Game > Netplay…**. One player selects
 and selects **Join game**. Netplay uses a direct, unencrypted TCP connection, so
 play only with people and networks you trust.
 
+To report a netplay problem, use **Game > Input Recording**, press **Record**, choose a log file,
+and press **Stop** after reproducing it. One host log captures every player's inputs and arrival
+timing. See [netplay input logs](docs/state-management.md#recording-a-netplay-problem) for details.
+
 ## Project history
 
 Coffee GB began as a six-week deep dive into how a small computer works. The
