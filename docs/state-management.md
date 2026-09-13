@@ -195,13 +195,29 @@ recording before their lifecycle boundary. CGBR recording during linked play, re
 host-time/sensor cartridges, reverse debugging, and starting a current-session recording while
 paused are rejected with an actionable reason.
 
-### Recording a netplay problem
+### Internal netplay input diagnostics
 
-During netplay, **Game > Input Recording** provides a diagnostic input log. Press **Record** (🔴),
-choose a `.jsonl` destination, reproduce the problem, then press **Stop** (⏹️). The status bar shows
-the saved path. Disconnecting or closing the emulator also saves an active log. Recording on the
-host captures the inputs for every player; optionally record on the client too to compare arrival
-timing on the two machines. This works with both the two-player cable and four-player adapter.
+Netplay input logging is an internal diagnostic feature, hidden and disabled by default. Its JSONL
+files cannot be played in the input recording UI and are incompatible with ordinary `.cgbreplay`
+recordings. To opt in for one process, launch with the JVM property
+`-Dcoffeegb.netplay.inputRecording=true`, for example:
+
+```sh
+java -Dcoffeegb.netplay.inputRecording=true -jar swing/target/coffee-gb.jar
+```
+
+For packaged launchers and automatically started local clients, set
+`JAVA_TOOL_OPTIONS='-Dcoffeegb.netplay.inputRecording=true'` in the launch environment so the child
+process inherits it. The flag is not a saved preference. Without it, the netplay recording menu
+entry is hidden, recording shortcuts are disabled, and no diagnostic input history is collected.
+Ordinary local input recording and playback remain available.
+
+With the flag enabled during netplay, **Game > Input Recording** provides a diagnostic input log.
+Press **Record** (🔴), choose a `.jsonl` destination, reproduce the problem, then press **Stop** (⏹️).
+The status bar shows the saved path. Disconnecting or closing the emulator also saves an active log.
+Recording on the host captures the inputs for every player; optionally record on the client too to
+compare arrival timing on the two machines. This works with both the two-player cable and four-player
+adapter.
 
 The log contains button presses/releases, emulated frame numbers, elapsed monotonic time, remote
 input arrival order, rollbacks, periodic frame progress, and machine configuration/reset boundaries.

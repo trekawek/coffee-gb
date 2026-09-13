@@ -16,4 +16,6 @@ data class NetplayRecordingStatusEvent(
     val available: Boolean = true,
     val savedPath: Path? = null,
     val error: String? = null,
+    /** The linked owner remains available even when its diagnostic feature is disabled. */
+    val enabled: Boolean = false,
 ) : Event

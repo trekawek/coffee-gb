@@ -11,6 +11,9 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+/** Internal, process-local opt-in; never saved in user preferences. */
+internal const val NETPLAY_INPUT_RECORDING_PROPERTY = "coffeegb.netplay.inputRecording"
+
 /**
  * Frame-owner diagnostics, never consulted by emulation or rollback. The bounded pre-roll retains
  * startup inputs even when Record is pressed after connecting. No machine/ROM/save data is read.
@@ -26,6 +29,7 @@ internal class NetplayInputLog(
     private val write: (Path, ByteArray) -> Path = { path, bytes ->
       ExclusiveFileWriter.write(path, bytes).path
     },
+    private val enabled: Boolean = java.lang.Boolean.getBoolean(NETPLAY_INPUT_RECORDING_PROPERTY),
 ) {
   val sessionId = nextSession.incrementAndGet()
   var phase = ReplayRecordingPhase.IDLE
@@ -47,6 +51,7 @@ internal class NetplayInputLog(
   fun announce() = status()
 
   fun input(frame: Long, observedFrame: Long, player: Int, input: Input, remote: Boolean) {
+    if (!enabled) return
     event(
         "input", observedFrame,
         "inputFrame" to frame,
@@ -58,6 +63,7 @@ internal class NetplayInputLog(
   }
 
   fun event(type: String, frame: Long, vararg fields: Pair<String, Any?>) {
+    if (!enabled) return
     rows.addLast(json(linkedMapOf(
         "type" to type, "sequence" to sequence++, "elapsedNanos" to nanoTime() - started,
         "frame" to frame, *fields)))
@@ -72,7 +78,7 @@ internal class NetplayInputLog(
   }
 
   fun start(request: NetplayRecordingStartEvent, frame: Long) {
-    if (request.sessionId != sessionId || phase != ReplayRecordingPhase.IDLE) return
+    if (!enabled || request.sessionId != sessionId || phase != ReplayRecordingPhase.IDLE) return
     path = request.path
     phase = ReplayRecordingPhase.RECORDING
     event("recording_started", frame)
@@ -160,7 +166,7 @@ internal class NetplayInputLog(
   }
 
   private fun status(available: Boolean = true, savedPath: Path? = null, error: String? = null) =
-      publish(NetplayRecordingStatusEvent(sessionId, phase, available, savedPath, error))
+      publish(NetplayRecordingStatusEvent(sessionId, phase, available, savedPath, error, enabled))
 
   private companion object {
     val nextSession = AtomicLong()

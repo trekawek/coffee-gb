@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStatusEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -8,6 +10,21 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class DesktopUiCoordinatorTest {
+  @Test
+  fun `linked ownership and diagnostic opt in are independent`() {
+    val coordinator = DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
+    val disabled = NetplayRecordingStatusEvent(1, ReplayRecordingPhase.IDLE)
+    coordinator.netplayRecording(disabled)
+    assertTrue(coordinator.current().commands.netplaySession)
+    assertFalse(coordinator.current().commands.inputRecordingVisible)
+
+    coordinator.netplayRecording(disabled.copy(enabled = true))
+    assertTrue(coordinator.current().commands.inputRecordingVisible)
+    coordinator.netplayRecording(disabled.copy(available = false))
+    assertFalse(coordinator.current().commands.netplaySession)
+    assertTrue(coordinator.current().commands.inputRecordingVisible)
+  }
+
   @Test
   fun `pause support announced before start is staged until the game opens`() {
     val coordinator =

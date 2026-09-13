@@ -422,7 +422,11 @@ internal class DesktopCommandBar(
             DesktopCommand.INPUT_RECORDING,
             DesktopCommand.MANAGE_STATES,
         )
-        .forEach { command -> overflowMenu.add(JMenuItem(actions[command])) }
+        .forEach { command ->
+          overflowMenu.add(
+              if (command == DesktopCommand.INPUT_RECORDING) inputRecordingMenuItem(actions[command])
+              else JMenuItem(actions[command]))
+        }
     overflow.toolTipText = "More game commands"
     overflow.accessibleContext.accessibleName = "More game commands"
     overflow.addActionListener { overflowMenu.show(overflow, 0, overflow.height) }

@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.controller.replay.NetplayRecordingRetryEvent
 import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStatusEvent
 import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStopEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
+import eu.rekawek.coffeegb.controller.replay.NETPLAY_INPUT_RECORDING_PROPERTY
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
@@ -96,7 +97,13 @@ class LinkedControllerNetplayRecordingTest {
         bus.post(NetplayRecordingStartEvent(sessionId, path))
       }
     }
-    val controller = LinkedController(bus, properties, null)
+    val previous = System.setProperty(NETPLAY_INPUT_RECORDING_PROPERTY, record.toString())
+    val controller = try {
+      LinkedController(bus, properties, null)
+    } finally {
+      if (previous == null) System.clearProperty(NETPLAY_INPUT_RECORDING_PROPERTY)
+      else System.setProperty(NETPLAY_INPUT_RECORDING_PROPERTY, previous)
+    }
     controller.timingTicker.disabled = true
     try {
       bus.post(LoadRomEvent(rom.toFile()))

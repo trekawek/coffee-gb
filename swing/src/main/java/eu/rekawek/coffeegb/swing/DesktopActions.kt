@@ -58,7 +58,11 @@ internal data class DesktopCommandPresentation(
     val inputPlaybackPhase: ReplayPlaybackPhase = ReplayPlaybackPhase.IDLE,
     val netplaySession: Boolean = false,
     val netplayRecordingPhase: ReplayRecordingPhase = ReplayRecordingPhase.IDLE,
+    val netplayRecordingEnabled: Boolean = false,
 ) {
+  val inputRecordingVisible: Boolean
+    get() = !netplaySession || netplayRecordingEnabled
+
   val recordingPhase: ReplayRecordingPhase
     get() = if (netplaySession) netplayRecordingPhase else inputRecordingPhase
 
@@ -300,6 +304,8 @@ internal class DesktopActionRegistry(
       action.isEnabled = enabled(command, presentation)
       action.putValue(Action.SELECTED_KEY, selected(command, presentation))
     }
+    actions.getValue(DesktopCommand.INPUT_RECORDING).putValue(
+        INPUT_RECORDING_VISIBLE_KEY, presentation.inputRecordingVisible)
     actions.getValue(DesktopCommand.PAUSE).putValue(
         Action.NAME,
         if (presentation.paused) "Resume" else "Pause",
@@ -518,10 +524,11 @@ internal class DesktopActionRegistry(
         DesktopCommand.OPEN_SAVE_FOLDER,
         DesktopCommand.SCREENSHOT -> state.stateBrowserAvailable && !state.sessionBusy
         DesktopCommand.INPUT_RECORDING ->
-            state.gameLoaded || state.netplaySession
+            state.inputRecordingVisible && (state.gameLoaded || state.netplaySession)
         DesktopCommand.STOP_INPUT_RECORDING ->
-            (state.recordingPhase == ReplayRecordingPhase.ARMING ||
-                state.recordingPhase == ReplayRecordingPhase.RECORDING) &&
+            state.inputRecordingVisible &&
+                (state.recordingPhase == ReplayRecordingPhase.ARMING ||
+                    state.recordingPhase == ReplayRecordingPhase.RECORDING) &&
                 (state.gameLoaded || state.netplaySession)
         DesktopCommand.LOAD_INPUT_RECORDING ->
             state.gameLoaded &&

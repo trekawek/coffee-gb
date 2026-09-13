@@ -59,7 +59,7 @@ internal class NetplayRecordingDesktopController(
   }
 
   fun start() {
-    val current = latest?.takeIf { it.available } ?: return
+    val current = latest?.takeIf { it.available && it.enabled } ?: return
     if (current.phase != ReplayRecordingPhase.IDLE &&
         current.phase != ReplayRecordingPhase.UNSAVED) return
     val path = choosePath() ?: return
@@ -73,7 +73,7 @@ internal class NetplayRecordingDesktopController(
   }
 
   fun stop() {
-    latest?.takeIf { it.available && it.phase == ReplayRecordingPhase.RECORDING }?.let {
+    latest?.takeIf { it.available && it.enabled && it.phase == ReplayRecordingPhase.RECORDING }?.let {
       eventBus.post(NetplayRecordingStopEvent(it.sessionId))
     }
   }

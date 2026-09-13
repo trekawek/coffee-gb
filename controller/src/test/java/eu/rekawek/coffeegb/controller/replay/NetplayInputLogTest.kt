@@ -17,10 +17,37 @@ class NetplayInputLogTest {
   @get:Rule val temporary = TemporaryFolder()
 
   @Test
+  fun `default off rejects recording requests without creating a file`() {
+    val previous = System.clearProperty(NETPLAY_INPUT_RECORDING_PROPERTY)
+    try {
+      val statuses = mutableListOf<NetplayRecordingStatusEvent>()
+      val log = NetplayInputLog(LinkMode.NORMAL, 0, statuses::add)
+      val path = temporary.root.toPath().resolve("disabled.jsonl")
+      log.announce()
+      log.event("progress", 0)
+      log.start(NetplayRecordingStartEvent(log.sessionId, path), 1)
+      log.input(2, 2, 0, Input(listOf(Button.A), emptyList()), remote = false)
+      log.stop(3)
+      log.retry(NetplayRecordingRetryEvent(log.sessionId, path))
+      log.finish(4, deadline())
+
+      assertEquals(ReplayRecordingPhase.IDLE, log.phase)
+      assertFalse(Files.exists(path))
+      assertTrue(statuses.first().available, "the UI must still recognize linked ownership")
+      assertTrue(statuses.none { it.enabled || it.savedPath != null })
+      assertFalse(statuses.last().available)
+    } finally {
+      if (previous == null) System.clearProperty(NETPLAY_INPUT_RECORDING_PROPERTY)
+      else System.setProperty(NETPLAY_INPUT_RECORDING_PROPERTY, previous)
+    }
+  }
+
+  @Test
   fun `log preserves pre-roll all players late arrival order and rollback without private state`() {
     val statuses = mutableListOf<NetplayRecordingStatusEvent>()
     var now = 100L
-    val log = NetplayInputLog(LinkMode.FOUR_PLAYER_ADAPTER, 2, statuses::add, nanoTime = { now++ })
+    val log = NetplayInputLog(LinkMode.FOUR_PLAYER_ADAPTER, 2, statuses::add,
+        nanoTime = { now++ }, enabled = true)
     val path = temporary.root.toPath().resolve("capture.jsonl")
     log.input(4, 4, 2, Input(listOf(Button.A), emptyList()), remote = false)
     log.start(NetplayRecordingStartEvent(log.sessionId, path), 10)
@@ -46,7 +73,8 @@ class NetplayInputLogTest {
 
   @Test
   fun `bounded history reports truncation and active limit saves instead of losing later input silently`() {
-    val log = NetplayInputLog(LinkMode.NORMAL, 0, {}, historyLimit = 2, recordingLimit = 5)
+    val log = NetplayInputLog(LinkMode.NORMAL, 0, {}, historyLimit = 2, recordingLimit = 5,
+        enabled = true)
     val path = temporary.root.toPath().resolve("bounded.jsonl")
     repeat(6) { log.event("progress", it.toLong()) }
     log.start(NetplayRecordingStartEvent(log.sessionId, path), 6)
@@ -64,7 +92,7 @@ class NetplayInputLogTest {
   fun `failed save retains exact log for retry and never overwrites an existing file`() {
     val original = temporary.newFile("existing.jsonl").toPath()
     Files.writeString(original, "keep this")
-    val log = NetplayInputLog(LinkMode.NORMAL, 0, {})
+    val log = NetplayInputLog(LinkMode.NORMAL, 0, {}, enabled = true)
     log.start(NetplayRecordingStartEvent(log.sessionId, original), 0)
     log.input(1, 1, 0, Input(listOf(Button.B), emptyList()), remote = false)
     assertFailsWith<IOException> { log.finish(2, deadline()) }
@@ -87,7 +115,7 @@ class NetplayInputLogTest {
       entered.countDown()
       check(release.await(5, TimeUnit.SECONDS))
       path
-    })
+    }, enabled = true)
     try {
       log.start(NetplayRecordingStartEvent(log.sessionId, Path.of("test.jsonl")), 0)
       log.stop(1)
@@ -105,7 +133,7 @@ class NetplayInputLogTest {
 
   @Test
   fun `stale start and retry requests cannot affect another session`() {
-    val log = NetplayInputLog(LinkMode.NORMAL, 0, {})
+    val log = NetplayInputLog(LinkMode.NORMAL, 0, {}, enabled = true)
     log.start(NetplayRecordingStartEvent(log.sessionId + 1, Path.of("stale.jsonl")), 0)
     assertEquals(ReplayRecordingPhase.IDLE, log.phase)
     log.retry(NetplayRecordingRetryEvent(log.sessionId + 1, Path.of("stale.jsonl")))

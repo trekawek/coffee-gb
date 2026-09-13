@@ -16,6 +16,35 @@ import org.junit.Test
 
 class DesktopActionsTest {
   @Test
+  fun `recording menu entries and shortcut actions follow the netplay diagnostic flag`() {
+    val registry = registry(mutableListOf())
+    val gameMenuItem = inputRecordingMenuItem(registry[DesktopCommand.INPUT_RECORDING])
+    val overflowItem = inputRecordingMenuItem(registry[DesktopCommand.INPUT_RECORDING])
+    val local = DesktopCommandPresentation(gameLoaded = true, stateCommandsAvailable = true)
+    registry.update(local)
+    assertTrue(gameMenuItem.isVisible && overflowItem.isVisible)
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertTrue(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
+
+    val linked = local.copy(netplaySession = true)
+    registry.update(linked)
+    assertFalse(gameMenuItem.isVisible || overflowItem.isVisible)
+    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertFalse(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
+    registry.update(linked.copy(netplayRecordingPhase = ReplayRecordingPhase.RECORDING))
+    assertFalse(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
+
+    registry.update(linked.copy(netplayRecordingEnabled = true))
+    assertTrue(gameMenuItem.isVisible && overflowItem.isVisible)
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertFalse(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
+
+    registry.update(local)
+    assertTrue(gameMenuItem.isVisible && overflowItem.isVisible)
+    assertTrue(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
+  }
+
+  @Test
   fun `one command snapshot drives labels enablement selection and callbacks`() {
     val calls = mutableListOf<String>()
     val registry = registry(calls)
