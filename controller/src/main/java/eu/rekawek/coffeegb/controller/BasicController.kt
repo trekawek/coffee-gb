@@ -144,6 +144,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
+import eu.rekawek.coffeegb.core.serial.TurboFileSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsDataSource
@@ -987,6 +988,44 @@ class BasicController private constructor(
           Controller.SerialPeripheralSelection.BARCODE_BOY,
           it.enabled,
       )
+    }
+    eventQueue.register<Controller.TurboFileControlEvent> { event ->
+      try {
+        check(event.sessionGeneration == null || event.sessionGeneration == playbackSessionGeneration) {
+          "The game session changed."
+        }
+        val endpoint = session?.serialEndpoint as? TurboFileSerialEndpoint
+            ?: error("Select Turbo File GB or Turbo File Advance as the link-port device first.")
+        val export = event.action == Controller.TurboFileAction.EXPORT_INTERNAL ||
+            event.action == Controller.TurboFileAction.EXPORT_CARD
+        check(export || !replayPlaybackMutationBlocked("Changing Turbo File storage")) {
+          "Turbo File changes are unavailable during input playback."
+        }
+        val result = when (event.action) {
+          Controller.TurboFileAction.EXPORT_INTERNAL -> endpoint.exportImage(false)
+          Controller.TurboFileAction.EXPORT_CARD -> endpoint.exportImage(true)
+          else -> {
+            finishReplayRecording("Turbo File storage changed")
+            when (event.action) {
+              Controller.TurboFileAction.IMPORT_INTERNAL -> endpoint.importImage(requireNotNull(event.image), false)
+              Controller.TurboFileAction.IMPORT_CARD -> endpoint.importImage(requireNotNull(event.image), true)
+              Controller.TurboFileAction.INSERT_CARD -> endpoint.setCardPresent(true)
+              Controller.TurboFileAction.EJECT_CARD -> endpoint.setCardPresent(false)
+              Controller.TurboFileAction.PROTECT -> endpoint.setWriteProtected(true)
+              Controller.TurboFileAction.UNPROTECT -> endpoint.setWriteProtected(false)
+              else -> Unit
+            }
+            rewindManager.clear()
+            debugCheckpointHistory.clear(DebugHistoryTruncationReason.CONFIGURATION_CHANGED)
+            debugInstructionReplayer.close()
+            endpoint.flushStorage()
+            null
+          }
+        }
+        event.completed.complete(result)
+      } catch (failure: Exception) {
+        event.completed.completeExceptionally(failure)
+      }
     }
     eventQueue.register<Controller.ScanBarcodeEvent> {
       (session?.serialEndpoint as? BarcodeBoySerialEndpoint)?.scan(it.barcode)
@@ -4869,6 +4908,8 @@ class BasicController private constructor(
                   sessionBus.post(
                       Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
                 })
+        Controller.SerialPeripheralSelection.TURBO_FILE_GB -> createTurboFileEndpoint(false)
+        Controller.SerialPeripheralSelection.TURBO_FILE_ADVANCE -> createTurboFileEndpoint(true)
         Controller.SerialPeripheralSelection.BARCODE_BOY ->
             PreparedSerialEndpoint(BarcodeBoySerialEndpoint())
         Controller.SerialPeripheralSelection.GPS_RECEIVER ->
@@ -4880,6 +4921,19 @@ class BasicController private constructor(
         Controller.SerialPeripheralSelection.PEER_TO_PEER ->
             PreparedSerialEndpoint(Peer2PeerSerialEndpoint())
       }
+
+  private fun createTurboFileEndpoint(advance: Boolean): PreparedSerialEndpoint {
+    val name = if (advance) "turbo-file-advance.bin" else "turbo-file-gb.bin"
+    val store = TurboFileStorage(properties.settingsStore.path.resolveSibling(name))
+    try {
+      return PreparedSerialEndpoint(store.open(advance) {
+        eventBus.post(Controller.TurboFileStorageErrorEvent(
+            "Turbo File storage could not be saved. Export its memory image before closing the game."))
+      })
+    } catch (failure: Exception) {
+      throw Controller.SerialPeripheralPreparationException(Controller.SerialPeripheralError.STORAGE_FAILED)
+    }
+  }
 
   private fun createMobileAdapterEndpoint(clockSpec: ClockSpec): PreparedSerialEndpoint {
     val configuration =

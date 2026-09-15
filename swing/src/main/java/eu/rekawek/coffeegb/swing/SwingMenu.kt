@@ -149,6 +149,8 @@ internal class SwingMenu(
     /** Exact recent-game route; null preserves legacy hosts that only expose path opening. */
     private val onOpenRecentRom: ((Path) -> Unit)? = null,
 ) {
+  private var turboFileSessionGeneration: Long? = null
+
   private var cameraDeviceIndex = properties.applicationSettings.peripherals.cameraDeviceIndex
 
   /** The compact in-screen peripherals page needs the live OFF/ON state as well as the index. */
@@ -452,6 +454,23 @@ internal class SwingMenu(
 
   private fun createPeripheralsMenu(): JMenu {
     val peripheralsMenu = JMenu("Peripherals")
+    val turboMenu = turboFileMenu(::controlTurboFile).apply { isEnabled = false }
+    peripheralsMenu.add(turboMenu)
+    eventBus.register<Controller.SerialPeripheralSelectionChangedEvent> { event ->
+      SwingUtilities.invokeLater {
+        turboMenu.isEnabled = event.selection == SerialPeripheralSelection.TURBO_FILE_GB ||
+            event.selection == SerialPeripheralSelection.TURBO_FILE_ADVANCE
+      }
+    }
+    eventBus.register<Controller.SessionPresentationEvent> { event ->
+      SwingUtilities.invokeLater { turboFileSessionGeneration = event.sessionGeneration }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      SwingUtilities.invokeLater { turboMenu.isEnabled = false; turboFileSessionGeneration = null }
+    }
+    eventBus.register<Controller.TurboFileStorageErrorEvent> { event ->
+      SwingUtilities.invokeLater { onDesktopStatus(event.message) }
+    }
 
     // the Game Boy Camera's webcam source is a cartridge sensor, not a link-port device, so
     // it is independent of the netplay/Barcode Boy/printer/GPS group below
@@ -560,6 +579,55 @@ internal class SwingMenu(
     enableWhenEmulationActive(scanBarcode)
 
     return peripheralsMenu
+  }
+
+  private fun controlTurboFile(action: Controller.TurboFileAction) {
+    val generation = turboFileSessionGeneration ?: return
+    val importing = action == Controller.TurboFileAction.IMPORT_INTERNAL ||
+        action == Controller.TurboFileAction.IMPORT_CARD
+    val exporting = action == Controller.TurboFileAction.EXPORT_INTERNAL ||
+        action == Controller.TurboFileAction.EXPORT_CARD
+    var path: Path? = null
+    if (importing || exporting) {
+      val chooser = JFileChooser().apply {
+        dialogTitle = if (importing) "Import Turbo File memory (1 MiB)" else "Export Turbo File memory (1 MiB)"
+        fileFilter = FileNameExtensionFilter("Turbo File memory image (*.bin)", "bin")
+      }
+      val choice = if (importing) chooser.showOpenDialog(window) else chooser.showSaveDialog(window)
+      if (choice != JFileChooser.APPROVE_OPTION) return
+      path = chooser.selectedFile.toPath()
+      if (importing || (exporting && java.nio.file.Files.exists(path))) {
+        val replace = desktopDialogFactory.showDecision(window, DesktopDecisionSpec(
+            title = "Replace memory image",
+            heading = if (importing) "Replace the selected Turbo File memory?" else "Replace the existing file?",
+            message = if (importing) "The imported image replaces all data in this memory. Export a copy first if needed."
+                else "The existing file will be replaced by this memory image.",
+            buttons = DesktopDialogButtons(
+                primary = DesktopDialogAction("Replace", true, destructive = true),
+                cancel = DesktopDialogAction("Cancel", false),
+                defaultButton = DesktopDialogDefaultButton.CANCEL),
+            modality = DesktopOwnedDialogModality.DOCUMENT))
+        if (replace != true) return
+      }
+    }
+    val selectedPath = path
+    object : javax.swing.SwingWorker<Unit, Unit>() {
+      override fun doInBackground() {
+        val image = if (importing) {
+          require(java.nio.file.Files.size(selectedPath) == 1024L * 1024) { "Choose a 1 MiB memory image." }
+          java.nio.file.Files.readAllBytes(selectedPath)
+        } else null
+        val event = Controller.TurboFileControlEvent(action, image, generation)
+        eventBus.post(event)
+        val result = event.completed.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        if (exporting) eu.rekawek.coffeegb.core.persistence.AtomicFileWriter.system()
+            .writeOwnerOnly(requireNotNull(selectedPath), requireNotNull(result))
+      }
+      override fun done() {
+        runCatching { get() }.onSuccess { onDesktopStatus("Turbo File memory updated.") }
+            .onFailure { onDesktopStatus(it.cause?.cause?.message ?: it.cause?.message ?: "Turbo File operation failed.") }
+      }
+    }.execute()
   }
 
   private fun showActionReplaySlot() {
