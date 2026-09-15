@@ -80,9 +80,21 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
     }
 
     public Cartridge(Rom rom, Battery battery, TimeSource rtcTimeSource, ClockSpec clockSpec) {
+        this(rom, battery, rtcTimeSource, clockSpec, false);
+    }
+
+    public Cartridge(Rom rom, boolean supportBatterySaves, BatteryStorage batteryStorage,
+                     TimeSource rtcTimeSource, ClockSpec clockSpec, boolean colorConsole) {
+        this(rom, supportBatterySaves && canPersist(rom, batteryStorage)
+                ? createBattery(rom, batteryStorage) : Battery.NULL_BATTERY,
+                rtcTimeSource, clockSpec, colorConsole);
+    }
+
+    public Cartridge(Rom rom, Battery battery, TimeSource rtcTimeSource, ClockSpec clockSpec,
+                     boolean colorConsole) {
         this.battery = battery;
         this.debugRom = rom.getRom();
-        this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec);
+        this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec, colorConsole);
         this.mapperPerformanceRomAccess = new MapperPerformanceRomAccess(addressSpace);
         this.clocked = addressSpace.isClocked();
     }
@@ -94,8 +106,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private static MemoryController createMemoryController(Rom rom, Battery battery,
                                                            TimeSource rtcTimeSource,
-                                                           ClockSpec clockSpec) {
+                                                           ClockSpec clockSpec, boolean colorConsole) {
         return switch (rom.getCartridgeProperties().getMapper()) {
+            case POCKET_SONAR -> new PocketSonar(rom, colorConsole);
             case BUNG_EMS -> new BungEms(rom, battery);
             case HIDDEN_MMM01 -> new Mmm01(rom, battery, false);
             case MANI_32K_MULTICART -> new Mani32kMulticart(rom);
