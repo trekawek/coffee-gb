@@ -133,6 +133,7 @@ import eu.rekawek.coffeegb.core.events.EventBusTeardownTimeoutException
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatPatch
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
+import eu.rekawek.coffeegb.core.ir.GbKissLink
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
@@ -462,6 +463,8 @@ class BasicController private constructor(
 
   /** The sole live deterministic input recorder. It may be accessed only by [thread]. */
   private var replayRecording: ActiveReplayRecording? = null
+
+  private var gbKissRequestId: Long? = null
 
   /** A start request that is waiting for the activation key/gamepad input to be released. */
   private var armedReplayRecording: ArmedReplayRecording? = null
@@ -971,6 +974,44 @@ class BasicController private constructor(
       endReplayPlayback("Input playback was stopped because the game was closed.")
       finishReplayRecording("The game was closed")
       requestStop()
+    }
+    eventQueue.register<GbKissTransferRequest> { request ->
+      val current = session
+      val type = current?.config?.rom?.type
+      val unavailable = when {
+        current == null -> "Open a GBKiss game first."
+        type == null || (!type.isHuc1 && !type.isHuc3) -> "This cartridge has no GBKiss infrared hardware."
+        replayRecording != null || armedReplayRecording != null || replayPlaybackSession ->
+            "Stop input recording or playback before using GBKiss Link."
+        current.infraredEndpoint !== InfraredEndpoint.NULL_ENDPOINT &&
+            current.infraredEndpoint !is GbKissLink -> "Disconnect netplay before using GBKiss Link."
+        else -> null
+      }
+      if (unavailable != null) {
+        eventBus.post(GbKissProgressEvent(request.requestId,
+            GbKissLink.Progress(GbKissLink.Status.FAILED, 0, 0, unavailable)))
+      } else {
+        checkNotNull(current)
+        current.setCartridgeInfraredEndpoint(InfraredEndpoint.NULL_ENDPOINT)
+        gbKissRequestId = request.requestId
+        val report: (GbKissLink.Progress) -> Unit = { progress ->
+          eventBus.post(GbKissProgressEvent(request.requestId, progress))
+        }
+        val endpoint = request.file?.let { GbKissLink.send(it, report) }
+            ?: GbKissLink.receive(report) { file ->
+              eventBus.post(GbKissReceivedEvent(request.requestId, file))
+            }
+        current.setCartridgeInfraredEndpoint(endpoint)
+        rewindManager.clear()
+        debugCheckpointHistory.clear(DebugHistoryTruncationReason.TOPOLOGY_CHANGED)
+        debugInstructionReplayer.close()
+      }
+    }
+    eventQueue.register<GbKissCancelRequest> { request ->
+      if (request.requestId == gbKissRequestId && session?.infraredEndpoint is GbKissLink) {
+        session?.setCartridgeInfraredEndpoint(InfraredEndpoint.NULL_ENDPOINT)
+        gbKissRequestId = null
+      }
     }
     eventQueue.register<Controller.SetSerialPeripheralEvent> {
       finishReplayRecording("The link-port device changed")
@@ -1497,6 +1538,16 @@ class BasicController private constructor(
     val currentSession = session ?: return
     drainMobileAdapterGuestConfiguration(currentSession)
     pollMobileAdapterGuestConfigurationPersistence()
+    val gbKiss = currentSession.infraredEndpoint as? GbKissLink
+    if (gbKiss != null) {
+      if (gbKiss.isActive) {
+        // The modem is host I/O: a rewind checkpoint cannot reproduce its file-side state.
+        rewindManager.clear()
+        return
+      }
+      currentSession.setCartridgeInfraredEndpoint(InfraredEndpoint.NULL_ENDPOINT)
+      gbKissRequestId = null
+    }
     // A CGB can admit and finish a backend request between two controller frame boundaries. The
     // endpoint's one-shot fence prevents rewind history from bridging that nondeterministic host
     // effect even when no request or logical connection remains live at the end of this frame.

@@ -27,7 +27,9 @@ orchestration layer use Kotlin and Java.
 - **Easy game loading** with drag and drop and support for `.gb`, `.gbc`, and
   `.rom` files, either directly or from ZIP and 7z archives.
 - **Rollback netplay** for link-cable games, with synchronized infrared
-  communication.
+  communication through CGB and HuC-1/HuC-3 cartridge hardware.
+- **[GBKiss Link](doc/gbkiss.md)** for sending and receiving `.gbf` files through
+  the cartridge's infrared port.
 - **Customizable display and sound**, including fullscreen, scaling, rotation,
   grayscale, color correction, LCD ghosting, audio-device selection, and volume
   and latency controls.

@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -9,6 +10,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Hudson HuC-1 mapper (used by e.g. Chousoku Spinner). MBC1-like banking without the mode
@@ -36,6 +38,10 @@ public class Huc1 implements MemoryController {
 
     private boolean ramUpdated;
 
+    private boolean irOutput;
+
+    private transient InfraredEndpoint infraredEndpoint = InfraredEndpoint.NULL_ENDPOINT;
+
     public Huc1(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
         this.romBanks = rom.getRomBanks();
@@ -44,6 +50,35 @@ public class Huc1 implements MemoryController {
         Arrays.fill(ram, 0xff);
         this.battery = battery;
         battery.loadRam(ram);
+    }
+
+    @Override
+    public boolean hasInfrared() {
+        return true;
+    }
+
+    @Override
+    public void setInfraredEndpoint(InfraredEndpoint endpoint) {
+        Objects.requireNonNull(endpoint, "endpoint");
+        if (infraredEndpoint == endpoint) return;
+        infraredEndpoint.disconnect();
+        infraredEndpoint = endpoint;
+        infraredEndpoint.setLightOn(irOutput);
+    }
+
+    @Override
+    public boolean isClocked() {
+        return true;
+    }
+
+    @Override
+    public void tick() {
+        infraredEndpoint.tick();
+    }
+
+    @Override
+    public int performanceQuietSpanLimit(int requested) {
+        return infraredEndpoint.performanceQuietSpanLimit(requested);
     }
 
     @Override
@@ -61,7 +96,8 @@ public class Huc1 implements MemoryController {
             ramBank = value & 0b111;
         } else if (address >= 0xa000 && address < 0xc000) {
             if (irMode) {
-                // IR transmitter; nothing to do without a link partner
+                irOutput = (value & 1) != 0;
+                infraredEndpoint.setLightOn(irOutput);
             } else {
                 ram[getRamAddress(address)] = value;
                 ramUpdated = true;
@@ -77,7 +113,7 @@ public class Huc1 implements MemoryController {
             return getRomByte(romBank % romBanks, address - 0x4000);
         } else if (address >= 0xa000 && address < 0xc000) {
             if (irMode) {
-                return 0xc0; // no IR light seen
+                return 0xc0 | (infraredEndpoint.isLightOn() ? 1 : 0);
             }
             return ram[getRamAddress(address)];
         } else {
@@ -108,7 +144,7 @@ public class Huc1 implements MemoryController {
 
     @Override
     public ComponentState<MemoryController> captureState() {
-        return new Huc1State(battery.captureState(), ram.clone(), romBank, ramBank, irMode, ramUpdated);
+        return new Huc1State(battery.captureState(), ram.clone(), romBank, ramBank, irMode, ramUpdated, irOutput);
     }
 
     @Override
@@ -119,7 +155,8 @@ public class Huc1 implements MemoryController {
                 romBank,
                 ramBank,
                 irMode,
-                ramUpdated);
+                ramUpdated,
+                irOutput);
     }
 
     @Override
@@ -142,10 +179,13 @@ public class Huc1 implements MemoryController {
         this.ramBank = mem.ramBank;
         this.irMode = mem.irMode;
         this.ramUpdated = mem.ramUpdated;
+        this.irOutput = mem.irOutput;
+        infraredEndpoint.onMachineStateRestored();
+        infraredEndpoint.setLightOn(irOutput);
     }
 
     private record Huc1State(ComponentState<Battery> batteryMemento, int[] ram, int romBank, int ramBank,
-                               boolean irMode, boolean ramUpdated) implements ComponentState<MemoryController> {
+                               boolean irMode, boolean ramUpdated, boolean irOutput) implements ComponentState<MemoryController> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */

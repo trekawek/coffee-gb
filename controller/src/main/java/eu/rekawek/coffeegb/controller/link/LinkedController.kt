@@ -12,6 +12,9 @@ import eu.rekawek.coffeegb.controller.replay.NetplayInputLog
 import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStartEvent
 import eu.rekawek.coffeegb.controller.replay.NetplayRecordingStopEvent
 import eu.rekawek.coffeegb.controller.replay.NetplayRecordingRetryEvent
+import eu.rekawek.coffeegb.controller.GbKissProgressEvent
+import eu.rekawek.coffeegb.controller.GbKissTransferRequest
+import eu.rekawek.coffeegb.core.ir.GbKissLink
 import eu.rekawek.coffeegb.controller.PreparedSession
 import eu.rekawek.coffeegb.controller.RetainedClosePersistence
 import eu.rekawek.coffeegb.controller.RomSessionPreparer
@@ -1049,9 +1052,15 @@ class LinkedController(
       }
     }
 
-    // Standalone peripherals and netplay are mutually exclusive owners of the physical serial
-    // port. The desktop normally stops netplay before posting this request, but non-UI callers
+    // Standalone peripherals and netplay are mutually exclusive owners of the serial and IR
+    // ports. The desktop normally stops netplay before posting serial requests, but non-UI callers
     // still receive a deterministic, presentation-safe conflict instead of a silently lost event.
+    eventBus.register<GbKissTransferRequest> { request ->
+      eventBus.post(GbKissProgressEvent(request.requestId,
+          GbKissLink.Progress(
+              GbKissLink.Status.FAILED, 0, 0,
+              "Disconnect netplay before using GBKiss Link.")))
+    }
     eventBus.register<Controller.SetSerialPeripheralEvent> { request ->
       rejectStandaloneSerialRequest(request.selection)
     }
