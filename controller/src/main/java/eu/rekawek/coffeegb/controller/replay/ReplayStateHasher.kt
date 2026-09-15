@@ -285,6 +285,8 @@ object ReplayStateHasher {
         SerialPeripheralState.FOUR_PLAYER_ADAPTER -> 6
         SerialPeripheralState.MOBILE_ADAPTER_GB -> 7
         SerialPeripheralState.BARDIGUN -> 8
+        SerialPeripheralState.TURBO_FILE_GB -> 9
+        SerialPeripheralState.TURBO_FILE_ADVANCE -> 10
       }
 
   private fun heldButtonId(value: HeldButtonState): Int =

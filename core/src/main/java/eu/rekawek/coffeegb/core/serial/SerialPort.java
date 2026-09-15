@@ -62,6 +62,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         this.serialEndpoint.setExternalTransfer(false);
         this.serialEndpoint.setExternalClockReceiver(null);
         this.serialEndpoint = serialEndpoint;
+        serialEndpoint.setSb(sb);
         serialEndpoint.setExternalClockReceiver(this::exchangeExternalClockBit);
     }
 
