@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.memory.cart;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import java.util.Objects;
 
@@ -119,6 +120,13 @@ public interface MemoryController extends AddressSpace, StatefulComponent<Memory
     }
 
     default void flushRam() {
+    }
+
+    default boolean hasInfrared() {
+        return false;
+    }
+
+    default void setInfraredEndpoint(InfraredEndpoint endpoint) {
     }
 
     default void init(EventBus eventBus) {

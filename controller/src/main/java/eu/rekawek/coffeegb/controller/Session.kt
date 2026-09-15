@@ -50,7 +50,18 @@ class Session(
   @Synchronized
   internal fun serialEndpointDisconnectHandle(): () -> Unit = serialEndpointDisconnect
 
-  internal val infraredEndpoint: InfraredEndpoint = infraredEndpoint
+  internal var infraredEndpoint: InfraredEndpoint = infraredEndpoint
+    private set
+
+  /** Owner-thread cartridge accessory handoff, excluded from input recording. */
+  @Synchronized
+  internal fun setCartridgeInfraredEndpoint(endpoint: InfraredEndpoint) {
+    check(!resourcesClosed && deterministicCaptureOwner == null) {
+      "Cannot change infrared accessories during shutdown or input recording"
+    }
+    gameboy.setCartridgeInfraredEndpoint(endpoint)
+    infraredEndpoint = endpoint
+  }
 
   init {
     try {

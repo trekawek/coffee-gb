@@ -1186,6 +1186,14 @@ internal object StateGraph {
       }
     }
 
+    if (typeName in listOf(
+            "eu.rekawek.coffeegb.core.memory.cart.type.Huc1\$Huc1State",
+            "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3State") &&
+        value.fields.size == names.size - 1 &&
+        value.fields.map(StateField::name) == names.dropLast(1)) {
+      return value.fields + StateField("irOutput", BooleanState(false))
+    }
+
     if (typeName == INFRARED_PORT_STATE &&
         value.fields.size == names.size - 1 &&
         value.fields.map(StateField::name) == names.dropLast(1)) {

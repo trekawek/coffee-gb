@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -11,6 +12,7 @@ import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Hudson HuC-3 mapper (used by e.g. Robopon). Simple ROM/RAM banking plus a mode register
@@ -59,6 +61,10 @@ public class Huc3 implements MemoryController {
     private long lastRtcSecond;
 
     private boolean ramUpdated;
+
+    private boolean irOutput;
+
+    private transient InfraredEndpoint infraredEndpoint = InfraredEndpoint.NULL_ENDPOINT;
 
     private transient boolean stateTimeSourceAccessSuppressed;
 
@@ -136,6 +142,35 @@ public class Huc3 implements MemoryController {
     }
 
     @Override
+    public boolean hasInfrared() {
+        return true;
+    }
+
+    @Override
+    public void setInfraredEndpoint(InfraredEndpoint endpoint) {
+        Objects.requireNonNull(endpoint, "endpoint");
+        if (infraredEndpoint == endpoint) return;
+        infraredEndpoint.disconnect();
+        infraredEndpoint = endpoint;
+        infraredEndpoint.setLightOn(irOutput);
+    }
+
+    @Override
+    public boolean isClocked() {
+        return true;
+    }
+
+    @Override
+    public void tick() {
+        infraredEndpoint.tick();
+    }
+
+    @Override
+    public int performanceQuietSpanLimit(int requested) {
+        return infraredEndpoint.performanceQuietSpanLimit(requested);
+    }
+
+    @Override
     public boolean accepts(int address) {
         return (address >= 0x0000 && address < 0x8000) || (address >= 0xa000 && address < 0xc000);
     }
@@ -156,8 +191,12 @@ public class Huc3 implements MemoryController {
 
                 case 0x0c:
                 case 0x0d:
+                    // RTC read latch / status: writes have no effect we model
+                    break;
+
                 case 0x0e:
-                    // RTC read latch / status / IR: writes have no effect we model
+                    irOutput = (value & 1) != 0;
+                    infraredEndpoint.setLightOn(irOutput);
                     break;
 
                 case 0x0a:
@@ -241,8 +280,8 @@ public class Huc3 implements MemoryController {
                 case 0x0d: // RTC status semaphore
                     return 1;
 
-                case 0x0e: // IR receiver: no light seen
-                    return 0xc0;
+                case 0x0e: // Cartridge IR sensor is active-high, unlike CGB RP.
+                    return 0xc0 | (infraredEndpoint.isLightOn() ? 1 : 0);
 
                 case 0x00:
                 case 0x0a:
@@ -290,7 +329,7 @@ public class Huc3 implements MemoryController {
     public ComponentState<MemoryController> captureState() {
         return new Huc3State(battery.captureState(), ram.clone(), romBank, ramBank, mode, minutes, days,
                 alarmMinutes, alarmDays, alarmEnabled, accessIndex, accessFlags, readValue, lastRtcSecond,
-                ramUpdated);
+                ramUpdated, irOutput);
     }
 
     @Override
@@ -310,7 +349,7 @@ public class Huc3 implements MemoryController {
                 accessFlags,
                 readValue,
                 lastRtcSecond,
-                ramUpdated);
+                ramUpdated, irOutput);
     }
 
     @Override
@@ -342,12 +381,15 @@ public class Huc3 implements MemoryController {
         this.readValue = mem.readValue;
         this.lastRtcSecond = mem.lastRtcSecond;
         this.ramUpdated = mem.ramUpdated;
+        this.irOutput = mem.irOutput;
+        infraredEndpoint.onMachineStateRestored();
+        infraredEndpoint.setLightOn(irOutput);
     }
 
     private record Huc3State(ComponentState<Battery> batteryMemento, int[] ram, int romBank, int ramBank, int mode,
                                int minutes, int days, int alarmMinutes, int alarmDays, boolean alarmEnabled,
                                int accessIndex, int accessFlags, int readValue, long lastRtcSecond,
-                               boolean ramUpdated) implements ComponentState<MemoryController> {
+                               boolean ramUpdated, boolean irOutput) implements ComponentState<MemoryController> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */

@@ -34,6 +34,27 @@ import org.junit.Test
 class DetachedStateTest {
 
   @Test
+  fun olderHudsonStateFilesDefaultTheMissingInfraredOutputToOff() {
+    for ((mapper, name) in listOf(0xff to "Huc1", 0xfe to "Huc3")) {
+      session(configuration(slotRom(mapper, 3)).setSupportBatterySave(false)).use { session ->
+        val captured = StateCodec.capture(session)
+        val before = (captured.root as SessionStateRoot).session
+        val type = "eu.rekawek.coffeegb.core.memory.cart.type.$name\$${name}State"
+        val mapperState = before.machine.record(type)
+        val historical = RecordState(mapperState.typeId, mapperState.fields.dropLast(1))
+        val oldSession = before.withMachineRoot(before.machine.root.replaceRecord(type, historical))
+        val oldFile = StateFile(captured.identities, SessionStateRoot(oldSession),
+            captured.diagnostics, captured.formatVersion)
+        val encoded = StateCodec.encode(oldFile)
+        session.gameboy.addressSpace.setByte(0, 0x0e)
+        session.gameboy.addressSpace.setByte(0xa000, 1)
+        StateCodec.decodeAndApply(encoded, session)
+        assertEquals(BooleanState(false), session.captureDetachedState().machine.record(type).field("irOutput"))
+      }
+    }
+  }
+
+  @Test
   fun fileBatteryCheckpointTargetsMemoryBatteryAndRejectsOverflowBeforeMutation() {
     val romBytes = slotRom(0x1b, 0x03)
     val path = Files.createTempFile("coffee-gb-file-memory-battery-", ".gbc")

@@ -508,6 +508,11 @@ internal class SwingMenu(
     peripheralsMenu.add(serialPeripheralBinding.menu)
     peripheralsMenu.add(mobileAdapterConfigurationMenuItem(onMobileAdapterConfiguration))
 
+    val gbKiss = GbKissMenuBinding(window, eventBus, onDesktopStatus)
+    peripheralsMenu.add(gbKiss.menu)
+    gbKiss.menu.isEnabled = false
+    enableWhenEmulationActive(gbKiss.menu)
+
     val actionReplaySlot = JMenuItem("Action Replay Slot…")
     actionReplaySlot.accessibleContext.accessibleDescription =
         "Review, choose, or remove the cartridge attached to the Action Replay slot"
