@@ -314,6 +314,12 @@ class StateCoverageMatrixTest {
               repeat(4) { sendBit() }
               repeat(12) { tick() }
             },
+            peripheral("SewingMachine", SewingMachineSerialEndpoint()) {
+              (this as SewingMachineSerialEndpoint).setModel(2)
+              setLargeHoop(true)
+              setSb(0x80); startSending(); setExternalTransfer(true)
+              repeat(200) { tick() }
+            },
             peripheral("BarcodeBoy", BarcodeBoySerialEndpoint()) {
               startSending()
               repeat(11) { sendBit() }
@@ -922,6 +928,7 @@ class StateCoverageMatrixTest {
             "Printer",
             "GpsReceiver",
             "BarcodeBoy",
+            "SewingMachine",
             "FourPlayerAdapter",
             "MobileAdapter",
         )

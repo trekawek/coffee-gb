@@ -39,6 +39,7 @@ orchestration layer use Kotlin and Java.
   tilt controls, Game Boy Camera, Game Boy Printer, Barcode Boy,
   [Bardigun Reader](doc/bardigun.md), Full Changer,
   [Pocket Sonar](doc/pocket-sonar.md), [Turbo File GB/Advance](doc/turbo-file.md),
+  [Singer/Jaguar sewing machines](doc/sewing-machines.md),
   and Datel Action Replay pass-through.
 - **Game Genie and GameShark cheats**, with a bundled searchable
   [libretro cheat database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy).
