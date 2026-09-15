@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
@@ -159,6 +160,14 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         } else {
             return new BasicRom(rom, battery);
         }
+    }
+
+    public boolean hasInfrared() {
+        return addressSpace.hasInfrared();
+    }
+
+    public void setInfraredEndpoint(InfraredEndpoint endpoint) {
+        addressSpace.setInfraredEndpoint(endpoint);
     }
 
     public void init(EventBus eventBus) {

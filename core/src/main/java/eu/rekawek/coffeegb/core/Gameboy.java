@@ -733,7 +733,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         serialPort.init(serialEndpoint);
         infraredPort.setSerialEndpoint(serialEndpoint);
-        infraredPort.init(eventBus, infraredEndpoint);
+        infraredPort.init(eventBus, cartridge.hasInfrared()
+                ? InfraredEndpoint.NULL_ENDPOINT : infraredEndpoint);
+        cartridge.setInfraredEndpoint(infraredEndpoint);
         codeBreakerRumble.init(eventBus);
         background.init(eventBus);
         sgbDisplay.init(eventBus);
@@ -757,6 +759,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     public void setSerialEndpoint(SerialEndpoint serialEndpoint) {
         serialPort.init(serialEndpoint);
         infraredPort.setSerialEndpoint(serialEndpoint);
+    }
+
+    /** Replaces the cartridge IR accessory between ticks on the emulation owner thread. */
+    public void setCartridgeInfraredEndpoint(InfraredEndpoint endpoint) {
+        if (!cartridge.hasInfrared()) throw new IllegalStateException("This cartridge has no infrared port");
+        cartridge.setInfraredEndpoint(endpoint);
     }
 
     /** True when this machine has an armed serial transfer driven by its own clock. */
@@ -4910,6 +4918,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     public void discardUnstarted() {
         codeBreakerRumble.quiesce();
         infraredPort.close();
+        cartridge.setInfraredEndpoint(InfraredEndpoint.NULL_ENDPOINT);
         sgbBus.close();
     }
 
@@ -4950,6 +4959,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             codeBreakerRumble.quiesce();
         }
         infraredPort.close();
+        cartridge.setInfraredEndpoint(InfraredEndpoint.NULL_ENDPOINT);
         if (flushCartridge) {
             flushCartridge();
         }
