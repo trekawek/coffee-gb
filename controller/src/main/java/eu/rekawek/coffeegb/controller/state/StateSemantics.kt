@@ -813,6 +813,27 @@ internal object StateSemantics {
           constrained("Byte-receiver byte and bit count are bounded.") {
             it.range("sb", 0, 0xff); it.range("bits", 0, 7)
           })
+      put("eu.rekawek.coffeegb.core.serial.SewingMachineSerialEndpoint\$SewingMachineState",
+          constrained("Sewing packet, pattern, canvas and motor cursors are bounded.") {
+            it.require(it.intArray("packet").size == 128, "has invalid packet capacity")
+            listOf("staging", "pattern").forEach { name ->
+              it.require(it.intArray(name).size == 65536, "has invalid pattern capacity")
+              it.intValues(name, 0, 255)
+            }
+            it.intValues("packet", 0, 255)
+            it.require(it.intArray("fabric").size == 512 * 512, "has invalid fabric dimensions")
+            it.range("model", 0, 2); it.range("speed", 1, 600); it.range("advanceTicks", 0, 4194304)
+            it.require(it.value("arm") != true || it.int("model") == 2, "has an unsupported embroidery arm")
+            it.range("bits", 0, 8); it.range("wireTicks", 0, 512)
+            it.range("internalBits", 0, 8); it.range("payloadClock", 0, 2); it.range("lastRequest", 0, 255)
+            it.require(it.value("armed") != true || it.int("bits") < 8, "has an exhausted serial byte")
+            it.range("packetLength", 0, 127); it.range("checksumBytes", 0, 2); it.range("terminatorIndex", 0, 125)
+            it.range("stagingLength", 0, 65536); it.range("patternLength", 0, 65536)
+            it.range("cursor", 0, it.int("patternLength")); it.range("sync", 0, 3)
+            it.range("packetShiftRemaining", 0, 4); it.range("endPairs", 0, 2)
+            it.range("motorTicks", 0, 4194304); it.range("x", -1000000, 1000000); it.range("y", -1000000, 1000000)
+            listOf("sb", "incoming", "outgoing").forEach { name -> it.range(name, 0, 255) }
+          })
       put("eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState",
           constrained("Barcode protocol phase and exact scan-frame cursors are validated together.") {
             it.range("handshakeByte", 0, 3); it.range("sendBitIndex", 0, 7)
