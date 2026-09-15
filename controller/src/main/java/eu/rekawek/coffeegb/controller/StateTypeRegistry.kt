@@ -131,6 +131,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint\$BardigunState",
           "eu.rekawek.coffeegb.core.memory.cart.type.PocketSonar\$PocketSonarState",
           "eu.rekawek.coffeegb.core.serial.TurboFileSerialEndpoint\$TurboFileState",
+          "eu.rekawek.coffeegb.core.serial.SewingMachineSerialEndpoint\$SewingMachineState",
       )
 
   val legacyRecordClassNames =
