@@ -329,6 +329,8 @@ enum class SerialPeripheralState {
   BARCODE_BOY,
   FOUR_PLAYER_ADAPTER,
   MOBILE_ADAPTER_GB,
+  TURBO_FILE_GB,
+  TURBO_FILE_ADVANCE,
 }
 
 /** Detached state owned by one controller Session, including event/protocol-owned P1 input. */
@@ -800,6 +802,9 @@ internal object DetachedStateAdapter {
             SerialPeripheralState.PRINTER
         "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint" ->
             SerialPeripheralState.GPS_RECEIVER
+        "eu.rekawek.coffeegb.core.serial.TurboFileSerialEndpoint" ->
+            if ((endpoint as eu.rekawek.coffeegb.core.serial.TurboFileSerialEndpoint).isAdvance)
+              SerialPeripheralState.TURBO_FILE_ADVANCE else SerialPeripheralState.TURBO_FILE_GB
         "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint" ->
             SerialPeripheralState.BARCODE_BOY
         "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$Endpoint" ->

@@ -813,6 +813,28 @@ internal object StateSemantics {
           constrained("Byte-receiver byte and bit count are bounded.") {
             it.range("sb", 0, 0xff); it.range("bits", 0, 7)
           })
+      put("eu.rekawek.coffeegb.core.serial.TurboFileSerialEndpoint\$TurboFileState",
+          constrained("Turbo File retains bounded packet/bit cursors and its two flash memories.") {
+            it.require(it.byteArray("storage").size == 2 * 1024 * 1024, "has invalid flash capacity")
+            it.require(it.intArray("packet").size == 69 && it.intArray("response").size == 68,
+                "has invalid packet buffers")
+            it.intValues("packet", 0, 255); it.intValues("response", 0, 255)
+            it.range("phase", 0, 5); it.range("packetLength", 0, 69); it.range("expectedLength", 0, 69)
+            it.range("responseLength", 0, 68); it.range("responseIndex", 0, 67)
+            it.range("bits", 0, 8); it.range("ticks", 0, 512)
+            listOf("readBank", "writeBank", "currentBank", "sb", "outgoing", "incoming").forEach { n ->
+              it.range(n, 0, 255)
+            }
+            it.require(it.int("phase") != 5 || it.int("responseIndex") < it.int("responseLength"),
+                "has an exhausted response")
+            if (it.int("phase") == 2) {
+              it.range("packetLength", 1, 68)
+              val count = it.int("packetLength")
+              it.require(if (count == 1) it.int("expectedLength") == 0 else count < it.int("expectedLength"),
+                  "has an exhausted request")
+            }
+            it.require(it.value("armed") != true || it.int("bits") < 8, "has an exhausted serial byte")
+          })
       put("eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState",
           constrained("Barcode protocol phase and exact scan-frame cursors are validated together.") {
             it.range("handshakeByte", 0, 3); it.range("sendBitIndex", 0, 7)

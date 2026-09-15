@@ -626,6 +626,8 @@ interface Controller : AutoCloseable {
     GPS_RECEIVER,
     MOBILE_ADAPTER_GB,
     PEER_TO_PEER,
+    TURBO_FILE_GB,
+    TURBO_FILE_ADVANCE,
   }
 
   /** Selects exactly one standalone link-port peripheral at the next controller safe point. */
@@ -926,6 +928,19 @@ interface Controller : AutoCloseable {
 
   /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
   data class ScanBarcodeEvent(val barcode: String) : Event
+
+  enum class TurboFileAction { IMPORT_INTERNAL, EXPORT_INTERNAL, IMPORT_CARD, EXPORT_CARD,
+    INSERT_CARD, EJECT_CARD, PROTECT, UNPROTECT }
+
+  /** Image data is copied by the endpoint at the controller safe point. */
+  data class TurboFileControlEvent(
+      val action: TurboFileAction,
+      val image: ByteArray? = null,
+      val sessionGeneration: Long? = null,
+      val completed: java.util.concurrent.CompletableFuture<ByteArray?> = java.util.concurrent.CompletableFuture(),
+  ) : Event
+
+  data class TurboFileStorageErrorEvent(val message: String) : Event
 
   /** Legacy ownership-aware adapter for selecting the Game Boy Printer. */
   data class SetPrinterEvent(val enabled: Boolean) : Event
