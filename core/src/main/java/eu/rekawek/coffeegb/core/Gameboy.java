@@ -48,6 +48,8 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
+import eu.rekawek.coffeegb.core.memory.cart.type.PocketSonar;
+import eu.rekawek.coffeegb.core.memory.cart.type.SonarScene;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -411,17 +413,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     configuration.rom,
                     configuration.debugHistoryPrimaryBatteryShape.createServiceFreeBattery(),
                     configuration.rtcTimeSource,
-                    clockSpec);
+                    clockSpec, gbc);
         } else if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
-                    configuration.rtcTimeSource, clockSpec);
+                    configuration.rtcTimeSource, clockSpec, gbc);
         } else {
             cartridge = new Cartridge(
                     configuration.rom,
                     configuration.supportBatterySave,
                     configuration.batteryStorage,
                     configuration.rtcTimeSource,
-                    clockSpec);
+                    clockSpec, gbc);
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
@@ -434,20 +436,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         configuration.slotRom,
                         configuration.debugHistorySlotBatteryShape.createServiceFreeBattery(),
                         configuration.rtcTimeSource,
-                        clockSpec);
+                        clockSpec, gbc);
             } else if (configuration.slotBatteryData != null) {
                 slotCartridge = new Cartridge(
                         configuration.slotRom,
                         new MemoryBattery(configuration.slotBatteryData),
                         configuration.rtcTimeSource,
-                        clockSpec);
+                        clockSpec, gbc);
             } else {
                 slotCartridge = new Cartridge(
                         configuration.slotRom,
                         configuration.supportBatterySave,
                         configuration.slotBatteryStorage,
                         configuration.rtcTimeSource,
-                        clockSpec);
+                        clockSpec, gbc);
             }
             cartridge.getDatel().setSlotCartridge(slotCartridge.getMemoryController(),
                     configuration.slotRom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
@@ -4640,6 +4642,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Platform-neutral SGB controller status for diagnostics and conformance tests. */
     public Joypad.SgbMultiplayerStatus getSgbMultiplayerStatus() {
         return joypad.getSgbMultiplayerStatus();
+    }
+
+    /** Owner-thread sensor configuration; no effect on other cartridges. */
+    public boolean configurePocketSonar(
+            SonarScene scene, boolean powered) {
+        if (cartridge.getMemoryController() instanceof PocketSonar sonar) {
+            sonar.configure(scene, powered);
+            return true;
+        }
+        return false;
     }
 
     @Override

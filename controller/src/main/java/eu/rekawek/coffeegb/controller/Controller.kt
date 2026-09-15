@@ -927,6 +927,13 @@ interface Controller : AutoCloseable {
   /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
   data class ScanBarcodeEvent(val barcode: String) : Event
 
+  /** A null scene changes only the physical power switch. */
+  data class SetPocketSonarEvent(
+      val scene: eu.rekawek.coffeegb.core.memory.cart.type.SonarScene?,
+      val powered: Boolean,
+      val sessionGeneration: Long? = null,
+  ) : Event
+
   /** Legacy ownership-aware adapter for selecting the Game Boy Printer. */
   data class SetPrinterEvent(val enabled: Boolean) : Event
 
