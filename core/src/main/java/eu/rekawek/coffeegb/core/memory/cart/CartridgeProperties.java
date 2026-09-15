@@ -45,7 +45,8 @@ public final class CartridgeProperties {
         MBC1,
         POCKET_CAMERA,
         MBC5,
-        MBC5_MULTICART
+        MBC5_MULTICART,
+        POCKET_SONAR
     }
 
     public enum Feature {
@@ -114,6 +115,9 @@ public final class CartridgeProperties {
      * may still match the same ROM and add their flags.
      */
     private static final List<Profile> PROFILES = List.of(
+            mapper("Pocket Sonar MBC1S", info -> info.rawType() == 1
+                            && info.byteAt(0x149) == 0 && info.title().equals("POCKETSONAR"),
+                    Mapper.POCKET_SONAR),
             linkAtBoot("Razor Freestyle Scooter startup link detection",
                     CartridgeProperties::isRazorFreestyleScooter),
             features("Pocket Voice V2.0", CartridgeProperties::isPocketVoice,

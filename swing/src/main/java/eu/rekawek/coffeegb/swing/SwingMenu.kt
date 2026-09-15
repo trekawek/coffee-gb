@@ -149,6 +149,8 @@ internal class SwingMenu(
     /** Exact recent-game route; null preserves legacy hosts that only expose path opening. */
     private val onOpenRecentRom: ((Path) -> Unit)? = null,
 ) {
+  private var sonarSessionGeneration: Long? = null
+
   private var cameraDeviceIndex = properties.applicationSettings.peripherals.cameraDeviceIndex
 
   /** The compact in-screen peripherals page needs the live OFF/ON state as well as the index. */
@@ -454,6 +456,23 @@ internal class SwingMenu(
 
   private fun createPeripheralsMenu(): JMenu {
     val peripheralsMenu = JMenu("Peripherals")
+    val sonarMenu = pocketSonarMenu(
+        configure = { scene, power -> eventBus.post(Controller.SetPocketSonarEvent(scene, power, sonarSessionGeneration)) },
+        loadImage = ::loadPocketSonarImage,
+    ).apply { isEnabled = false }
+    peripheralsMenu.add(sonarMenu)
+    eventBus.register<Controller.SessionPresentationEvent> { event ->
+      SwingUtilities.invokeLater {
+        sonarSessionGeneration = event.sessionGeneration
+        sonarMenu.isEnabled = event.romTitle == "POCKETSONAR"
+      }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      SwingUtilities.invokeLater {
+        sonarSessionGeneration = null
+        sonarMenu.isEnabled = false
+      }
+    }
 
     // the Game Boy Camera's webcam source is a cartridge sensor, not a link-port device, so
     // it is independent of the netplay/Barcode Boy/printer/GPS group below
@@ -581,6 +600,28 @@ internal class SwingMenu(
     enableWhenEmulationActive(scanBardigun)
 
     return peripheralsMenu
+  }
+
+  private fun loadPocketSonarImage() {
+    val chooser = JFileChooser().apply {
+      dialogTitle = "Load simulated sonar image"
+      fileFilter = FileNameExtensionFilter("PNG sonar image (160 × 96 or 160 × 192)", "png")
+      isAcceptAllFileFilterUsed = false
+    }
+    if (chooser.showOpenDialog(window) != JFileChooser.APPROVE_OPTION) return
+    val path = chooser.selectedFile.toPath()
+    val generation = sonarSessionGeneration ?: return
+    object : javax.swing.SwingWorker<eu.rekawek.coffeegb.core.memory.cart.type.SonarScene, Unit>() {
+      override fun doInBackground() = loadSonarImage(path)
+      override fun done() {
+        runCatching { get() }.onSuccess {
+          eventBus.post(Controller.SetPocketSonarEvent(it, true, generation))
+          onDesktopStatus("Simulated sonar image loaded.")
+        }.onFailure {
+          onDesktopStatus(it.cause?.message ?: it.message ?: "Could not load the sonar image.")
+        }
+      }
+    }.execute()
   }
 
   private fun showActionReplaySlot() {

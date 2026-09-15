@@ -1034,6 +1034,16 @@ class BasicController private constructor(
       finishReplayRecording("A Bardigun barcode was scanned")
       (session?.serialEndpoint as? BardigunSerialEndpoint)?.scan(it.barcode)
     }
+    eventQueue.register<Controller.SetPocketSonarEvent> {
+      if (it.sessionGeneration != null && it.sessionGeneration != playbackSessionGeneration) return@register
+      if (replayPlaybackMutationBlocked("Changing Pocket Sonar input")) return@register
+      if (session?.gameboy?.configurePocketSonar(it.scene, it.powered) == true) {
+        finishReplayRecording("Pocket Sonar input changed")
+        rewindManager.clear()
+        debugCheckpointHistory.clear(DebugHistoryTruncationReason.CONFIGURATION_CHANGED)
+        debugInstructionReplayer.close()
+      }
+    }
     eventQueue.register<Controller.ScanBarcodeEvent> {
       (session?.serialEndpoint as? BarcodeBoySerialEndpoint)?.scan(it.barcode)
     }
