@@ -281,6 +281,7 @@ object ReplayStateHasher {
         SerialPeripheralState.PEER_TO_PEER -> 2
         SerialPeripheralState.PRINTER -> 3
         SerialPeripheralState.GPS_RECEIVER -> 4
+        SerialPeripheralState.SEWING_MACHINE -> 11
         SerialPeripheralState.BARCODE_BOY -> 5
         SerialPeripheralState.FOUR_PLAYER_ADAPTER -> 6
         SerialPeripheralState.MOBILE_ADAPTER_GB -> 7

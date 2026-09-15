@@ -144,6 +144,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
+import eu.rekawek.coffeegb.core.serial.SewingMachineSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsDataSource
@@ -987,6 +988,36 @@ class BasicController private constructor(
           Controller.SerialPeripheralSelection.BARCODE_BOY,
           it.enabled,
       )
+    }
+    eventQueue.register<Controller.SewingControlEvent> { event ->
+      try {
+        check(event.sessionGeneration == null || event.sessionGeneration == playbackSessionGeneration) { "The game session changed." }
+        val device = session?.serialEndpoint as? SewingMachineSerialEndpoint
+            ?: error("Select Sewing machine as the link-port device first.")
+        if (event.action != Controller.SewingAction.SNAPSHOT) {
+          check(!replayPlaybackMutationBlocked("Operating the sewing machine")) { "Sewing controls are unavailable during input playback." }
+          finishReplayRecording("Sewing machine controls changed")
+          when (event.action) {
+            Controller.SewingAction.MODEL -> device.setModel(event.value)
+            Controller.SewingAction.ARM -> device.setArmAttached(event.value != 0)
+            Controller.SewingAction.HOOP -> device.setLargeHoop(event.value != 0)
+            Controller.SewingAction.PEDAL -> device.setPedal(event.value != 0)
+            Controller.SewingAction.PAUSE -> device.setPaused(event.value != 0)
+            Controller.SewingAction.ADVANCE -> device.requestAdvance()
+            Controller.SewingAction.COLOR -> device.setThreadColor(event.value)
+            Controller.SewingAction.SPEED -> device.setSpeed(event.value)
+            Controller.SewingAction.STEP -> device.stitchOnce()
+            Controller.SewingAction.CLEAR -> device.clearFabric()
+            else -> Unit
+          }
+          rewindManager.clear()
+          debugCheckpointHistory.clear(DebugHistoryTruncationReason.CONFIGURATION_CHANGED)
+          debugInstructionReplayer.close()
+        }
+        event.completion.complete(Controller.SewingSnapshot(device.model, device.isArmAttached,
+            device.isLargeHoop, device.isPedalPressed, device.isPaused, device.threadColor,
+            device.speed, device.stitchCount, device.isFinished, device.copyFabric()))
+      } catch (e: Exception) { event.completion.completeExceptionally(e) }
     }
     eventQueue.register<Controller.ScanBarcodeEvent> {
       (session?.serialEndpoint as? BarcodeBoySerialEndpoint)?.scan(it.barcode)
@@ -4869,6 +4900,7 @@ class BasicController private constructor(
                   sessionBus.post(
                       Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
                 })
+        Controller.SerialPeripheralSelection.SEWING_MACHINE -> PreparedSerialEndpoint(SewingMachineSerialEndpoint())
         Controller.SerialPeripheralSelection.BARCODE_BOY ->
             PreparedSerialEndpoint(BarcodeBoySerialEndpoint())
         Controller.SerialPeripheralSelection.GPS_RECEIVER ->

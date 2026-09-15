@@ -166,6 +166,10 @@ internal class SwingMenu(
 
   private val desktopDialogFactory = DesktopDialogFactory(currentThemeTokens)
 
+  private val sewingMachineWindow = SewingMachineWindow(window, eventBus)
+
+  private var sewingSessionGeneration: Long? = null
+
   private val barcodeBoyDialog = BarcodeBoyDialog(desktopDialogFactory)
 
   private val fullChangerDialog = FullChangerDialog(desktopDialogFactory)
@@ -559,6 +563,32 @@ internal class SwingMenu(
     }
     enableWhenEmulationActive(scanBarcode)
 
+    val sewing = JMenuItem("Sewing machine…")
+    peripheralsMenu.add(sewing)
+    enableWhenEmulationActive(sewing)
+    sewing.addActionListener {
+      if (serialPeripheralBinding.snapshot().selection != SerialPeripheralSelection.SEWING_MACHINE &&
+          serialPeripheralBinding.menu.isEnabled) {
+        serialPeripheralBinding.items.getValue(SerialPeripheralSelection.SEWING_MACHINE).doClick()
+      }
+      if (serialPeripheralBinding.snapshot().selection == SerialPeripheralSelection.SEWING_MACHINE) {
+        sewingMachineWindow.show(sewingSessionGeneration)
+      }
+    }
+    eventBus.register<Controller.SessionPresentationEvent> { event ->
+      SwingUtilities.invokeLater {
+        if (sewingSessionGeneration != event.sessionGeneration) sewingMachineWindow.sessionChanged()
+        sewingSessionGeneration = event.sessionGeneration
+      }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      SwingUtilities.invokeLater { sewingMachineWindow.sessionChanged(); sewingSessionGeneration = null }
+    }
+    eventBus.register<Controller.SerialPeripheralSelectionChangedEvent> { event ->
+      if (event.selection != SerialPeripheralSelection.SEWING_MACHINE) {
+        SwingUtilities.invokeLater { sewingMachineWindow.sessionChanged() }
+      }
+    }
     return peripheralsMenu
   }
 

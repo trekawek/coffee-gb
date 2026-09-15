@@ -626,6 +626,7 @@ interface Controller : AutoCloseable {
     GPS_RECEIVER,
     MOBILE_ADAPTER_GB,
     PEER_TO_PEER,
+    SEWING_MACHINE,
   }
 
   /** Selects exactly one standalone link-port peripheral at the next controller safe point. */
@@ -926,6 +927,21 @@ interface Controller : AutoCloseable {
 
   /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
   data class ScanBarcodeEvent(val barcode: String) : Event
+
+  enum class SewingAction { SNAPSHOT, MODEL, ARM, HOOP, PEDAL, PAUSE, ADVANCE, COLOR, SPEED, STEP, CLEAR }
+
+  data class SewingControlEvent(
+      val action: SewingAction,
+      val value: Int = 0,
+      val sessionGeneration: Long? = null,
+      val completion: java.util.concurrent.CompletableFuture<SewingSnapshot> = java.util.concurrent.CompletableFuture(),
+  ) : Event
+
+  /** Detached preview; no live endpoint or mutable machine buffers cross the owner thread. */
+  data class SewingSnapshot(val model: Int, val arm: Boolean, val largeHoop: Boolean,
+      val pedal: Boolean, val paused: Boolean, val color: Int, val speed: Int,
+      val stitches: Int, val finished: Boolean, val pixels: IntArray)
+
 
   /** Legacy ownership-aware adapter for selecting the Game Boy Printer. */
   data class SetPrinterEvent(val enabled: Boolean) : Event
