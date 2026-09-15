@@ -144,6 +144,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
+import eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsDataSource
@@ -987,6 +988,10 @@ class BasicController private constructor(
           Controller.SerialPeripheralSelection.BARCODE_BOY,
           it.enabled,
       )
+    }
+    eventQueue.register<Controller.ScanBardigunBarcodeEvent> {
+      finishReplayRecording("A Bardigun barcode was scanned")
+      (session?.serialEndpoint as? BardigunSerialEndpoint)?.scan(it.barcode)
     }
     eventQueue.register<Controller.ScanBarcodeEvent> {
       (session?.serialEndpoint as? BarcodeBoySerialEndpoint)?.scan(it.barcode)
@@ -4869,6 +4874,8 @@ class BasicController private constructor(
                   sessionBus.post(
                       Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
                 })
+        Controller.SerialPeripheralSelection.BARDIGUN ->
+            PreparedSerialEndpoint(BardigunSerialEndpoint())
         Controller.SerialPeripheralSelection.BARCODE_BOY ->
             PreparedSerialEndpoint(BarcodeBoySerialEndpoint())
         Controller.SerialPeripheralSelection.GPS_RECEIVER ->

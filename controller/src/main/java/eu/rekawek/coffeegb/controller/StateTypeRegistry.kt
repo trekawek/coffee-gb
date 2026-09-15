@@ -128,6 +128,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.gpu.ScalarTimingColorPixelFifo\$State",
           "eu.rekawek.coffeegb.core.memory.cart.type.Ggb81\$Ggb81State",
           "eu.rekawek.coffeegb.core.ir.TvRemote\$TvRemoteState",
+          "eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint\$BardigunState",
       )
 
   val legacyRecordClassNames =
