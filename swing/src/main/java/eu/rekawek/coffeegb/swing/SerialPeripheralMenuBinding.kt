@@ -294,6 +294,8 @@ internal class SerialPeripheralMenuBinding(
             SerialPeripheralSelection.PRINTER,
             SerialPeripheralSelection.BARCODE_BOY,
             SerialPeripheralSelection.BARDIGUN,
+            SerialPeripheralSelection.TURBO_FILE_GB,
+            SerialPeripheralSelection.TURBO_FILE_ADVANCE,
             SerialPeripheralSelection.GPS_RECEIVER,
             SerialPeripheralSelection.MOBILE_ADAPTER_GB,
         )
@@ -305,6 +307,8 @@ internal class SerialPeripheralMenuBinding(
           SerialPeripheralSelection.PRINTER -> "Game Boy Printer"
           SerialPeripheralSelection.BARCODE_BOY -> "Barcode Boy"
           SerialPeripheralSelection.BARDIGUN -> "Bardigun Reader"
+          SerialPeripheralSelection.TURBO_FILE_GB -> "Turbo File GB"
+          SerialPeripheralSelection.TURBO_FILE_ADVANCE -> "Turbo File Advance"
           SerialPeripheralSelection.GPS_RECEIVER -> "GPS Receiver (GPS Boy)"
           SerialPeripheralSelection.MOBILE_ADAPTER_GB -> "Mobile Adapter GB"
         }

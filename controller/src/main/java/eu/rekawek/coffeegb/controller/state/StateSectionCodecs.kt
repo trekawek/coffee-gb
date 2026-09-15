@@ -593,6 +593,8 @@ internal object StatePayloadSectionCodec {
                   "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverState")
           SerialPeripheralState.BARDIGUN ->
               listOf("eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint\$BardigunState")
+          SerialPeripheralState.TURBO_FILE_GB, SerialPeripheralState.TURBO_FILE_ADVANCE ->
+              listOf("eu.rekawek.coffeegb.core.serial.TurboFileSerialEndpoint\$TurboFileState")
           SerialPeripheralState.BARCODE_BOY ->
               listOf(
                   "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState")
@@ -628,6 +630,8 @@ internal object StatePayloadSectionCodec {
         SerialPeripheralState.FOUR_PLAYER_ADAPTER -> 7
         SerialPeripheralState.MOBILE_ADAPTER_GB -> 8
         SerialPeripheralState.BARDIGUN -> 9
+        SerialPeripheralState.TURBO_FILE_GB -> 10
+        SerialPeripheralState.TURBO_FILE_ADVANCE -> 11
       }
 
   internal fun serialPeripheral(id: Int): SerialPeripheralState =
@@ -641,6 +645,8 @@ internal object StatePayloadSectionCodec {
         7 -> SerialPeripheralState.FOUR_PLAYER_ADAPTER
         8 -> SerialPeripheralState.MOBILE_ADAPTER_GB
         9 -> SerialPeripheralState.BARDIGUN
+        10 -> SerialPeripheralState.TURBO_FILE_GB
+        11 -> SerialPeripheralState.TURBO_FILE_ADVANCE
         else ->
             throw StateDecodeException(
                 StateDecodeReason.MALFORMED_ENUM,
