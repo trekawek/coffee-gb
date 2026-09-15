@@ -813,6 +813,16 @@ internal object StateSemantics {
           constrained("Byte-receiver byte and bit count are bounded.") {
             it.range("sb", 0, 0xff); it.range("bits", 0, 7)
           })
+      put("eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint\$BardigunState",
+          constrained("Optical barcode streams and both bit cursors are bounded.") {
+            val size = eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint.SCAN_BYTES
+            it.require(it.intArray("scan").size == size && it.intArray("pending").size == size,
+                "has an invalid optical scan length")
+            it.intValues("scan", 0, 255); it.intValues("pending", 0, 255)
+            it.range("byteIndex", 0, size); it.range("bitIndex", 0, 7)
+            it.require(it.int("byteIndex") != size || it.int("bitIndex") == 0,
+                "has a partial byte after the scan ended")
+          })
       put("eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState",
           constrained("Barcode protocol phase and exact scan-frame cursors are validated together.") {
             it.range("handshakeByte", 0, 3); it.range("sendBitIndex", 0, 7)

@@ -329,6 +329,7 @@ enum class SerialPeripheralState {
   BARCODE_BOY,
   FOUR_PLAYER_ADAPTER,
   MOBILE_ADAPTER_GB,
+  BARDIGUN,
 }
 
 /** Detached state owned by one controller Session, including event/protocol-owned P1 input. */
@@ -800,6 +801,8 @@ internal object DetachedStateAdapter {
             SerialPeripheralState.PRINTER
         "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint" ->
             SerialPeripheralState.GPS_RECEIVER
+        "eu.rekawek.coffeegb.core.serial.BardigunSerialEndpoint" ->
+            SerialPeripheralState.BARDIGUN
         "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint" ->
             SerialPeripheralState.BARCODE_BOY
         "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$Endpoint" ->

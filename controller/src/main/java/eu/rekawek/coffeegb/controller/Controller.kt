@@ -626,6 +626,7 @@ interface Controller : AutoCloseable {
     GPS_RECEIVER,
     MOBILE_ADAPTER_GB,
     PEER_TO_PEER,
+    BARDIGUN,
   }
 
   /** Selects exactly one standalone link-port peripheral at the next controller safe point. */
@@ -922,6 +923,8 @@ interface Controller : AutoCloseable {
    * Legacy adapter for selecting the Barcode Boy. Disabling it only clears the port when Barcode
    * Boy still owns the exclusive selection.
    */
+  data class ScanBardigunBarcodeEvent(val barcode: String) : Event
+
   data class SetBarcodeBoyEvent(val enabled: Boolean) : Event
 
   /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
