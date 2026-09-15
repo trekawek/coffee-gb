@@ -38,7 +38,7 @@ orchestration layer use Kotlin and Java.
 - **Broad cartridge and accessory support**, including real-time clocks, rumble,
   tilt controls, Game Boy Camera, Game Boy Printer, Barcode Boy,
   [Bardigun Reader](doc/bardigun.md), Full Changer,
-  and Datel Action Replay pass-through.
+  [Pocket Sonar](doc/pocket-sonar.md), and Datel Action Replay pass-through.
 - **Game Genie and GameShark cheats**, with a bundled searchable
   [libretro cheat database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy).
 

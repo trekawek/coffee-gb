@@ -1682,6 +1682,15 @@ internal object StateSemantics {
   }
 
   private fun addMapperPolicies(target: MutableMap<String, Policy>) {
+    target["eu.rekawek.coffeegb.core.memory.cart.type.PocketSonar\$PocketSonarState"] =
+        constrained("MBC1S retains ROM banking, pulse state and a bounded three-bit sonar field.") {
+          it.range("romBank", 1, 31); it.range("column", -1, 159); it.range("row", 0, 191)
+          val samples = it.byteArray("samples")
+          it.require(samples.size == 160 * 192 && samples.all { v -> v in 0..7 },
+              "has an invalid sonar scene")
+          it.require(it.value("pulse") != true || it.value("enabled") == true,
+              "has a pulse while sonar mode is disabled")
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc1\$Mbc1State"] =
         constrained("MBC1 bank/model registers and cached bank sentinels retain their hardware widths.") {
           it.range("selectedRamBank", 0, 3); it.range("selectedRomBank", 0, 0x7f)
