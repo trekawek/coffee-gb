@@ -36,7 +36,8 @@ orchestration layer use Kotlin and Java.
 - **Keyboard and game-controller support**, including independent controls for
   up to four players in compatible Super Game Boy games.
 - **Broad cartridge and accessory support**, including real-time clocks, rumble,
-  tilt controls, Game Boy Camera, Game Boy Printer, Barcode Boy, Full Changer,
+  tilt controls, Game Boy Camera, Game Boy Printer, Barcode Boy,
+  [Bardigun Reader](doc/bardigun.md), Full Changer,
   and Datel Action Replay pass-through.
 - **Game Genie and GameShark cheats**, with a bundled searchable
   [libretro cheat database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy).

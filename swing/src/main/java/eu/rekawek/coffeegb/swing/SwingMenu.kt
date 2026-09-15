@@ -168,6 +168,8 @@ internal class SwingMenu(
 
   private val barcodeBoyDialog = BarcodeBoyDialog(desktopDialogFactory)
 
+  private val bardigunDialog = BarcodeBoyDialog(desktopDialogFactory, "Bardigun Reader")
+
   private val fullChangerDialog = FullChangerDialog(desktopDialogFactory)
 
   private val actionReplaySlotDialog = ActionReplaySlotDialog(desktopDialogFactory)
@@ -564,6 +566,20 @@ internal class SwingMenu(
     }
     enableWhenEmulationActive(scanBarcode)
 
+    val scanBardigun = JMenuItem("Bardigun Reader…")
+    scanBardigun.accessibleContext.accessibleDescription =
+        "Scan a 13-digit barcode with the Barcode Taisen Bardigun reader"
+    peripheralsMenu.add(scanBardigun)
+    scanBardigun.addActionListener {
+      bardigunDialog.show(
+          owner = window,
+          barcodeBoySelected = serialPeripheralBinding.isSelected(SerialPeripheralSelection.BARDIGUN),
+          onSelectBarcodeBoy = { selectBarcodeReader(SerialPeripheralSelection.BARDIGUN) },
+          onScan = { code -> eventBus.post(Controller.ScanBardigunBarcodeEvent(code)) },
+      )
+    }
+    enableWhenEmulationActive(scanBardigun)
+
     return peripheralsMenu
   }
 
@@ -608,13 +624,15 @@ internal class SwingMenu(
     }
   }
 
-  private fun selectBarcodeBoy(): Boolean {
+  private fun selectBarcodeBoy(): Boolean = selectBarcodeReader(SerialPeripheralSelection.BARCODE_BOY)
+
+  private fun selectBarcodeReader(selection: SerialPeripheralSelection): Boolean {
     if (
-        serialPeripheralBinding.snapshot().selection != SerialPeripheralSelection.BARCODE_BOY &&
+        serialPeripheralBinding.snapshot().selection != selection &&
             serialPeripheralBinding.menu.isEnabled) {
-      serialPeripheralBinding.items.getValue(SerialPeripheralSelection.BARCODE_BOY).doClick()
+      serialPeripheralBinding.items.getValue(selection).doClick()
     }
-    return serialPeripheralBinding.snapshot().selection == SerialPeripheralSelection.BARCODE_BOY
+    return serialPeripheralBinding.snapshot().selection == selection
   }
 
   private fun createScreenMenu(): JMenu {

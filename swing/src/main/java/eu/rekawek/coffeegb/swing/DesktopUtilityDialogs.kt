@@ -103,21 +103,22 @@ internal class BarcodeBoyForm(
     barcodeBoySelected: Boolean,
     private val onSelectBarcodeBoy: () -> Boolean,
     initialBarcode: String = "",
+    private val deviceName: String = "Barcode Boy",
 ) : JPanel(GridBagLayout()) {
   internal val barcodeField =
       JTextField(16).apply {
         getAccessibleContext().accessibleName = "Barcode number"
         getAccessibleContext().accessibleDescription =
-            "Exactly 13 decimal digits sent to the selected Barcode Boy"
+            "Exactly 13 decimal digits sent to the selected $deviceName"
         document =
             PlainDocument().apply { documentFilter = BarcodeBoyDocumentFilter() }
       }
   internal val prerequisiteText =
-      literalUtilityText("", "Barcode Boy prerequisite", columns = 42)
+      literalUtilityText("", "$deviceName prerequisite", columns = 42)
   internal val selectDeviceButton =
       literalUtilityButton(
-          "Select Barcode Boy",
-          "Select Barcode Boy as the current link-port device",
+          "Select $deviceName",
+          "Select $deviceName as the current link-port device",
       ).apply { mnemonic = KeyEvent.VK_B }
 
   private var selected = barcodeBoySelected
@@ -132,15 +133,15 @@ internal class BarcodeBoyForm(
       return if (selected) {
         DesktopInlineValidation(true)
       } else {
-        DesktopInlineValidation(false, "Select Barcode Boy before scanning.")
+        DesktopInlineValidation(false, "Select $deviceName before scanning.")
       }
     }
 
   init {
-    check(SwingUtilities.isEventDispatchThread()) { "Barcode Boy forms must be created on the EDT" }
-    getAccessibleContext().accessibleName = "Barcode Boy scan fields"
+    check(SwingUtilities.isEventDispatchThread()) { "$deviceName forms must be created on the EDT" }
+    getAccessibleContext().accessibleName = "$deviceName scan fields"
     getAccessibleContext().accessibleDescription =
-        "Enter exactly 13 decimal digits and select Barcode Boy before scanning"
+        "Enter exactly 13 decimal digits and select $deviceName before scanning"
 
     val barcodeLabel = JLabel("Barcode number:").apply { labelFor = barcodeField }
     add(
@@ -197,14 +198,14 @@ internal class BarcodeBoyForm(
 
   fun setBarcodeBoySelected(isSelected: Boolean) {
     check(SwingUtilities.isEventDispatchThread()) {
-      "Barcode Boy prerequisite updates must run on the EDT"
+      "$deviceName prerequisite updates must run on the EDT"
     }
     selected = isSelected
     prerequisiteText.text =
         if (selected) {
-          "Barcode Boy is selected and ready to receive a scan."
+          "$deviceName is selected and ready to receive a scan."
         } else {
-          "Barcode Boy must be selected as the link-port device before scanning."
+          "$deviceName must be selected as the link-port device before scanning."
         }
     prerequisiteText.accessibleContext.accessibleDescription = prerequisiteText.text
     selectDeviceButton.isVisible = !selected
@@ -215,11 +216,11 @@ internal class BarcodeBoyForm(
 
   internal fun spec(): DesktopFormSpec<DesktopUtilityFormResult> =
       DesktopFormSpec(
-          title = "Barcode Boy",
+          title = deviceName,
           heading = "Scan a barcode",
           description =
               "Enter the 13 decimal digits printed below the barcode. No checksum is calculated.",
-          contentAccessibleName = "Barcode Boy scan fields",
+          contentAccessibleName = "$deviceName scan fields",
           buttons =
               DesktopDialogButtons(
                   primary =
@@ -227,7 +228,7 @@ internal class BarcodeBoyForm(
                           "Scan",
                           DesktopUtilityFormResult.APPLY,
                           mnemonic = KeyEvent.VK_S,
-                          accessibleDescription = "Send this barcode to Barcode Boy",
+                          accessibleDescription = "Send this barcode to $deviceName",
                       ),
                   cancel =
                       DesktopDialogAction("Cancel", DesktopUtilityFormResult.CANCEL),
@@ -245,6 +246,7 @@ internal class BarcodeBoyForm(
 
 internal class BarcodeBoyDialog(
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
+    private val deviceName: String = "Barcode Boy",
 ) {
   /** Returns true only after a syntactically valid barcode has been submitted. */
   fun show(
@@ -253,8 +255,8 @@ internal class BarcodeBoyDialog(
       onSelectBarcodeBoy: () -> Boolean,
       onScan: (String) -> Unit,
   ): Boolean {
-    check(SwingUtilities.isEventDispatchThread()) { "Barcode Boy dialogs must be shown on the EDT" }
-    val form = BarcodeBoyForm(barcodeBoySelected, onSelectBarcodeBoy)
+    check(SwingUtilities.isEventDispatchThread()) { "$deviceName dialogs must be shown on the EDT" }
+    val form = BarcodeBoyForm(barcodeBoySelected, onSelectBarcodeBoy, deviceName = deviceName)
     val result = dialogFactory.showForm(owner, form.spec(), form)
     if (result != DesktopUtilityFormResult.APPLY) return false
     check(form.submissionValidation.valid) { "The dialog submitted an invalid barcode" }

@@ -6,7 +6,8 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 
 /**
  * Emulates the Namco Barcode Boy (バーコードボーイ) link-port barcode scanner used by
- * Battle Space and Barcode Taisen Bardigun (issue #70). Protocol reverse-engineered by
+ * Battle Space and other Namco games. Bardigun uses {@link BardigunSerialEndpoint} instead.
+ * Protocol reverse-engineered by
  * Shonumi (https://shonumi.github.io/articles/art7.html):
  *
  * <ol>
