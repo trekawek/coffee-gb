@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
+import eu.rekawek.coffeegb.swing.translation.TranslationRegion;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuPointerTarget;
 import eu.rekawek.coffeegb.ui.menu.MenuPointerGesture;
@@ -23,7 +24,9 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -50,6 +53,8 @@ public class SwingDisplay extends JPanel implements Runnable {
             new PresentationFrameRateMeter();
 
     private final SwingMenuOverlay menuOverlay = new SwingMenuOverlay();
+
+    private volatile SwingTranslationOverlay translationOverlay;
 
     private PendingFrame pendingFrame;
 
@@ -207,8 +212,10 @@ public class SwingDisplay extends JPanel implements Runnable {
             pendingFrame = null;
             previousFrame = null;
             framePublished = false;
+            translationOverlay = null;
             notifyAll();
         }
+        requestRepaint();
     }
 
     private void resetPresentationFrameRate() {
@@ -382,6 +389,38 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     /**
+     * Returns an independent native-resolution, unrotated screenshot, or null before the current
+     * session has presented a frame. Host menus, notifications, and translation overlays are never
+     * included. The immutable frame publication makes capture safe from any thread.
+     */
+    public BufferedImage captureTranslationFrame() {
+        if (!framePublished) {
+            return null;
+        }
+        DisplayFrameSnapshot frame = displayedFrame.get();
+        BufferedImage image = new BufferedImage(frame.width(), frame.height(), BufferedImage.TYPE_INT_RGB);
+        image.setRGB(0, 0, frame.width(), frame.height(), frame.copyRgb(), 0, frame.width());
+        return image;
+    }
+
+    /** Freezes presentation at a copied screenshot and overlays source-coordinate English text. */
+    public void setTranslationOverlay(BufferedImage frame, List<TranslationRegion> regions, String status) {
+        requireEventDispatchThread("Translation overlay update");
+        translationOverlay = new SwingTranslationOverlay(frame, regions, status);
+        requestRepaint();
+    }
+
+    public void clearTranslationOverlay() {
+        requireEventDispatchThread("Translation overlay update");
+        translationOverlay = null;
+        requestRepaint();
+    }
+
+    public boolean hasTranslationOverlay() {
+        return translationOverlay != null;
+    }
+
+    /**
      * Captures the same completed frame currently presented to the player for the pause menu.
      *
      * <p>The copy is intentionally detached from the display's coalescing worker, is opaque, and
@@ -466,11 +505,12 @@ public class SwingDisplay extends JPanel implements Runnable {
         super.paintComponent(g);
 
         DisplayFrameSnapshot frame = displayedFrame.get();
+        SwingTranslationOverlay translation = translationOverlay;
         DisplayViewport viewport = DisplayViewport.calculate(
                 getWidth(),
-                getHeight(),
-                frame.width(),
-                frame.height(),
+                getHeight() - (translation == null ? 0 : translation.statusHeight(getHeight())),
+                translation == null ? frame.width() : translation.width(),
+                translation == null ? frame.height() : translation.height(),
                 rotation,
                 scaleMode);
         Graphics2D frameGraphics = (Graphics2D) g.create();
@@ -480,15 +520,23 @@ public class SwingDisplay extends JPanel implements Runnable {
         frameGraphics.setRenderingHint(
                 RenderingHints.KEY_RENDERING,
                 RenderingHints.VALUE_RENDER_SPEED);
-        if (rumbling) {
+        if (rumbling && translation == null) {
             rumblePhase++;
             frameGraphics.translate(
                     (rumblePhase & 2) == 0 ? 1 : -1,
                     (rumblePhase & 1) == 0 ? 1 : -1);
         }
         frameGraphics.transform(viewport.sourceToComponentTransform());
-        frame.paint(frameGraphics);
+        if (translation == null) {
+            frame.paint(frameGraphics);
+        } else {
+            translation.paint(frameGraphics);
+        }
         frameGraphics.dispose();
+
+        if (translation != null) {
+            translation.paintStatus((Graphics2D) g, getWidth(), getHeight());
+        }
 
         if (menuOverlay.visible()) {
             // The aspect-fit bars belong to the menu presentation, not the game frame beneath it.

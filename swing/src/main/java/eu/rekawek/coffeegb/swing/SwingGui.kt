@@ -110,6 +110,8 @@ class SwingGui private constructor(
 
   private lateinit var fullscreenEscape: FullscreenEscapeDispatcher
 
+  private lateinit var translationShortcut: DesktopTranslationShortcutDispatcher
+
   private lateinit var romOpen: DesktopRomOpen
 
   private lateinit var dropFeedback: RomDropFeedback
@@ -135,6 +137,8 @@ class SwingGui private constructor(
   private lateinit var desktopUiCoordinator: DesktopUiCoordinator
 
   private lateinit var desktopPlaybackState: DesktopPlaybackState
+
+  private lateinit var screenTranslation: DesktopScreenTranslationController
 
   private lateinit var desktopUiStateController: DesktopUiStateController
 
@@ -182,6 +186,7 @@ class SwingGui private constructor(
           runDesktopEdtStep(desktopUiStateController::close)
           // No process-wide key dispatcher may persist display settings once store closure begins.
           runDesktopEdtStep(fullscreenEscape::close)
+          runDesktopEdtStep(translationShortcut::close)
           closeSettings()
           mobileAdapterConfiguration.close()
           jvmShutdown.markCompleted()
@@ -443,6 +448,7 @@ class SwingGui private constructor(
                 quit = ::requestClose,
                 openMenu = emulator::openPortableMenu,
                 setPaused = { paused ->
+                  if (::screenTranslation.isInitialized) screenTranslation.dismiss(resume = false)
                   eventBus.post(
                       if (paused) Controller.PauseEmulationEvent()
                       else Controller.ResumeEmulationEvent())
@@ -473,6 +479,7 @@ class SwingGui private constructor(
                 },
                 setFullscreen = displayController::setFullscreen,
                 screenshot = stateUxController::takeScreenshot,
+                translateScreen = emulator::toggleScreenTranslation,
                 inputRecording = inputRecordingWindow::show,
                 stopInputRecording = ::stopInputRecording,
                 loadInputRecording = stateUxController::loadInputRecording,
@@ -509,6 +516,10 @@ class SwingGui private constructor(
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(
             DesktopKeyboardKeyAdapter.keyCodes(properties.applicationSettings.input.keyboard.values)))
+    translationShortcut = DesktopTranslationShortcutDispatcher(
+        mainWindow,
+        shortcut = { desktopActions.shortcut(DesktopCommand.TRANSLATE_SCREEN)?.keyStroke },
+    ).also(DesktopTranslationShortcutDispatcher::install)
     val portableMenu =
         emulator.installPortableMenu(desktopActions) { visible ->
           if (::desktopMainPanel.isInitialized) {
@@ -585,11 +596,27 @@ class SwingGui private constructor(
               inputRecordingWindow.render(presentation.commands)
             },
         )
-    desktopPlaybackState = DesktopPlaybackState(desktopUiCoordinator::paused)
+    screenTranslation = emulator.installScreenTranslation(
+        desktopUiCoordinator::current,
+        { message -> desktopUiCoordinator.warning(message) },
+    )
+    desktopPlaybackState = DesktopPlaybackState { paused ->
+      if (!paused) screenTranslation.invalidate()
+      desktopUiCoordinator.paused(paused)
+    }
     desktopUiCoordinator.publish()
     updateRecentRoms()
     eventBus.register<Controller.SessionPauseSupportEvent> { event ->
-      dispatchSwingMutation { desktopUiCoordinator.pauseSupport(event.enabled) }
+      dispatchSwingMutation {
+        if (!event.enabled) screenTranslation.invalidate()
+        desktopUiCoordinator.pauseSupport(event.enabled)
+      }
+    }
+    eventBus.register<ControllerOwnershipChangingEvent> {
+      dispatchSwingMutation { screenTranslation.invalidate() }
+    }
+    eventBus.register<Controller.SnapshotRestoredEvent> {
+      dispatchSwingMutation { screenTranslation.dismiss() }
     }
     eventBus.register<Controller.SessionPlaybackStateEvent> { event ->
       dispatchSwingMutation { desktopPlaybackState.playbackChanged(event) }
@@ -621,6 +648,7 @@ class SwingGui private constructor(
     }
     eventBus.register<RomLoadingEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
+        screenTranslation.dismiss()
         romLoading = true
         romLoadingRequestId = event.openRequestId
         desktopUiCoordinator.opening(event.rom.name)
@@ -628,6 +656,7 @@ class SwingGui private constructor(
     }
     eventBus.register<EmulationStartedEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
+        screenTranslation.invalidate()
         activeWindowTitle = "${event.romName} — Coffee GB"
         activeRecentOrigin = event.origin
         activeRecentTitle = event.romName
@@ -667,6 +696,7 @@ class SwingGui private constructor(
     }
     eventBus.register<EmulationStoppedEvent> {
       dispatchAcceptedRomLifecycle(null, ::acceptRomLifecycle) {
+        screenTranslation.invalidate()
         if (shouldPresentStoppedSession(romOpen.hasActiveRequest(), romLoading)) {
           // Fullscreen is a session presentation state. Leave it before revealing Home so the
           // runtime, persisted display choice, and shell selection cannot disagree while idle.
@@ -984,6 +1014,7 @@ class SwingGui private constructor(
     SwingUtilities.invokeLater {
       dropFeedback.close()
       fullscreenEscape.close()
+      translationShortcut.close()
       displayController.close()
       mainWindow.dispose()
       exitProcess(0)
@@ -1430,6 +1461,7 @@ internal fun DesktopPreferencesCategory.toPreferencesCategory(): PreferencesCate
       DesktopPreferencesCategory.SAVES_AND_REWIND -> PreferencesCategory.SAVES_AND_REWIND
       DesktopPreferencesCategory.SYSTEM -> PreferencesCategory.SYSTEM
       DesktopPreferencesCategory.PERIPHERALS -> PreferencesCategory.PERIPHERALS
+      DesktopPreferencesCategory.TRANSLATION -> PreferencesCategory.TRANSLATION
     }
 
 internal fun PreferencesCategory.toDesktopCategory(): DesktopPreferencesCategory =
@@ -1441,6 +1473,7 @@ internal fun PreferencesCategory.toDesktopCategory(): DesktopPreferencesCategory
       PreferencesCategory.SAVES_AND_REWIND -> DesktopPreferencesCategory.SAVES_AND_REWIND
       PreferencesCategory.SYSTEM -> DesktopPreferencesCategory.SYSTEM
       PreferencesCategory.PERIPHERALS -> DesktopPreferencesCategory.PERIPHERALS
+      PreferencesCategory.TRANSLATION -> DesktopPreferencesCategory.TRANSLATION
     }
 
 /**

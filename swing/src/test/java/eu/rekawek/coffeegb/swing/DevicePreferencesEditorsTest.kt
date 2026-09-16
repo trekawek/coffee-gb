@@ -439,8 +439,9 @@ class DevicePreferencesEditorsTest {
               "Audio",
               "Controls",
               "Saves & Rewind",
-              "System",
-              "Peripherals",
+                "System",
+                "Peripherals",
+                "Translation",
           ),
           PreferencesCategory.values().map { it.displayName },
       )

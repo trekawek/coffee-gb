@@ -7,6 +7,7 @@ import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import java.nio.file.Path
 import javax.swing.Action
+import javax.swing.KeyStroke
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -15,6 +16,55 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class DesktopActionsTest {
+  @Test
+  fun `screen translation is available only for a loaded pausable idle session`() {
+    val calls = mutableListOf<String>()
+    val registry =
+        DesktopActionRegistry(handlers(calls).copy(translateScreen = { calls += "translate" }))
+    val ready = DesktopCommandPresentation(gameLoaded = true, pauseSupported = true)
+
+    listOf(
+            DesktopCommandPresentation(),
+            ready.copy(gameLoaded = false),
+            ready.copy(pauseSupported = false, netplaySession = true),
+            ready.copy(sessionBusy = true),
+        )
+        .forEach { state ->
+          registry.update(state)
+          assertFalse(registry[DesktopCommand.TRANSLATE_SCREEN].isEnabled)
+          registry.invoke(DesktopCommand.TRANSLATE_SCREEN)
+        }
+    assertTrue(calls.isEmpty())
+
+    listOf(ready, ready.copy(paused = true)).forEach { state ->
+      registry.update(state)
+      assertTrue(registry[DesktopCommand.TRANSLATE_SCREEN].isEnabled)
+      assertEquals(
+          "Translate Screen", registry[DesktopCommand.TRANSLATE_SCREEN].getValue(Action.NAME))
+      registry.invoke(DesktopCommand.TRANSLATE_SCREEN)
+    }
+    assertEquals(listOf("translate", "translate"), calls)
+  }
+
+  @Test
+  fun `screen translation uses the platform menu modifier plus shift and T`() {
+    listOf(InputEvent.CTRL_DOWN_MASK, InputEvent.META_DOWN_MASK).forEach { platformMask ->
+      val shortcuts =
+          DesktopShortcutRegistry(
+              gameplayKeyCodes = listOf(KeyEvent.VK_T),
+              platformMenuMask = platformMask,
+          )
+      val expected =
+          KeyStroke.getKeyStroke(KeyEvent.VK_T, platformMask or InputEvent.SHIFT_DOWN_MASK)
+      val registry = registry(mutableListOf())
+      registry.applyShortcuts(shortcuts)
+
+      assertEquals(expected, shortcuts[DesktopCommand.TRANSLATE_SCREEN])
+      assertEquals(
+          expected, registry[DesktopCommand.TRANSLATE_SCREEN].getValue(Action.ACCELERATOR_KEY))
+    }
+  }
+
   @Test
   fun `recording menu entries and shortcut actions follow the netplay diagnostic flag`() {
     val registry = registry(mutableListOf())

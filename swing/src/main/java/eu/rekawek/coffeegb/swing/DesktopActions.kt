@@ -34,6 +34,7 @@ internal enum class DesktopCommand {
   MUTE,
   FULLSCREEN,
   SCREENSHOT,
+  TRANSLATE_SCREEN,
   INPUT_RECORDING,
   STOP_INPUT_RECORDING,
   LOAD_INPUT_RECORDING,
@@ -111,6 +112,7 @@ internal data class DesktopCommandHandlers(
     val preferredRomDirectory: (() -> Path?)? = null,
     /** Opens an exact path selected by the in-screen ROM browser. */
     val openRomPathFromPortableMenu: ((Path) -> Boolean)? = null,
+    val translateScreen: () -> Unit = {},
 )
 
 /** Stable in-screen settings identifiers shared by Swing's production bridge and route host. */
@@ -494,6 +496,7 @@ internal class DesktopActionRegistry(
       DesktopCommand.MUTE -> handlers.setMuted(!presentation.muted)
       DesktopCommand.FULLSCREEN -> handlers.setFullscreen(!presentation.fullscreen)
       DesktopCommand.SCREENSHOT -> handlers.screenshot()
+      DesktopCommand.TRANSLATE_SCREEN -> handlers.translateScreen()
       DesktopCommand.INPUT_RECORDING -> handlers.inputRecording()
       DesktopCommand.STOP_INPUT_RECORDING -> handlers.stopInputRecording()
       DesktopCommand.LOAD_INPUT_RECORDING -> handlers.loadInputRecording()
@@ -513,7 +516,8 @@ internal class DesktopActionRegistry(
         DesktopCommand.OPEN_MENU -> !state.sessionBusy
         DesktopCommand.CLOSE_GAME,
         DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
-      DesktopCommand.PAUSE ->
+        DesktopCommand.PAUSE,
+        DesktopCommand.TRANSLATE_SCREEN ->
             state.gameLoaded && state.pauseSupported && !state.sessionBusy
         DesktopCommand.SAVE_STATE -> state.stateCommandsAvailable && !state.sessionBusy
         DesktopCommand.LOAD_STATE ->
@@ -594,6 +598,11 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
           DesktopActionMetadata("Full Screen", "Enter or leave full screen")
       DesktopCommand.SCREENSHOT ->
           DesktopActionMetadata("Screenshot", "Save a screenshot of the current game")
+      DesktopCommand.TRANSLATE_SCREEN ->
+          DesktopActionMetadata(
+              "Translate Screen",
+              "Pause and translate this screen into English with OpenAI, or dismiss its translation",
+          )
       DesktopCommand.INPUT_RECORDING ->
           DesktopActionMetadata("Input Recording", "Open input recording and playback controls")
       DesktopCommand.STOP_INPUT_RECORDING ->
@@ -635,6 +644,11 @@ internal class DesktopShortcutRegistry(
             DesktopCommand.LOAD_STATE to KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0),
             DesktopCommand.FULLSCREEN to KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0),
             DesktopCommand.SCREENSHOT to KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0),
+            DesktopCommand.TRANSLATE_SCREEN to
+                KeyStroke.getKeyStroke(
+                    KeyEvent.VK_T,
+                    platformMenuMask or InputEvent.SHIFT_DOWN_MASK,
+                ),
             DesktopCommand.INPUT_RECORDING to
                 KeyStroke.getKeyStroke(
                     KeyEvent.VK_R,

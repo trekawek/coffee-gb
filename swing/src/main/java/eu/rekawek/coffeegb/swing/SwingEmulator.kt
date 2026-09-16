@@ -21,6 +21,8 @@ import eu.rekawek.coffeegb.swing.io.AudioOutputStatus
 import eu.rekawek.coffeegb.swing.io.AudioRuntimeConfiguration
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.DesktopAutofireInput
+import eu.rekawek.coffeegb.swing.io.DesktopMenuInputCapture
+import eu.rekawek.coffeegb.swing.io.DesktopMenuKeyboardInput
 import eu.rekawek.coffeegb.swing.io.DesktopPlayerInput
 import eu.rekawek.coffeegb.swing.io.DesktopTiltInput
 import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
@@ -31,6 +33,9 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
+import eu.rekawek.coffeegb.swing.translation.OpenAiScreenTranslator
+import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.ui.menu.MenuKey
 import java.awt.Dimension
 import javax.swing.BoxLayout
 import javax.swing.JFrame
@@ -114,6 +119,10 @@ class SwingEmulator(
   private var inputRouter: DesktopInputRouter? = null
 
   private var portableMenu: SwingProposal3Menu? = null
+
+  private var screenTranslation: DesktopScreenTranslationController? = null
+
+  @Volatile private var translationVisible = false
 
   private var preferredSizeChangedWhileFullscreen = false
 
@@ -238,6 +247,7 @@ class SwingEmulator(
           closeControllerAfterLifecycleRelease(::releaseForLifecycleChange, controller::close)
         },
         finishTeardown = {
+          runDesktopEdtStep { screenTranslation?.close() }
           portableMenu?.closeForLifecycle()
           portableMenu = null
           playerInput.setMenuCapture(null)
@@ -295,16 +305,64 @@ class SwingEmulator(
             )
     portableMenu = installedMenu
     display.setMenuPointerInput(installedMenu)
-    playerInput.setMenuCapture(portableMenu)
+    playerInput.setMenuCapture(object : DesktopMenuInputCapture {
+      override fun visible() = translationVisible || installedMenu.visible()
+
+      override fun updatePlayerButtons(buttons: Collection<Button>): Boolean =
+          translationVisible || installedMenu.updatePlayerButtons(buttons)
+    })
     return installedMenu
   }
 
   internal fun openPortableMenu() {
+    if (screenTranslation?.dismiss() == true) return
     portableMenu?.openFromDesktop()
   }
 
   internal fun togglePortableMenu() {
+    if (screenTranslation?.dismiss() == true) return
     portableMenu?.toggleFromDesktop()
+  }
+
+  internal fun installScreenTranslation(
+      state: () -> DesktopPresentation,
+      notice: (String) -> Unit,
+  ): DesktopScreenTranslationController {
+    check(screenTranslation == null)
+    return DesktopScreenTranslationController(
+        translator = OpenAiScreenTranslator { properties.applicationSettings.translation.apiKey },
+        state = state,
+        capture = display::captureTranslationFrame,
+        show = { frame, regions, status ->
+          translationVisible = true
+          display.setTranslationOverlay(frame, regions, status)
+        },
+        clear = {
+          translationVisible = false
+          display.clearTranslationOverlay()
+        },
+        setPaused = { paused ->
+          eventBus.post(if (paused) Controller.PauseEmulationEvent()
+              else Controller.ResumeEmulationEvent())
+        },
+        releaseInput = ::releaseTranslationInput,
+        notice = notice,
+    ).also { screenTranslation = it }
+  }
+
+  internal fun toggleScreenTranslation() {
+    // A user may already have paused on dialogue with Escape. Keep that pause while replacing
+    // its menu with the translation, so dismissing the translation retains the user's pause.
+    if (portableMenu?.visible() == true) portableMenu?.closeForLifecycle()
+    screenTranslation?.toggle()
+  }
+
+  private fun releaseTranslationInput() {
+    inputRouter?.releaseForOwnershipChange()
+    joypad.releaseForLifecycleChange()
+    tiltInput.releaseForLifecycleChange()
+    gamepad.releaseForLifecycleChange()
+    playerInput.releaseAll()
   }
 
   internal fun attachPrinterWindow(owner: java.awt.Window, bounds: PrinterWindowBounds) {
@@ -390,7 +448,15 @@ class SwingEmulator(
                   joypad.releaseForLifecycleChange()
                   tiltInput.releaseForLifecycleChange()
                 },
-                portableMenu = portableMenu,
+                portableMenu = object : DesktopMenuKeyboardInput {
+                  override fun visible() = translationVisible || portableMenu?.visible() == true
+
+                  override fun onKeyDown(key: MenuKey, repeat: Boolean) =
+                      translationVisible || portableMenu?.onKeyDown(key, repeat) == true
+
+                  override fun onKeyUp(key: MenuKey) =
+                      translationVisible || portableMenu?.onKeyUp(key) == true
+                },
                 menuKeyForKeyCode = joypad::menuKeyForKeyCode,
             )
             .also(DesktopInputRouter::install)

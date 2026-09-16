@@ -26,6 +26,9 @@ class DesktopHelpDialogsTest {
     val main = groups.first().rows.associateBy { it.action }
     assertEquals("Ctrl+O", main.getValue("Open ROM").shortcut)
     assertEquals("Ctrl+0–9", main.getValue("Select state slot").shortcut)
+    assertEquals("Ctrl+Shift+T", main.getValue("Translate Screen").shortcut)
+    assertTrue(main.getValue("Translate Screen").note.contains("OPENAI_API_KEY"))
+    assertTrue(main.getValue("Translate Screen").note.contains("Escape"))
     assertEquals("F11 (inactive)", main.getValue("Full Screen").shortcut)
     assertEquals(
         "Inactive because this key is assigned to gameplay",

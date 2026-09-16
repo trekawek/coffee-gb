@@ -37,35 +37,38 @@ public final class NativePackageMetadata {
 
     /**
      * The roots are the direct static jdeps result plus the EC security provider used by
-     * encrypted transports. Transitive modules are locked separately and verified after jlink.
+     * encrypted transports, including the translation API. Gson's SQL adapters add java.sql,
+     * which supplies java.logging transitively. The complete closure is verified after jlink.
      */
     public static final List<String> RUNTIME_ROOT_MODULES = List.of(
             "java.base",
-            "java.compiler",
             "java.desktop",
-            "java.logging",
             "java.management",
+            "java.net.http",
             "java.prefs",
+            "java.sql",
             "jdk.crypto.ec",
             "jdk.unsupported");
 
     public static final Set<String> JDEPS_MODULES = Set.of(
             "java.base",
-            "java.compiler",
             "java.desktop",
-            "java.logging",
             "java.management",
+            "java.net.http",
             "java.prefs",
+            "java.sql",
             "jdk.unsupported");
 
     public static final Set<String> LINKED_RUNTIME_MODULES = Set.of(
             "java.base",
-            "java.compiler",
             "java.datatransfer",
             "java.desktop",
             "java.logging",
             "java.management",
+            "java.net.http",
             "java.prefs",
+            "java.sql",
+            "java.transaction.xa",
             "java.xml",
             "jdk.crypto.ec",
             "jdk.unsupported");

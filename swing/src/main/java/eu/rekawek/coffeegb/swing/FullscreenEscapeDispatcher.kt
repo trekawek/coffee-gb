@@ -186,7 +186,7 @@ internal interface EscapeSequenceLifecycleRegistry {
   }
 }
 
-private class KeyboardFocusManagerDispatcherRegistry(
+internal class KeyboardFocusManagerDispatcherRegistry(
     private val focusManager: KeyboardFocusManager,
 ) : KeyEventDispatcherRegistry {
   override fun add(dispatcher: KeyEventDispatcher) {
@@ -198,7 +198,7 @@ private class KeyboardFocusManagerDispatcherRegistry(
   }
 }
 
-private class WindowEscapeSequenceLifecycleRegistry(
+internal class WindowEscapeSequenceLifecycleRegistry(
     private val window: Window,
 ) : EscapeSequenceLifecycleRegistry {
   private var reset: (() -> Unit)? = null

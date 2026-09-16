@@ -692,6 +692,7 @@ class PreferencesDialogTest {
                 "Saves & Rewind",
                 "System",
                 "Peripherals",
+                "Translation",
             ),
             PreferencesCategory.values().map { it.displayName },
         )

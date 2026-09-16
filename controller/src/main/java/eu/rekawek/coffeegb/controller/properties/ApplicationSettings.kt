@@ -27,6 +27,7 @@ data class ApplicationSettings(
     val saves: Saves = Saves(),
     val advanced: Advanced = Advanced(),
     val desktop: Desktop = Desktop(),
+    val translation: Translation = Translation(),
 ) {
   init {
     require(schemaVersion == CURRENT_SCHEMA_VERSION) {
@@ -36,6 +37,32 @@ data class ApplicationSettings(
     advanced.dmgGamesProfile.explicitProfileOrNull()?.let(HardwareProfileRegistry::requireRegistered)
     advanced.cgbGamesProfile.explicitProfileOrNull()?.let(HardwareProfileRegistry::requireRegistered)
   }
+
+  /** Retains the pre-translation Java copy signature without discarding a configured key. */
+  @JvmName("copy")
+  fun copyLegacySettings(
+      schemaVersion: Int,
+      general: General,
+      display: Display,
+      audio: Audio,
+      input: Input,
+      peripherals: Peripherals,
+      saves: Saves,
+      advanced: Advanced,
+      desktop: Desktop,
+  ): ApplicationSettings =
+      copy(
+          schemaVersion,
+          general,
+          display,
+          audio,
+          input,
+          peripherals,
+          saves,
+          advanced,
+          desktop,
+          translation,
+      )
 
   class General(
       val romDirectory: Path? = null,
@@ -165,6 +192,20 @@ data class ApplicationSettings(
       val appearance: Appearance = Appearance.LIGHT,
       val commandBarVisible: Boolean = true,
   )
+
+  /** Optional screenshot-translation credential. Never include its value in diagnostics. */
+  data class Translation(val apiKey: String = "") {
+    init {
+      require(apiKey.length <= MAX_TRANSLATION_API_KEY_LENGTH &&
+          apiKey.all { it.code in 0x21..0x7e }) {
+        "OpenAI API key must be empty or contain at most $MAX_TRANSLATION_API_KEY_LENGTH " +
+            "printable ASCII characters without spaces"
+      }
+    }
+
+    override fun toString(): String =
+        "Translation(apiKey=${if (apiKey.isEmpty()) "<empty>" else "<redacted>"})"
+  }
 
   enum class Appearance {
     LIGHT,
@@ -621,7 +662,8 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 11
+    const val CURRENT_SCHEMA_VERSION = 12
+    const val MAX_TRANSLATION_API_KEY_LENGTH = 4_096
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
@@ -708,7 +750,8 @@ class ApplicationSettingsDocument(
   override fun hashCode(): Int = 31 * settings.hashCode() + unknownProperties.hashCode()
 
   override fun toString(): String =
-      "ApplicationSettingsDocument(settings=$settings, unknownProperties=$unknownProperties)"
+      "ApplicationSettingsDocument(settings=$settings, " +
+          "unknownProperties=<${unknownProperties.size} entries>)"
 }
 
 private fun <T> immutableListCopy(values: Collection<T>): List<T> =

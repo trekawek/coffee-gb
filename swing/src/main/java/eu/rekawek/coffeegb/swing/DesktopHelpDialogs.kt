@@ -44,7 +44,11 @@ internal fun desktopShortcutGuide(
     actions: DesktopActionRegistry,
     menuShortcutMask: Int = debuggerMenuShortcutMask(),
 ): List<DesktopShortcutGuideGroup> {
-  fun mainRow(label: String, command: DesktopCommand): DesktopShortcutGuideRow {
+  fun mainRow(
+      label: String,
+      command: DesktopCommand,
+      note: String = "",
+  ): DesktopShortcutGuideRow {
     val resolved = actions.shortcut(command)
     val configured = resolved?.keyStroke ?: resolved?.proposedKeyStroke
     return DesktopShortcutGuideRow(
@@ -55,7 +59,9 @@ internal fun desktopShortcutGuide(
               resolved?.keyStroke == null -> "${desktopKeyStrokeText(configured)} (inactive)"
               else -> desktopKeyStrokeText(configured)
             },
-        note = resolved?.inactiveReason.orEmpty(),
+        note =
+            listOfNotNull(resolved?.inactiveReason, note.takeIf(String::isNotBlank))
+                .joinToString("; "),
     )
   }
 
@@ -81,6 +87,12 @@ internal fun desktopShortcutGuide(
                   DesktopShortcutGuideRow("Select state slot", stateSlotShortcut),
                   mainRow("Full Screen", DesktopCommand.FULLSCREEN),
                   mainRow("Screenshot", DesktopCommand.SCREENSHOT),
+                  mainRow(
+                      "Translate Screen",
+                      DesktopCommand.TRANSLATE_SCREEN,
+                      "Set the key in Preferences > Translation (or OPENAI_API_KEY); " +
+                          "repeat the shortcut or press Escape to dismiss",
+                  ),
                   mainRow("Input recording", DesktopCommand.INPUT_RECORDING),
               ),
       ),

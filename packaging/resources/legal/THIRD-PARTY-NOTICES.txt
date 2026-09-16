@@ -164,7 +164,8 @@ is in licenses/Apache-2.0.txt:
 
   pkg:maven/com.formdev/flatlaf@3.7?classifier=no-natives&type=jar
   pkg:maven/com.google.code.findbugs/jsr305@3.0.2?type=jar
-  pkg:maven/com.google.errorprone/error_prone_annotations@2.23.0?type=jar
+  pkg:maven/com.google.code.gson/gson@2.14.0?type=jar
+  pkg:maven/com.google.errorprone/error_prone_annotations@2.48.0?type=jar
   pkg:maven/com.google.guava/failureaccess@1.0.2?type=jar
   pkg:maven/com.google.guava/guava@33.0.0-jre?type=jar
   pkg:maven/com.google.guava/listenablefuture@9999.0-empty-to-avoid-conflict-with-guava?type=jar
@@ -187,6 +188,10 @@ are not enabled.
 
 The four Apache Commons artifacts retain their required project/copyright attributions in
 licenses/Apache-Commons-NOTICE.txt.
+
+Gson 2.14.0 is sourced from https://github.com/google/gson/tree/gson-parent-2.14.0 and is
+Copyright 2008 Google LLC. Its Error Prone annotations dependency is sourced from
+https://github.com/google/error-prone/tree/v2.48.0. Both use licenses/Apache-2.0.txt.
 
 MIT Java runtime components
 ---------------------------

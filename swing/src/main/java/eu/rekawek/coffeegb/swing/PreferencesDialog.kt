@@ -92,6 +92,7 @@ internal data class PreferencesEdit(
     val saves: ApplicationSettings.Saves? = null,
     val advanced: ApplicationSettings.Advanced? = null,
     val forceWindowSize: Boolean = false,
+    val translation: ApplicationSettings.Translation? = null,
 ) {
   init {
     require(
@@ -119,6 +120,7 @@ internal data class PreferencesEdit(
           display = display,
           audio = audio,
           saves = saves ?: current.saves,
+          translation = translation ?: current.translation,
           advanced =
               advanced?.let { edited ->
                 current.advanced.copy(
@@ -154,6 +156,7 @@ internal enum class PreferencesCategory(val displayName: String) {
   SAVES_AND_REWIND("Saves & Rewind"),
   SYSTEM("System"),
   PERIPHERALS("Peripherals"),
+  TRANSLATION("Translation"),
 }
 
 /** Presentation supplied by the settings owner without coupling the dialog to its store. */
@@ -331,6 +334,8 @@ internal class PreferencesPanel private constructor(
       DisplayPreferencesEditor(initial.display, defaults.display)
   internal val systemEditor =
       SystemPreferencesEditor(initial.advanced, defaults.advanced)
+  internal val translationEditor =
+      TranslationPreferencesEditor(initial.translation, defaults.translation)
   internal val keyboardEditor = KeyboardMappingEditor(initial.input, defaults.input)
   internal val gamepadEditor =
       GamepadPreferencesEditor(initial.input, defaults.input, gamepadSnapshots)
@@ -413,11 +418,15 @@ internal class PreferencesPanel private constructor(
                   PreferencesCategory.SYSTEM to categoryPage("System", systemEditor),
                   PreferencesCategory.PERIPHERALS to
                       categoryPage("Peripherals", peripheralsEditor),
+                  PreferencesCategory.TRANSLATION to categoryPage("Translation", translationEditor),
               ),
           initialCategory = initialCategory,
           categoryChanged = { category ->
             if (category != PreferencesCategory.CONTROLS) {
               keyboardEditor.cancelCapture()
+            }
+            if (category != PreferencesCategory.TRANSLATION) {
+              translationEditor.maskApiKey()
             }
             categoryChanged(category)
           },
@@ -476,6 +485,7 @@ internal class PreferencesPanel private constructor(
         PreferencesCategory.SAVES_AND_REWIND -> savesEditor.restoreDefaults()
         PreferencesCategory.SYSTEM -> systemEditor.restoreDefaults()
         PreferencesCategory.PERIPHERALS -> peripheralsEditor.restoreDefaults()
+        PreferencesCategory.TRANSLATION -> translationEditor.restoreDefaults()
       }
       clearErrors()
     }
@@ -492,6 +502,7 @@ internal class PreferencesPanel private constructor(
       savesEditor.restoreDefaults()
       systemEditor.restoreDefaults()
       peripheralsEditor.restoreDefaults()
+      translationEditor.restoreDefaults()
       clearErrors()
     }
     publishDirtyState()
@@ -562,6 +573,17 @@ internal class PreferencesPanel private constructor(
               failure.invalidComponent,
           )
         }
+    val translation =
+        try {
+          translationEditor.validatedTranslation()
+        } catch (failure: PreferenceEditorValidationException) {
+          validationSummary.text = failure.message ?: "Resolve the translation settings error."
+          categories.selectedCategory = PreferencesCategory.TRANSLATION
+          throw PreferencesValidationException(
+              validationSummary.text,
+              failure.invalidComponent,
+          )
+        }
     return PreferencesEdit(
         romDirectory = directory,
         recentFileCapacity = capacity,
@@ -581,6 +603,7 @@ internal class PreferencesPanel private constructor(
         saves = saves,
         advanced = systemEditor.validatedAdvanced(),
         forceWindowSize = displayEditor.windowScaleCommandRequested,
+        translation = translation,
     )
   }
 
@@ -589,6 +612,7 @@ internal class PreferencesPanel private constructor(
     keyboardEditor.cancelCapture()
     gamepadEditor.stopCatalogUpdates()
     audioEditor.cancelDeviceLoading()
+    translationEditor.maskApiKey()
   }
 
   override fun removeNotify() {
@@ -939,6 +963,7 @@ internal class PreferencesPanel private constructor(
             systemEditor.bootstrapMode.selectedItem,
             systemEditor.executionMode.selectedItem,
             peripheralsEditor.cameraDevice.selectedItem,
+            translationEditor.draftFingerprint(),
         ))
   }
 
@@ -1392,6 +1417,7 @@ internal class PreferencesDialogActions(
     }
 
     validationPending = true
+    panel.translationEditor.setEditingEnabled(false)
     applyingChanged(true)
     val generation = ++validationGeneration
     try {
@@ -1406,6 +1432,7 @@ internal class PreferencesDialogActions(
         uiExecutor {
           if (closed || generation != validationGeneration) return@uiExecutor
           validationPending = false
+          panel.translationEditor.setEditingEnabled(true)
           applyingChanged(false)
           if (error != null) {
             panel.showSaveDirectoryFailure(error)
@@ -1416,6 +1443,7 @@ internal class PreferencesDialogActions(
       }
     } catch (_: RejectedExecutionException) {
       validationPending = false
+      panel.translationEditor.setEditingEnabled(true)
       applyingChanged(false)
       panel.showSaveDirectoryFailure(
           "Save directory validation is busy. Wait a moment, then apply again.")
@@ -1442,6 +1470,7 @@ internal class PreferencesDialogActions(
     closed = true
     validationGeneration++
     validationPending = false
+    panel.translationEditor.setEditingEnabled(true)
     applyingChanged(false)
     panel.stopBackgroundWork()
     closeValidationExecutor()

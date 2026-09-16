@@ -390,6 +390,7 @@ internal class SwingMenu(
     gameMenu.addSeparator()
     gameMenu.add(pauseResumeMenuItem(desktopActions[DesktopCommand.PAUSE]))
     gameMenu.add(JMenuItem(desktopActions[DesktopCommand.RESET]))
+    gameMenu.add(JMenuItem(desktopActions[DesktopCommand.TRANSLATE_SCREEN]))
 
     gameMenu.addSeparator()
 

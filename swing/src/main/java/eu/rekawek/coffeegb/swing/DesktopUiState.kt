@@ -20,6 +20,7 @@ internal enum class DesktopPreferencesCategory {
   SAVES_AND_REWIND,
   SYSTEM,
   PERIPHERALS,
+  TRANSLATION,
 }
 
 /**

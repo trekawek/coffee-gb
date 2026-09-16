@@ -262,7 +262,14 @@ class ApplicationSettingsStore(
         } catch (failure: IllegalArgumentException) {
           throw IOException("Application settings cannot be encoded safely", failure)
         }
-    persistence.write(path, bytes)
+    if (value.settings.translation.apiKey.isNotEmpty() ||
+        value.unknownProperties.containsKey(ApplicationSettingsCodec.TRANSLATION_API_KEY)) {
+      // Preserve old unknown credentials as carefully as active ones. The writer verifies
+      // owner-only permissions on the staged inode before committing either rename path.
+      persistence.writeOwnerOnly(path, bytes)
+    } else {
+      persistence.write(path, bytes)
+    }
   }
 
   @Throws(IOException::class)

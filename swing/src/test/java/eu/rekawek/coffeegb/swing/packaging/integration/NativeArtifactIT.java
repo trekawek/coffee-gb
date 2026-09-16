@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.swing.packaging.integration;
 
 import eu.rekawek.coffeegb.swing.packaging.NativeArtifactPolicy;
+import eu.rekawek.coffeegb.swing.packaging.NativePackagePlan;
 import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -82,6 +84,39 @@ public class NativeArtifactIT {
 
         assertVersionLaunch(universal, expectedVersion);
         assertVersionLaunch(app, expectedVersion);
+    }
+
+    @Test
+    public void appDependenciesMatchTheLockedRuntimeModules() throws Exception {
+        NativePackagePlan plan = new NativePackagePlan();
+        Path app = Path.of(required("coffeeGbAppJar"));
+        Path outputFile = Files.createTempFile("coffee-gb-jdeps-", ".txt");
+        Process process = null;
+        try {
+            process = new ProcessBuilder(plan.jdepsCommand(
+                    Path.of(System.getProperty("java.home")), app))
+                    .redirectErrorStream(true)
+                    .redirectOutput(outputFile.toFile())
+                    .start();
+            boolean completed = process.waitFor(30, TimeUnit.SECONDS);
+            if (!completed) {
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+            }
+            assertTrue("jdeps process timed out", completed);
+            String output = Files.readString(outputFile, StandardCharsets.UTF_8);
+            assertEquals(output, 0, process.exitValue());
+            String modules = output.lines()
+                    .filter(line -> !line.isBlank())
+                    .reduce((previous, next) -> next)
+                    .orElse("");
+            plan.verifyJdepsModules(modules);
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+            Files.deleteIfExists(outputFile);
+        }
     }
 
     private static void assertVersionLaunch(Path jar, String expectedVersion) throws Exception {

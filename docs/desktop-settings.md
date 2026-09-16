@@ -41,16 +41,17 @@ particular, `--use-bootstrap` and `--disable-battery-saves` do not change the ne
 ## Typed settings model
 
 The application owns one immutable `ApplicationSettings` value with typed `general`, `display`,
-`audio`, `input`, `peripherals`, `saves`, `advanced`, and desktop-shell sections. The controller-facing
+`audio`, `input`, `peripherals`, `saves`, `advanced`, `translation`, and desktop-shell sections. The controller-facing
 `EmulatorProperties` class is a compatibility facade over that model while older menu code is
 migrated.
 
-Schema 8 continues to use `${user.home}/.coffeegb.properties`; schemas 0–7 are migrated in place
+Schema 12 continues to use `${user.home}/.coffeegb.properties`; schemas 0–11 are migrated in place
 so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `11` |
+| `settings.schemaVersion` | exact supported schema version | `12` |
+| `translation.openaiApiKey` | optional OpenAI API key, at most 4096 printable ASCII characters without whitespace | absent |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -100,6 +101,12 @@ or `false` (case-insensitive); numeric settings have explicit ranges; hardware p
 bootstrap modes, input players, buttons, keys, and gamepad selectors must be known. Invalid input
 does not partially update the active settings.
 
+The translation key is omitted when empty and stored locally in this settings file when set;
+it is not encrypted. Writes containing a key apply and verify owner read/write permissions before
+replacement on POSIX filesystems; other filesystems retain their native protection model. Typed
+settings and document diagnostics redact credential values. Older schemas receive an empty active
+key, preserving any older unknown property of the same name in the migration metadata.
+
 `WHEN_RUNNING` asks before replacing or closing an active emulation session, while an idle
 application may close without a redundant prompt. `ALWAYS` also confirms an idle application
 close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
@@ -121,7 +128,8 @@ gamepad tuning profiles are retained.
 
 Open **File → Preferences…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd>) to change settings without
 editing the properties file. The category list contains **General**, **Display**, **Audio**,
-**Controls**, **Saves & Rewind**, **System**, and **Peripherals**. System owns hardware-profile and
+**Controls**, **Saves & Rewind**, **System**, **Peripherals**, and **Translation**. Translation configures
+the OpenAI API key for screen translation; a saved key takes effect without restarting. System owns hardware-profile and
 bootstrap choices; General owns ROM-opening policy, appearance, and command-bar visibility; Display
 owns sizing, letterboxing, fullscreen, rotation, color, blending, and the Super Game Boy border.
 

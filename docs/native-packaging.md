@@ -182,16 +182,19 @@ checksum, and compares two independent Linux stages byte-for-byte.
 `jdeps --multi-release 16 --print-module-deps` is checked against the locked static dependency set:
 
 ```text
-java.base,java.compiler,java.desktop,java.logging,java.management,java.prefs,jdk.unsupported
+java.base,java.desktop,java.management,java.net.http,java.prefs,java.sql,jdk.unsupported
 ```
 
-`jdk.crypto.ec` is the one deliberate dynamic addition for encrypted Java transports. `jlink`
-uses those eight roots with `--strip-debug`, `--no-header-files`, `--no-man-pages`, and
-`--compress=zip-6`. The resulting ten-module transitive closure is verified before jpackage:
+`java.net.http` supports the OpenAI screen translation client. Gson's bundled SQL adapters require
+`java.sql`, which supplies `java.logging` transitively. `jdk.crypto.ec` is the one deliberate
+dynamic addition for encrypted Java transports. `jlink` uses those eight roots with `--strip-debug`,
+`--no-header-files`, `--no-man-pages`, and `--compress=zip-6`. The resulting twelve-module
+transitive closure is verified before jpackage:
 
 ```text
-java.base, java.compiler, java.datatransfer, java.desktop, java.logging,
-java.management, java.prefs, java.xml, jdk.crypto.ec, jdk.unsupported
+java.base, java.datatransfer, java.desktop, java.logging,
+java.management, java.net.http, java.prefs, java.sql, java.transaction.xa,
+java.xml, jdk.crypto.ec, jdk.unsupported
 ```
 
 The merged app JAR excludes dependency `module-info.class` entries. Those descriptors describe
@@ -442,7 +445,7 @@ fourteen.
 Every host verifies jpackage's pre-package payload, then extracts the actual DEB, administratively
 extracts and installs the MSI, or mounts the actual DMG and repeats the checks. Inspection requires:
 
-- exactly one linked runtime and the locked ten-module closure;
+- exactly one linked runtime and the locked twelve-module closure;
 - the exact target-native allowlist and digests, with no foreign native;
 - no ROM-like file, signing key/certificate file, developer home path, or secret-shaped text;
 - the same forbidden-content policy inside JAR/ZIP entries and nested archives, bounded to 256 MiB

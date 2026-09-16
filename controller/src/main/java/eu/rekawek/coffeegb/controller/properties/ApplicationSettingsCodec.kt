@@ -40,6 +40,7 @@ object ApplicationSettingsCodec {
   const val AUTOSAVE_POLICY_KEY = "saves.autosavePolicy"
   const val RESUME_POLICY_KEY = "saves.resumePolicy"
   const val EXECUTION_MODE_KEY = "system.executionMode"
+  const val TRANSLATION_API_KEY = "translation.openaiApiKey"
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
       "settings.preservedUnknownCollisions."
 
@@ -73,6 +74,7 @@ object ApplicationSettingsCodec {
   private val versionNineFixedKeys = versionEightFixedKeys + EXECUTION_MODE_KEY
   private val versionTenFixedKeys = versionNineFixedKeys
   private val versionElevenFixedKeys = versionTenFixedKeys
+  private val versionTwelveFixedKeys = versionElevenFixedKeys + TRANSLATION_API_KEY
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -97,6 +99,7 @@ object ApplicationSettingsCodec {
             version == "8" ||
             version == "9" ||
             version == "10" ||
+            version == "11" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -159,6 +162,9 @@ object ApplicationSettingsCodec {
     }
     known[DESKTOP_APPEARANCE_KEY] = settings.desktop.appearance.name
     known[DESKTOP_COMMAND_BAR_VISIBLE_KEY] = settings.desktop.commandBarVisible.toString()
+    settings.translation.apiKey.takeUnless(String::isEmpty)?.let {
+      known[TRANSLATION_API_KEY] = it
+    }
     known[EmulatorProperties.Key.DisplayGrayscale.propertyName] = settings.display.grayscale.toString()
     known[EmulatorProperties.Key.DisplayBlending.propertyName] = settings.display.blending.toString()
     known[EmulatorProperties.Key.DisplayColorCorrection.propertyName] =
@@ -489,12 +495,17 @@ object ApplicationSettingsCodec {
                           true
                         },
                 ),
+            translation =
+                ApplicationSettings.Translation(
+                    apiKey =
+                        if (sourceVersion >= 12) raw[TRANSLATION_API_KEY].orEmpty() else ""),
         )
 
     val preservedCollisions =
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 12 -> versionTwelveFixedKeys
           sourceVersion >= 11 -> versionElevenFixedKeys
           sourceVersion >= 10 -> versionTenFixedKeys
           sourceVersion >= 9 -> versionNineFixedKeys
@@ -986,7 +997,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionElevenFixedKeys ||
+      key in versionTwelveFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||
