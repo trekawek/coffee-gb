@@ -33,7 +33,7 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
-import eu.rekawek.coffeegb.swing.translation.OpenAiScreenTranslator
+import eu.rekawek.coffeegb.swing.translation.ConfiguredScreenTranslator
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.ui.menu.MenuKey
 import java.awt.Dimension
@@ -330,7 +330,7 @@ class SwingEmulator(
   ): DesktopScreenTranslationController {
     check(screenTranslation == null)
     return DesktopScreenTranslationController(
-        translator = OpenAiScreenTranslator { properties.applicationSettings.translation.apiKey },
+        translator = ConfiguredScreenTranslator({ properties.applicationSettings.translation }),
         state = state,
         capture = display::captureTranslationFrame,
         show = { frame, regions, status ->

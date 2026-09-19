@@ -139,6 +139,24 @@ public final class ReleaseSigningPolicy {
         return jpackageOptions;
     }
 
+    /** Seal the nested Swift app with the release identity before jpackage signs its parent. */
+    public List<List<String>> appleTranslationSigningCommands(Path helper) {
+        if (target.hostOs() != NativePackageMetadata.HostOs.MACOS) {
+            throw new IllegalArgumentException("Apple translation signing requires a macOS target");
+        }
+        List<String> sign = new ArrayList<>(List.of(
+                "codesign", "--force", "--options", "runtime", "--timestamp", "--sign",
+                environment.get("COFFEE_GB_MAC_SIGNING_IDENTITY")));
+        String keychain = environment.get("COFFEE_GB_MAC_SIGNING_KEYCHAIN");
+        if (nonBlank(keychain)) {
+            sign.add("--keychain");
+            sign.add(keychain);
+        }
+        sign.add(helper.toString());
+        return List.of(List.copyOf(sign), List.of(
+                "codesign", "--verify", "--deep", "--strict", "--verbose=2", helper.toString()));
+    }
+
     /**
      * Signs executable content in the prebuilt application image before jpackage copies it into
      * the installer payload. macOS app images are already signed by jpackage's {@code --mac-sign}
@@ -160,20 +178,7 @@ public final class ReleaseSigningPolicy {
     public List<List<String>> appImageVerificationCommands(Path appImage) throws IOException {
         Objects.requireNonNull(appImage, "appImage");
         return switch (target.hostOs()) {
-            case MACOS -> List.of(
-                    List.of(
-                            "codesign",
-                            "--verify",
-                            "--deep",
-                            "--strict",
-                            "--verbose=2",
-                            appImage.toString()),
-                    List.of(
-                            "codesign",
-                            "--verify",
-                            "--verbose=2",
-                            "-R" + MAC_LIBRARY_LOADING_REQUIREMENT,
-                            appImage.toString()));
+            case MACOS -> macAppImageVerificationCommands(appImage);
             case WINDOWS -> windowsExecutableContent(appImage).stream()
                     .map(executable -> List.of(
                             "signtool",
@@ -186,6 +191,32 @@ public final class ReleaseSigningPolicy {
                     .toList();
             case LINUX -> List.of();
         };
+    }
+
+    private List<List<String>> macAppImageVerificationCommands(Path appImage) {
+        List<List<String>> commands = new ArrayList<>(List.of(
+                    List.of(
+                            "codesign",
+                            "--verify",
+                            "--deep",
+                            "--strict",
+                            "--verbose=2",
+                            appImage.toString()),
+                    List.of(
+                            "codesign",
+                            "--verify",
+                            "--verbose=2",
+                            "-R" + MAC_LIBRARY_LOADING_REQUIREMENT,
+                            appImage.toString())));
+        Path helper = appImage.resolve("Contents/app").resolve(AppleTranslationBundle.RELATIVE_PATH);
+        if (Files.exists(helper, LinkOption.NOFOLLOW_LINKS)) {
+            String identity = environment.get("COFFEE_GB_MAC_SIGNING_IDENTITY");
+            String team = identity.substring(identity.length() - 11, identity.length() - 1);
+            commands.add(List.of("codesign", "--verify", "--strict", "--verbose=2",
+                    "-R=anchor apple generic and certificate leaf[subject.OU] = \"" + team + "\"",
+                    helper.toString()));
+        }
+        return List.copyOf(commands);
     }
 
     public List<List<String>> postPackageCommands(Path artifact) {

@@ -337,6 +337,31 @@ notes.
 
 ## Installation warnings and fallback
 
+macOS native packages also bundle the first-party Apple translation helper at
+`Contents/app/apple-translation/CoffeeGBTranslation.app`, beside the neutral application JAR.
+Translation requires macOS 15 or later; the emulator's existing macOS floor is unchanged.
+Users need no developer tools or API key. Apple's language download is handled by the helper on
+first use; translation then runs on-device. The portable JAR does not contain a native helper.
+
+The macOS package wrapper compiles the helper from `packaging/apple-translation/` with the host's
+Xcode 16 or newer SDK after Maven verification, using the selected Intel or ARM architecture.
+It runs bounded protocol, geometry, and Vision smoke tests without downloading language models,
+then supplies `--apple-translation-app` to the packager. Actual macOS builds require this input;
+host-independent `stage` operations may omit it to inspect the Java payload on other hosts.
+The staging inventory records its location, architecture, protocol, minimum macOS version, plist
+digest, and staged executable digest. Verification checks the bounded bundle contents, executable
+permissions, Mach-O architecture, and unchanged plist. Signing can change the executable signature;
+the final distribution checksums cover those signed bytes. No Apple system framework is copied.
+
+Protected releases sign the nested helper with the configured Developer ID Application identity
+and hardened runtime before jpackage seals the outer application. Signature verification checks
+the helper's team identity in the packaged app, and existing DMG notarization covers the nested
+code. Final mounted-installer checks repeat helper protocol and Vision tests from the installed
+location. `.github/workflows/apple-translation.yml` independently builds and tests the helper on
+macOS 15 Intel and ARM runners whenever its source changes. These synthetic tests validate native
+execution and the protocol; actual translated game screens still require a Mac with downloaded
+language support for accuracy and latency measurements.
+
 The Linux x86-64 release baseline is Ubuntu 24.04 LTS or a compatible newer distribution, matching
 the release build provenance and the generated DEB's `libasound2t64` dependency. A bare glibc
 version is not a sufficient compatibility claim because the bundled Java runtime and desktop/audio

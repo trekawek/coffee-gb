@@ -90,4 +90,15 @@ if [[ "$release_flag" == "--release-sign" ]]; then
   arguments+=(--release-sign)
 fi
 
+case "$target" in
+  macos-x86-64|macos-aarch64)
+    helper_arch=x86_64
+    [[ "$target" != macos-aarch64 ]] || helper_arch=arm64
+    helper_app="$repository_root/swing/target/apple-translation/CoffeeGBTranslation.app"
+    "$script_dir/apple-translation/build.sh" "$helper_app" "$helper_arch"
+    "$script_dir/apple-translation/test.sh" "$helper_app"
+    arguments+=(--apple-translation-app "$helper_app")
+    ;;
+esac
+
 java "${arguments[@]}"

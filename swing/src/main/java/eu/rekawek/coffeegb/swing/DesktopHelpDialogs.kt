@@ -90,7 +90,7 @@ internal fun desktopShortcutGuide(
                   mainRow(
                       "Translate Screen",
                       DesktopCommand.TRANSLATE_SCREEN,
-                      "Set the key in Preferences > Translation (or OPENAI_API_KEY); " +
+                      "Apple translation runs locally on macOS 15+; choose a provider in Preferences > Translation; " +
                           "repeat the shortcut or press Escape to dismiss",
                   ),
                   mainRow("Input recording", DesktopCommand.INPUT_RECORDING),

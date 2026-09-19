@@ -54,6 +54,8 @@ public final class NativePackageTool {
         Path sbom = parsed.requiredPath("--sbom");
         Path resources = parsed.requiredPath("--resources");
         Path output = parsed.requiredPath("--output");
+        Path appleTranslation = parsed.has("--apple-translation-app")
+                ? parsed.requiredPath("--apple-translation-app") : null;
         parsed.rejectUnused(Set.of(
                 "--target",
                 "--app-jar",
@@ -63,6 +65,7 @@ public final class NativePackageTool {
                 "--output",
                 "--type",
                 "--java-home",
+                "--apple-translation-app",
                 "--release-sign"));
 
         if ("stage".equals(parsed.command)) {
@@ -74,7 +77,7 @@ public final class NativePackageTool {
             }
             NativePackageStager.StageResult result = new NativePackageStager().stage(
                     new NativePackageStager.StageRequest(
-                            target, appJar, nativeJar, sbom, resources, output));
+                            target, appJar, nativeJar, sbom, resources, output, appleTranslation));
             System.out.println("Staged " + target.id() + " at " + result.root());
             return;
         }
@@ -94,6 +97,23 @@ public final class NativePackageTool {
                 systemProperties.getProperty("os.name", ""),
                 systemProperties.getProperty("os.arch", ""));
 
+        if (targetMetadata.hostOs() == NativePackageMetadata.HostOs.MACOS && appleTranslation == null) {
+            throw new IllegalArgumentException("macOS builds require --apple-translation-app from packaging/apple-translation/build.sh");
+        }
+        if (appleTranslation != null) {
+            AppleTranslationBundle.verify(appleTranslation, target);
+        }
+        ReleaseSigningPolicy signing = null;
+        if (parsed.flag("--release-sign")) {
+            signing = ReleaseSigningPolicy.require(targetMetadata, packageType,
+                    NativePackageStager.jarVersion(appJar, "neutral app JAR"), environment);
+            if (appleTranslation != null) {
+                for (List<String> command : signing.appleTranslationSigningCommands(appleTranslation)) {
+                    runInherited(command);
+                }
+            }
+        }
+
         Path javaHome = parsed.has("--java-home")
                 ? parsed.requiredPath("--java-home")
                 : Path.of(systemProperties.getProperty("java.home", ""));
@@ -106,13 +126,8 @@ public final class NativePackageTool {
                         nativeJar,
                         sbom,
                         resources,
-                        buildRoot.resolve("stage")));
-
-        ReleaseSigningPolicy signing = null;
-        if (parsed.flag("--release-sign")) {
-            signing = ReleaseSigningPolicy.require(
-                    targetMetadata, packageType, stage.appVersion(), environment);
-        }
+                        buildRoot.resolve("stage"),
+                        appleTranslation));
 
         NativePackagePlan plan = new NativePackagePlan();
         String jdepsOutput = runCaptured(plan.jdepsCommand(javaHome, stage.appJar()));

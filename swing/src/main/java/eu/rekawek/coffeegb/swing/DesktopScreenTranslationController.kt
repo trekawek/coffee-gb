@@ -25,6 +25,7 @@ internal class DesktopScreenTranslationController(
     private val releaseInput: () -> Unit,
     private val notice: (String) -> Unit,
     private val timeoutMillis: Int = 9_000,
+    private val setupTimeoutMillis: Int = 15 * 60 * 1_000,
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { task ->
       Thread(task, "screen-translation").apply { isDaemon = true }
     },
@@ -38,6 +39,7 @@ internal class DesktopScreenTranslationController(
     val response = AtomicReference<CompletableFuture<List<TranslationRegion>>?>()
     var preparation: Future<*>? = null
     var deadline: Timer? = null
+    var settingUpLanguage = false
 
     fun cancel() {
       cancelled.set(true)
@@ -72,13 +74,17 @@ internal class DesktopScreenTranslationController(
     request.deadline = Timer(timeoutMillis) {
       if (active === request) {
         request.cancel()
-        show(frame, emptyList(), "Translation timed out. Esc to return; try again.")
+        show(frame, emptyList(), if (request.settingUpLanguage)
+            "Language setup timed out. Esc to return; try again."
+            else "Translation timed out. Esc to return; try again.")
       }
     }.apply { isRepeats = false; start() }
     request.preparation = worker.submit {
       try {
         if (request.cancelled.get()) return@submit
-        val response = translator.translate(frame)
+        val response = translator.translate(frame) { progress ->
+          SwingUtilities.invokeLater { progress(request, progress) }
+        }
         request.response.set(response)
         if (request.cancelled.get()) {
           response.cancel(true)
@@ -91,6 +97,23 @@ internal class DesktopScreenTranslationController(
         SwingUtilities.invokeLater { complete(request, null, failure) }
       }
     }
+  }
+
+  private fun progress(request: Request, progress: ScreenTranslator.Progress) {
+    if (active !== request || request.cancelled.get() || closed ||
+        request.response.get()?.isDone == true) return
+    if (state().sessionGeneration != request.generation || !state().commands.gameLoaded) {
+      invalidate()
+      return
+    }
+    request.settingUpLanguage = progress == ScreenTranslator.Progress.LANGUAGE_SETUP
+    request.deadline?.apply {
+      initialDelay = if (request.settingUpLanguage) setupTimeoutMillis else timeoutMillis
+      restart()
+    }
+    show(request.frame, emptyList(), if (request.settingUpLanguage)
+        "Complete language setup in the Apple Translation window. Esc to cancel"
+        else "Translating to English…  Esc to cancel")
   }
 
   private fun complete(request: Request, regions: List<TranslationRegion>?, failure: Throwable?) {

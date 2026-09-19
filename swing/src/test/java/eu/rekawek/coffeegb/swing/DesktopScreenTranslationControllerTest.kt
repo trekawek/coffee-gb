@@ -7,6 +7,7 @@ import java.awt.image.BufferedImage
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.function.Consumer
 import javax.swing.SwingUtilities
 import org.junit.Assert.*
 import org.junit.Test
@@ -82,6 +83,43 @@ class DesktopScreenTranslationControllerTest {
     }
   }
 
+  @Test fun `language setup suspends ordinary deadline then translation restores it`() {
+    Fixture(timeoutMillis = 150, setupTimeoutMillis = 2_000).use { f ->
+      edt { f.controller.toggle() }
+      assertTrue(f.called.await(2, TimeUnit.SECONDS))
+      f.progress!!.accept(ScreenTranslator.Progress.LANGUAGE_SETUP)
+      edt { assertTrue(f.status.contains("language setup")) }
+      assertFalse(f.cancelled.await(300, TimeUnit.MILLISECONDS))
+      f.progress!!.accept(ScreenTranslator.Progress.TRANSLATING)
+      assertTrue(f.cancelled.await(2, TimeUnit.SECONDS))
+      edt { assertTrue(f.status.contains("timed out")) }
+    }
+  }
+
+  @Test fun `setup progress after cancellation cannot resurrect overlay or delay new request`() {
+    Fixture().use { f ->
+      edt { f.controller.toggle() }
+      assertTrue(f.called.await(2, TimeUnit.SECONDS))
+      edt { f.controller.dismiss() }
+      f.progress!!.accept(ScreenTranslator.Progress.LANGUAGE_SETUP)
+      edt { assertFalse(f.controller.visible()); assertEquals(1, f.clears) }
+    }
+  }
+
+  @Test fun `language setup is bounded and remains cancellable`() {
+    Fixture(timeoutMillis = 2_000, setupTimeoutMillis = 100).use { f ->
+      edt { f.controller.toggle() }
+      assertTrue(f.called.await(2, TimeUnit.SECONDS))
+      f.progress!!.accept(ScreenTranslator.Progress.LANGUAGE_SETUP)
+      assertTrue(f.cancelled.await(2, TimeUnit.SECONDS))
+      edt {
+        assertTrue(f.status.contains("Language setup timed out"))
+        f.controller.dismiss()
+        assertEquals(listOf(true, false), f.pauses)
+      }
+    }
+  }
+
   @Test fun `no foreign text and safe failure have useful terminal states`() {
     Fixture().use { f ->
       edt { f.controller.toggle() }
@@ -114,7 +152,8 @@ class DesktopScreenTranslationControllerTest {
     }
   }
 
-  private class Fixture(paused: Boolean = false, timeoutMillis: Int = 9_000) : AutoCloseable {
+  private class Fixture(paused: Boolean = false, timeoutMillis: Int = 9_000,
+                        setupTimeoutMillis: Int = 15 * 60 * 1_000) : AutoCloseable {
     val called = CountDownLatch(1)
     val finished = CountDownLatch(1)
     val cancelled = CountDownLatch(1)
@@ -125,6 +164,7 @@ class DesktopScreenTranslationControllerTest {
     }
     @Volatile var calledOnEdt = false
     @Volatile var calls = 0
+    @Volatile var progress: Consumer<ScreenTranslator.Progress>? = null
     var state = DesktopPresentation(gameTitle = "Fixture", sessionGeneration = 1,
         commands = DesktopCommandPresentation(gameLoaded = true, pauseSupported = true, paused = paused))
     val pauses = mutableListOf<Boolean>()
@@ -134,6 +174,10 @@ class DesktopScreenTranslationControllerTest {
     var shown = emptyList<TranslationRegion>()
     val controller = DesktopScreenTranslationController(
         translator = object : ScreenTranslator {
+          override fun translate(image: BufferedImage, listener: Consumer<ScreenTranslator.Progress>): CompletableFuture<List<TranslationRegion>> {
+            progress = listener
+            return translate(image)
+          }
           override fun translate(image: BufferedImage): CompletableFuture<List<TranslationRegion>> {
             calls++
             calledOnEdt = SwingUtilities.isEventDispatchThread()
@@ -157,6 +201,7 @@ class DesktopScreenTranslationControllerTest {
         releaseInput = { inputReleases++ },
         notice = {},
         timeoutMillis = timeoutMillis,
+        setupTimeoutMillis = setupTimeoutMillis,
     )
     override fun close() = edt { controller.close() }
   }

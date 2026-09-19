@@ -41,6 +41,7 @@ object ApplicationSettingsCodec {
   const val RESUME_POLICY_KEY = "saves.resumePolicy"
   const val EXECUTION_MODE_KEY = "system.executionMode"
   const val TRANSLATION_API_KEY = "translation.openaiApiKey"
+  const val TRANSLATION_PROVIDER_KEY = "translation.provider"
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
       "settings.preservedUnknownCollisions."
 
@@ -75,6 +76,7 @@ object ApplicationSettingsCodec {
   private val versionTenFixedKeys = versionNineFixedKeys
   private val versionElevenFixedKeys = versionTenFixedKeys
   private val versionTwelveFixedKeys = versionElevenFixedKeys + TRANSLATION_API_KEY
+  private val versionThirteenFixedKeys = versionTwelveFixedKeys + TRANSLATION_PROVIDER_KEY
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -100,6 +102,7 @@ object ApplicationSettingsCodec {
             version == "9" ||
             version == "10" ||
             version == "11" ||
+            version == "12" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -162,6 +165,7 @@ object ApplicationSettingsCodec {
     }
     known[DESKTOP_APPEARANCE_KEY] = settings.desktop.appearance.name
     known[DESKTOP_COMMAND_BAR_VISIBLE_KEY] = settings.desktop.commandBarVisible.toString()
+    known[TRANSLATION_PROVIDER_KEY] = settings.translation.provider.name
     settings.translation.apiKey.takeUnless(String::isEmpty)?.let {
       known[TRANSLATION_API_KEY] = it
     }
@@ -498,13 +502,20 @@ object ApplicationSettingsCodec {
             translation =
                 ApplicationSettings.Translation(
                     apiKey =
-                        if (sourceVersion >= 12) raw[TRANSLATION_API_KEY].orEmpty() else ""),
+                        if (sourceVersion >= 12) raw[TRANSLATION_API_KEY].orEmpty() else "",
+                    provider =
+                        if (sourceVersion >= 13) {
+                          parseTranslationProvider(raw[TRANSLATION_PROVIDER_KEY])
+                        } else {
+                          ApplicationSettings.TranslationProvider.AUTOMATIC
+                        }),
         )
 
     val preservedCollisions =
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 13 -> versionThirteenFixedKeys
           sourceVersion >= 12 -> versionTwelveFixedKeys
           sourceVersion >= 11 -> versionElevenFixedKeys
           sourceVersion >= 10 -> versionTenFixedKeys
@@ -568,6 +579,16 @@ object ApplicationSettingsCodec {
 
   private fun parseInt(value: String, key: String): Int =
       value.toIntOrNull() ?: throw IllegalArgumentException("Invalid $key: $value")
+
+  private fun parseTranslationProvider(value: String?): ApplicationSettings.TranslationProvider {
+    if (value == null) return ApplicationSettings.TranslationProvider.AUTOMATIC
+    return try {
+      ApplicationSettings.TranslationProvider.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $TRANSLATION_PROVIDER_KEY (expected AUTOMATIC, APPLE_LOCAL, or OPENAI)")
+    }
+  }
 
   private fun parseRangedInt(
       value: String?,
@@ -997,7 +1018,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionTwelveFixedKeys ||
+      key in versionThirteenFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

@@ -164,6 +164,9 @@ public final class NativePackageStager {
                         ? "utf-8-text"
                         : "ascii-rtf-unicode");
         inventory.put("installer-license.sha256", sha256(installerLicense));
+        if (request.appleTranslationApp() != null) {
+            AppleTranslationBundle.stage(request.appleTranslationApp(), input, request.target(), inventory);
+        }
         Path inventoryFile = input.resolve("package-manifest.properties");
         writeMap(inventoryFile, inventory);
 
@@ -576,7 +579,14 @@ public final class NativePackageStager {
             Path nativeSourceJar,
             Path sbom,
             Path resourcesRoot,
-            Path output) {
+            Path output,
+            Path appleTranslationApp) {
+
+        public StageRequest(
+                NativeTarget target, Path appJar, Path nativeSourceJar,
+                Path sbom, Path resourcesRoot, Path output) {
+            this(target, appJar, nativeSourceJar, sbom, resourcesRoot, output, null);
+        }
 
         public StageRequest {
             Objects.requireNonNull(target, "target");

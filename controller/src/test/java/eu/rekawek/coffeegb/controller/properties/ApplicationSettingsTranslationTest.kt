@@ -51,12 +51,66 @@ class ApplicationSettingsTranslationTest {
         assertEquals("", migrated.settings.translation.apiKey)
         assertEquals(previousValue, migrated.unknownProperties[KEY])
         val canonical = ApplicationSettingsCodec.encode(migrated)
-        assertEquals("12", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+        assertEquals(ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+            canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
         assertFalse(KEY in canonical)
         assertEquals(migrated, ApplicationSettingsCodec.decode(canonical))
         assertFalse(migrated.toString().contains(previousValue))
       }
     }
+  }
+
+  @Test
+  fun `all providers round trip with a retained optional OpenAI key`() {
+    ApplicationSettings.TranslationProvider.entries.forEach { provider ->
+      val configured = ApplicationSettingsDocument(ApplicationSettings(
+          translation = ApplicationSettings.Translation(TEST_KEY, provider)))
+      val encoded = ApplicationSettingsCodec.encode(configured)
+      assertEquals(provider.name, encoded[PROVIDER])
+      assertEquals(TEST_KEY, encoded[KEY])
+      assertEquals(configured, ApplicationSettingsCodec.decode(encoded))
+    }
+    assertEquals(ApplicationSettings.TranslationProvider.AUTOMATIC,
+        ApplicationSettingsCodec.decode(mapOf(
+            ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "13")).settings.translation.provider)
+  }
+
+  @Test
+  fun `schema twelve retains its saved key and starts with automatic provider`() {
+    val migrated = ApplicationSettingsCodec.decode(mapOf(
+        ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "12",
+        KEY to TEST_KEY,
+    ))
+    assertEquals(ApplicationSettings.Translation(TEST_KEY), migrated.settings.translation)
+    assertEquals(migrated, ApplicationSettingsCodec.decode(ApplicationSettingsCodec.encode(migrated)))
+  }
+
+  @Test
+  fun `schemas before thirteen preserve an unknown provider without activating it`() {
+    (0..12).forEach { version ->
+      val migrated = ApplicationSettingsCodec.decode(buildMap {
+        if (version != 0) put(ApplicationSettingsCodec.SCHEMA_VERSION_KEY, version.toString())
+        put(PROVIDER, "unrecognized future provider")
+      })
+      assertEquals(ApplicationSettings.TranslationProvider.AUTOMATIC,
+          migrated.settings.translation.provider)
+      assertEquals("unrecognized future provider", migrated.unknownProperties[PROVIDER])
+      val canonical = ApplicationSettingsCodec.encode(migrated)
+      assertEquals("AUTOMATIC", canonical[PROVIDER])
+      assertEquals(migrated, ApplicationSettingsCodec.decode(canonical))
+    }
+  }
+
+  @Test
+  fun `invalid active providers fail without printing arbitrary property values`() {
+    val failure = assertFailsWith<IllegalArgumentException> {
+      ApplicationSettingsCodec.decode(mapOf(
+          ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "13",
+          PROVIDER to TEST_KEY,
+      ))
+    }
+    assertTrue(failure.message.orEmpty().contains(PROVIDER))
+    assertFalse(failure.stackTraceToString().contains(TEST_KEY))
   }
 
   @Test
@@ -197,6 +251,7 @@ class ApplicationSettingsTranslationTest {
 
   companion object {
     private const val KEY = ApplicationSettingsCodec.TRANSLATION_API_KEY
+    private const val PROVIDER = ApplicationSettingsCodec.TRANSLATION_PROVIDER_KEY
     private const val TEST_KEY = "sk-proj-placeholder-test-key"
   }
 }

@@ -876,6 +876,7 @@ class ApplicationSettingsStoreTest {
               "saves.rewindSeconds" to "30",
               "peripherals.cameraDeviceIndex" to "0",
               "settings.schemaVersion" to ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+              "translation.provider" to "AUTOMATIC",
               "system.executionMode" to "ACCURACY",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",

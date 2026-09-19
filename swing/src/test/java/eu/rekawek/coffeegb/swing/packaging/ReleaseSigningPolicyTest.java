@@ -60,6 +60,18 @@ public class ReleaseSigningPolicyTest {
         assertTrue(appImageVerification.get(1).stream().anyMatch(argument ->
                 argument.contains("com.apple.security.cs.disable-library-validation")));
         assertEquals("verified-embedded", policy.verifiedSigningState());
+        Path helper = temporaryFolder.newFolder("helper").toPath();
+        List<List<String>> helperSigning = policy.appleTranslationSigningCommands(helper);
+        assertTrue(helperSigning.get(0).contains("--force"));
+        assertTrue(helperSigning.get(0).contains("runtime"));
+        assertTrue(helperSigning.get(0).contains("Developer ID Application: Example (ABCD123456)"));
+        assertTrue(helperSigning.get(1).contains("--strict"));
+        Path app = temporaryFolder.newFolder("Coffee GB.app").toPath();
+        Files.createDirectories(app.resolve("Contents/app").resolve(AppleTranslationBundle.RELATIVE_PATH));
+        List<List<String>> nestedVerification = policy.appImageVerificationCommands(app);
+        assertEquals(3, nestedVerification.size());
+        assertTrue(nestedVerification.get(2).stream().anyMatch(argument ->
+                argument.contains("certificate leaf[subject.OU] = \"ABCD123456\"")));
     }
 
     @Test

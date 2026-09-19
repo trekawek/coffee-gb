@@ -22,7 +22,7 @@ packaging process signs the nested app with the application's Developer ID.
 `test.sh` without an argument builds a temporary helper for the current Mac.
 The helper's `--self-test` mode and the script exercise protocol validation,
 coordinate conversion, source-language selection, English exclusion, blank-screen
-Vision OCR, and whole-process request handling without downloading models. They
+and synthetic Japanese Vision OCR, and whole-process request handling without downloading models. They
 cannot verify real translation quality, the permission UI, or latency.
 
 Manual release checks on a Mac:
@@ -30,7 +30,8 @@ Manual release checks on a Mac:
 1. With Japanese translation languages uninstalled, translate a Japanese game
    screen. The helper should show Apple's download permission sheet, and the
    emulator should remain cancellable while setup runs. Cancelling or closing
-   the helper must restore the emulator rather than leave a process running.
+   the helper must return a cancelled status without leaving a process running;
+   dismiss the overlay to resume a game that translation paused.
 2. Approve the download and verify that the detected text receives English
    overlays. Check the Japanese text's position against its original pixel box.
 3. Disconnect the network and translate again. No helper window or download

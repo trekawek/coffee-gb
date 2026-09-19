@@ -223,6 +223,7 @@ public final class NativePackageVerifier {
                 "native.fingerprint",
                 NativeBundleManifest.locked(request.target()).fingerprint());
         requireValue(inventory, "signing.default", "unsigned");
+        AppleTranslationBundle.verifyPackaged(appDirectory, request.target(), inventory);
 
         Path packagedJar = appDirectory.resolve("coffee-gb.jar");
         Path packagedSbom = appDirectory.resolve("coffee-gb-sbom.cdx.json");

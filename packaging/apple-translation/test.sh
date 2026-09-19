@@ -56,5 +56,5 @@ assert request({"version": 1, "image": base64.b64encode(png).decode(), "width": 
 assert request({"version": 2, "image": "invalid", "width": 160, "height": 144}) == [
     {"event": "error", "code": "invalid_request"}
 ]
-print("Apple translation protocol, geometry, language selection, blank OCR and process smoke tests passed.")
+print("Apple translation protocol, geometry, language selection, blank/Japanese OCR and process smoke tests passed.")
 PY

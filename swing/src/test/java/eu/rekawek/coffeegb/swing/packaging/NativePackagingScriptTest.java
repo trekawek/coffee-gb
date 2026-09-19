@@ -62,6 +62,12 @@ public class NativePackagingScriptTest {
         assertTrue(ps.contains("7z.sfx"));
         assertTrue(ps.contains("$Target -eq \"windows-x86-64\" -and $Type -eq \"exe\""));
         assertFalse(sh.contains("/opt/maven"));
+        assertTrue(sh.contains("apple-translation/build.sh"));
+        assertTrue(sh.contains("apple-translation/test.sh"));
+        assertTrue(sh.contains("--apple-translation-app"));
+        assertTrue(sh.indexOf("apple-translation/build.sh") > sh.indexOf("-pl swing -am clean verify"));
+        assertTrue(verifySh.contains("Contents/app/apple-translation/CoffeeGBTranslation.app"));
+        assertTrue(verifySh.contains("apple-translation/test.sh"));
 
         for (String contents :
                 new String[] {

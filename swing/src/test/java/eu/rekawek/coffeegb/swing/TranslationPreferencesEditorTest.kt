@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.TranslationProvider
 import java.nio.file.Paths
 import java.util.concurrent.Executor
 import java.util.concurrent.FutureTask
@@ -16,9 +17,69 @@ import org.junit.Test
 class TranslationPreferencesEditorTest {
 
   @Test
+  fun `automatic on Mac needs no key and switching providers retains the saved key`() =
+      onEdt {
+        val editor = TranslationPreferencesEditor(
+            ApplicationSettings.Translation(SAVED_KEY), isMac = true)
+        assertEquals(TranslationProvider.AUTOMATIC, editor.validatedTranslation().provider)
+        assertFalse(editor.apiKeyField.isEnabled)
+        assertFalse(editor.showApiKey.isEnabled)
+        assertFalse(editor.clearApiKey.isEnabled)
+        assertTrue(editor.guidance.text.contains("No account or API key"))
+        assertTrue(editor.guidance.text.contains("download language support"))
+        assertTrue(editor.guidance.text.contains("screenshots stay on your Mac"))
+
+        editor.selectProvider(TranslationProvider.OPENAI)
+
+        assertTrue(editor.apiKeyField.isEnabled)
+        assertEquals(SAVED_KEY, editor.validatedTranslation().apiKey)
+        editor.showApiKey.doClick()
+        assertEquals('\u0000', editor.apiKeyField.echoChar)
+        editor.selectProvider(TranslationProvider.APPLE_LOCAL)
+        assertTrue(editor.apiKeyField.echoChar != '\u0000')
+        assertFalse(editor.apiKeyField.isEnabled)
+        assertEquals(SAVED_KEY, editor.validatedTranslation().apiKey)
+        assertEquals(TranslationProvider.APPLE_LOCAL, editor.validatedTranslation().provider)
+      }
+
+  @Test
+  fun `automatic elsewhere uses OpenAI and explicit Apple explains platform availability`() =
+      onEdt {
+        val editor = TranslationPreferencesEditor(ApplicationSettings.Translation(), isMac = false)
+        assertTrue(editor.apiKeyField.isEnabled)
+        assertTrue(editor.guidance.text.contains("Automatic uses OpenAI"))
+        editor.selectProvider(TranslationProvider.APPLE_LOCAL)
+        assertFalse(editor.apiKeyField.isEnabled)
+        assertTrue(editor.guidance.text.contains("requires a Mac running macOS 15 or later"))
+        assertEquals(TranslationProvider.APPLE_LOCAL, editor.validatedTranslation().provider)
+      }
+
+  @Test
+  fun `provider selection participates in dirty state Save Cancel and defaults`() =
+      onEdt {
+        val initial = ApplicationSettings(translation = cloudTranslation(SAVED_KEY))
+        val panel = PreferencesPanel(initial)
+        val opening = panel.translationEditor.draftFingerprint()
+        panel.translationEditor.selectProvider(TranslationProvider.APPLE_LOCAL)
+        assertTrue(panel.isDirty())
+        assertNotEquals(opening, panel.translationEditor.draftFingerprint())
+        val edit = panel.validatedEdit()
+        assertEquals(TranslationProvider.APPLE_LOCAL, edit.applyTo(initial).translation.provider)
+        assertEquals(SAVED_KEY, edit.applyTo(initial).translation.apiKey)
+
+        panel.categories.selectedCategory = PreferencesCategory.TRANSLATION
+        panel.restoreSelectedPageDefaults()
+        assertEquals(ApplicationSettings.Translation(), panel.validatedEdit().translation)
+        var applied = false
+        PreferencesDialogActions(panel, applyEdit = { applied = true }, close = {}).cancel()
+        assertFalse(applied)
+        assertEquals(TranslationProvider.OPENAI, initial.translation.provider)
+      }
+
+  @Test
   fun `key is masked until explicitly shown and masked again after theme refresh`() =
       onEdt {
-        val editor = TranslationPreferencesEditor(ApplicationSettings.Translation(SAVED_KEY))
+        val editor = TranslationPreferencesEditor(cloudTranslation(SAVED_KEY))
 
         assertTrue(editor.apiKeyField.echoChar != '\u0000')
         assertFalse(editor.showApiKey.isSelected)
@@ -36,14 +97,14 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `clear removes only the draft key and leaves environment fallback empty in the field`() =
       onEdt {
-        val initial = ApplicationSettings.Translation(SAVED_KEY)
+        val initial = cloudTranslation(SAVED_KEY)
         val editor = TranslationPreferencesEditor(initial)
         editor.showApiKey.doClick()
 
         editor.clearApiKey.doClick()
 
         assertEquals("", String(editor.apiKeyField.password))
-        assertEquals(ApplicationSettings.Translation(), editor.validatedTranslation())
+        assertEquals(cloudTranslation(), editor.validatedTranslation())
         assertEquals(SAVED_KEY, initial.apiKey)
         assertTrue(editor.apiKeyField.echoChar != '\u0000')
         assertFalse(editor.clearApiKey.isEnabled)
@@ -54,7 +115,7 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `validation trims pasted key and rejects malformed keys without disclosing them`() =
       onEdt {
-        val editor = TranslationPreferencesEditor(ApplicationSettings.Translation())
+        val editor = TranslationPreferencesEditor(cloudTranslation())
         editor.apiKeyField.text = "  $NEW_KEY  "
         assertEquals(NEW_KEY, editor.validatedTranslation().apiKey)
 
@@ -76,7 +137,7 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `draft fingerprints distinguish edits and redact valid and invalid credentials`() =
       onEdt {
-        val editor = TranslationPreferencesEditor(ApplicationSettings.Translation(SAVED_KEY))
+        val editor = TranslationPreferencesEditor(cloudTranslation(SAVED_KEY))
         val opening = editor.draftFingerprint()
         editor.apiKeyField.text = NEW_KEY
         val edited = editor.draftFingerprint()
@@ -93,7 +154,7 @@ class TranslationPreferencesEditorTest {
         val dirty = mutableListOf<Boolean>()
         val panel =
             PreferencesPanel(
-                ApplicationSettings(translation = ApplicationSettings.Translation(SAVED_KEY)),
+                ApplicationSettings(translation = cloudTranslation(SAVED_KEY)),
                 draftChanged = { dirty += it },
             )
         panel.categories.selectedCategory = PreferencesCategory.TRANSLATION
@@ -117,7 +178,7 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `Save applies translation to latest settings while old callers preserve the key`() =
       onEdt {
-        val initial = ApplicationSettings(translation = ApplicationSettings.Translation(SAVED_KEY))
+        val initial = ApplicationSettings(translation = cloudTranslation(SAVED_KEY))
         val latest = initial.copy(advanced = initial.advanced.copy(fullChangerCharacter = "LATEST"))
         val panel = PreferencesPanel(initial)
         var saved: ApplicationSettings? = null
@@ -145,7 +206,7 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `Cancel discards key edits and remasks the field`() =
       onEdt {
-        val initial = ApplicationSettings(translation = ApplicationSettings.Translation(SAVED_KEY))
+        val initial = ApplicationSettings(translation = cloudTranslation(SAVED_KEY))
         val panel = PreferencesPanel(initial)
         var applyCount = 0
         var closed = false
@@ -168,7 +229,7 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `page and all defaults clear the key and navigating away hides it`() =
       onEdt {
-        val initial = ApplicationSettings(translation = ApplicationSettings.Translation(SAVED_KEY))
+        val initial = ApplicationSettings(translation = cloudTranslation(SAVED_KEY))
         val panel = PreferencesPanel(initial)
         panel.categories.selectedCategory = PreferencesCategory.TRANSLATION
         panel.translationEditor.showApiKey.doClick()
@@ -191,7 +252,7 @@ class TranslationPreferencesEditorTest {
   @Test
   fun `invalid key keeps preferences open and selects Translation`() =
       onEdt {
-        val panel = PreferencesPanel(ApplicationSettings())
+        val panel = PreferencesPanel(ApplicationSettings(translation = cloudTranslation()))
         var applyCount = 0
         var closed = false
         val actions =
@@ -223,7 +284,7 @@ class TranslationPreferencesEditorTest {
           PreferencesPanel(
               ApplicationSettings(
                   saves = ApplicationSettings.Saves(directory = Paths.get("save-data")),
-                  translation = ApplicationSettings.Translation(SAVED_KEY),
+                  translation = cloudTranslation(SAVED_KEY),
               ))
       actions =
           PreferencesDialogActions(
@@ -242,6 +303,7 @@ class TranslationPreferencesEditorTest {
       assertFalse(panel.translationEditor.apiKeyField.isEditable)
       assertFalse(panel.translationEditor.showApiKey.isEnabled)
       assertFalse(panel.translationEditor.clearApiKey.isEnabled)
+      assertFalse(panel.translationEditor.provider.isEnabled)
       assertTrue(panel.translationEditor.apiKeyField.echoChar != '\u0000')
     }
 
@@ -253,6 +315,7 @@ class TranslationPreferencesEditorTest {
       assertTrue(panel.translationEditor.apiKeyField.isEditable)
       assertTrue(panel.translationEditor.showApiKey.isEnabled)
       assertTrue(panel.translationEditor.clearApiKey.isEnabled)
+      assertTrue(panel.translationEditor.provider.isEnabled)
       assertEquals(SAVED_KEY, panel.translationEditor.validatedTranslation().apiKey)
       actions.cancel()
     }
@@ -264,7 +327,15 @@ class TranslationPreferencesEditorTest {
     return task.get()
   }
 
+  private fun TranslationPreferencesEditor.selectProvider(value: TranslationProvider) {
+    provider.selectedItem = (0 until provider.itemCount).map(provider::getItemAt)
+        .first { it.provider == value }
+  }
+
   private companion object {
+    fun cloudTranslation(key: String = "") =
+        ApplicationSettings.Translation(key, TranslationProvider.OPENAI)
+
     const val SAVED_KEY = "sk-test-saved-key"
     const val NEW_KEY = "sk-test-new-key"
   }

@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CoreText
 import ImageIO
 
 /// Deterministic checks run on macOS CI without invoking Translation or downloading languages.
@@ -36,6 +37,33 @@ enum NativeSelfTest {
         let decoded = try ScreenshotRequest.decode(JSONEncoder().encode(request))
         try require(decoded.decodeImage().width == 160)
         try require(ScreenOCR.recognize(decoded).isEmpty)
+
+        // A blank image alone cannot detect a broken recognizer or vertically flipped boxes.
+        // Render public synthetic text using a font bundled with macOS; no game data or models
+        // are needed. The baseline is y=96 from the bottom, so its glyphs must land near y=30
+        // from the top after Vision's coordinate conversion.
+        let japaneseImage = try blankPNG { context in
+            context.textMatrix = .identity
+            context.textPosition = CGPoint(x: 24, y: 96)
+            let attributes: [NSAttributedString.Key: Any] = [
+                NSAttributedString.Key(kCTFontAttributeName as String):
+                    CTFontCreateWithName("HiraginoSans-W3" as CFString, 24, nil),
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0, alpha: 1)
+            ]
+            let sample = NSAttributedString(string: "メニュー", attributes: attributes)
+            CTLineDraw(CTLineCreateWithAttributedString(sample), context)
+        }
+        let japaneseOCR = try ScreenOCR.recognize(ScreenshotRequest(
+            version: 1, image: japaneseImage.base64EncodedString(), width: 160, height: 144))
+        let menu = japaneseOCR.first { $0.text.replacingOccurrences(of: " ", with: "").contains("メニュー") }
+        try require(menu != nil)
+        if let menu {
+            try require((12...38).contains(menu.bounds.x))
+            try require((18...60).contains(menu.bounds.y))
+            try require((60...115).contains(menu.bounds.width))
+            try require((10...40).contains(menu.bounds.height))
+        }
+        try require(SourceLanguage.identify(in: japaneseOCR)?.language == .japanese)
         try requireInvalid {
             _ = try ScreenshotRequest.decode(Data("{\"version\":2,\"image\":\"x\",\"width\":160,\"height\":144}".utf8))
         }
@@ -69,12 +97,13 @@ enum NativeSelfTest {
         try require(object?["code"] == nil)
     }
 
-    static func blankPNG() throws -> Data {
+    static func blankPNG(draw: ((CGContext) -> Void)? = nil) throws -> Data {
         guard let context = CGContext(data: nil, width: 160, height: 144, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw Failed() }
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 160, height: 144))
+        draw?(context)
         guard let image = context.makeImage() else { throw Failed() }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else {

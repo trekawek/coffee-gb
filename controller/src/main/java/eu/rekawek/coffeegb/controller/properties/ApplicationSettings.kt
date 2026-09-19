@@ -193,8 +193,11 @@ data class ApplicationSettings(
       val commandBarVisible: Boolean = true,
   )
 
-  /** Optional screenshot-translation credential. Never include its value in diagnostics. */
-  data class Translation(val apiKey: String = "") {
+  /** Screenshot-translation settings. Never include the optional credential in diagnostics. */
+  data class Translation @JvmOverloads constructor(
+      val apiKey: String = "",
+      val provider: TranslationProvider = TranslationProvider.AUTOMATIC,
+  ) {
     init {
       require(apiKey.length <= MAX_TRANSLATION_API_KEY_LENGTH &&
           apiKey.all { it.code in 0x21..0x7e }) {
@@ -204,7 +207,14 @@ data class ApplicationSettings(
     }
 
     override fun toString(): String =
-        "Translation(apiKey=${if (apiKey.isEmpty()) "<empty>" else "<redacted>"})"
+        "Translation(provider=$provider, apiKey=${if (apiKey.isEmpty()) "<empty>" else "<redacted>"})"
+  }
+
+  enum class TranslationProvider {
+    /** Apple on macOS, OpenAI elsewhere. Apple failures never silently send a screen online. */
+    AUTOMATIC,
+    APPLE_LOCAL,
+    OPENAI,
   }
 
   enum class Appearance {
@@ -662,7 +672,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 12
+    const val CURRENT_SCHEMA_VERSION = 13
     const val MAX_TRANSLATION_API_KEY_LENGTH = 4_096
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10

@@ -116,6 +116,12 @@ else
       exit 2
     fi
   done
+  helper_app="$extraction/Coffee GB.app/Contents/app/apple-translation/CoffeeGBTranslation.app"
+  [[ -x "$helper_app/Contents/MacOS/CoffeeGBTranslation" ]] || {
+    echo "The installed macOS package has no executable Apple translation helper." >&2
+    exit 2
+  }
+  "$script_dir/apple-translation/test.sh" "$helper_app"
 fi
 
 java \

@@ -39,7 +39,8 @@ orchestration layer use Kotlin and Java.
 - **Game Genie and GameShark cheats**, with a bundled searchable
   [libretro cheat database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy).
 - **Screen translation into English**, triggered with a shortcut, with translated
-  text placed over the original screen. Requires an OpenAI API key; see
+  text placed over the original screen. Runs locally with Apple translation on
+  macOS 15 or later; OpenAI is also available. See
   [screen translation setup](docs/screen-translation.md).
 
 ROM files are not included.
@@ -75,8 +76,9 @@ more details. Pause, save states, and rewind are unavailable during netplay.
 
 Use **Game > Translate Screen** to pause a screen with foreign text and overlay
 its English translation. Repeat the shortcut or press **Esc** to dismiss the
-translation. Configure your OpenAI API key in **File > Preferences… > Translation**;
-`OPENAI_API_KEY` is also supported as a fallback. See
+translation. The macOS app uses Apple translation without an account or API key;
+Apple may ask to download language support on first use. Choose a provider in
+**File > Preferences… > Translation**. OpenAI requires your own API key. See
 [screen translation](docs/screen-translation.md) for setup and timing details.
 
 ## Compatibility
