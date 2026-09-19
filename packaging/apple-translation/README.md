@@ -22,7 +22,10 @@ packaging process signs the nested app with the application's Developer ID.
 `test.sh` without an argument builds a temporary helper for the current Mac.
 The helper's `--self-test` mode and the script exercise protocol validation,
 coordinate conversion, source-language selection, English exclusion, blank-screen
-and synthetic Japanese Vision OCR, and whole-process request handling without downloading models. They
+and synthetic Japanese Vision OCR, and whole-process request handling. A separate
+`--session-self-test` creates the same transparent SwiftUI host used for installed
+languages and verifies that `.translationTask` supplies a session. It never calls
+the session's translation or download methods. These checks need no language models. They
 cannot verify real translation quality, the permission UI, or latency.
 
 Manual release checks on a Mac:

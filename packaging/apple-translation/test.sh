@@ -36,6 +36,8 @@ import zlib
 executable = sys.argv[1]
 result = subprocess.run([executable, "--self-test"], capture_output=True, text=True, timeout=60, check=True)
 assert json.loads(result.stdout) == {"event": "self_test", "ok": True}, result.stdout
+result = subprocess.run([executable, "--session-self-test"], capture_output=True, text=True, timeout=30, check=True)
+assert json.loads(result.stdout) == {"event": "self_test", "ok": True}, result.stdout
 
 def chunk(kind, data):
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
@@ -56,5 +58,5 @@ assert request({"version": 1, "image": base64.b64encode(png).decode(), "width": 
 assert request({"version": 2, "image": "invalid", "width": 160, "height": 144}) == [
     {"event": "error", "code": "invalid_request"}
 ]
-print("Apple translation protocol, geometry, language selection, blank/Japanese OCR and process smoke tests passed.")
+print("Apple translation protocol, geometry, language selection, blank/Japanese OCR, SwiftUI session and process smoke tests passed.")
 PY

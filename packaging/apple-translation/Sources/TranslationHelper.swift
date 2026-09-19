@@ -10,12 +10,23 @@ final class TranslationModel: ObservableObject {
     @Published var preparing = true
     var input: TranslationInput?
     var needsDownload = false
+    var sessionSelfTest = false
     weak var owner: HelperDelegate?
     private var sessionStarted = false
 
     func run(_ session: TranslationSession) async {
-        guard !sessionStarted, let input else { return }
+        guard !sessionStarted else { return }
         sessionStarted = true
+        if sessionSelfTest {
+            // Validate that the real hidden SwiftUI host provides a session, without invoking
+            // any methods that translate text or ask the system to download language models.
+            owner?.finish(HelperEvent(event: "self_test", ok: true))
+            return
+        }
+        guard let input else {
+            owner?.fail(.translationFailed)
+            return
+        }
         let source = Locale.Language(identifier: input.language.rawValue)
         let target = Locale.Language(identifier: "en")
         do {
@@ -99,10 +110,16 @@ struct TranslationWindow: View {
 @MainActor
 final class HelperDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let model = TranslationModel()
+    private let sessionSelfTest: Bool
     private var window: NSWindow?
     private var parentMonitor: DispatchSourceProcess?
     private var watchdog: Task<Void, Never>?
     private var complete = false
+
+    init(sessionSelfTest: Bool = false) {
+        self.sessionSelfTest = sessionSelfTest
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.owner = self
@@ -135,6 +152,13 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         watchdog = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 16 * 60 * 1_000_000_000)
             if !Task.isCancelled { self?.fail(.cancelled) }
+        }
+
+        if sessionSelfTest {
+            model.sessionSelfTest = true
+            model.configuration = TranslationSession.Configuration(
+                source: Locale.Language(identifier: "ja"), target: Locale.Language(identifier: "en"))
+            return
         }
 
         Task { [weak self] in
@@ -225,13 +249,15 @@ struct TranslationHelper {
                 exit(1)
             }
         }
-        guard CommandLine.arguments.count == 1 else {
+        let sessionSelfTest = CommandLine.arguments.count == 2
+            && CommandLine.arguments[1] == "--session-self-test"
+        guard CommandLine.arguments.count == 1 || sessionSelfTest else {
             HelperEvent(event: "error", code: HelperFailure.invalidRequest.rawValue).write()
             exit(2)
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let delegate = HelperDelegate()
+        let delegate = HelperDelegate(sessionSelfTest: sessionSelfTest)
         app.delegate = delegate
         withExtendedLifetime(delegate) { app.run() }
     }
