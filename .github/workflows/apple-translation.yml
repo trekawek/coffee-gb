@@ -1,0 +1,41 @@
+name: Apple local translation
+
+on:
+  push:
+    paths:
+      - "packaging/apple-translation/**"
+      - ".github/workflows/apple-translation.yml"
+  pull_request:
+    paths:
+      - "packaging/apple-translation/**"
+      - ".github/workflows/apple-translation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  helper:
+    name: Swift helper (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build bundled helper and exercise Vision and JSON protocol
+        shell: bash
+        env:
+          HELPER_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          helper_app="$RUNNER_TEMP/apple-translation/CoffeeGBTranslation.app"
+          packaging/apple-translation/build.sh "$helper_app" "$HELPER_ARCHITECTURE"
+          packaging/apple-translation/test.sh "$helper_app"
