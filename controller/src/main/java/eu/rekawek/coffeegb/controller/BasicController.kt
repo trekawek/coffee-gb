@@ -45,6 +45,11 @@ import eu.rekawek.coffeegb.controller.replay.ReplayInputSource
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
+import eu.rekawek.coffeegb.controller.state.bess.BessFiles
+import eu.rekawek.coffeegb.controller.state.bess.BessLoadRequestEvent
+import eu.rekawek.coffeegb.controller.state.bess.BessSaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.bess.BessOperationCompletedEvent
+import eu.rekawek.coffeegb.controller.state.bess.BessOperationFailedEvent
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.ExclusiveWriteRecovery
 import eu.rekawek.coffeegb.controller.state.ResolvedBatteryStorage
@@ -634,6 +639,9 @@ class BasicController private constructor(
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventQueue.register<StateCatalogRequestEvent> { requestStateCatalog(it) }
     eventQueue.register<StateSaveRequestEvent> { requestStateSave(it) }
+    eventQueue.register<BessLoadRequestEvent> { requestBessOperation(it.path, it.expectedSessionId, true) }
+    eventQueue.register<BessSaveRequestEvent> { requestBessOperation(it.path, it.expectedSessionId, false) }
+    eventQueue.register<BessIoCompletedEvent> { finishBessOperation(it) }
     eventQueue.register<StateLoadRequestEvent> { requestStateLoad(it) }
     eventQueue.register<StateLoadRefRequestEvent> { requestStateLoadRef(it) }
     eventQueue.register<StateSlotLoadAvailabilityRequestEvent> {
@@ -1491,6 +1499,9 @@ class BasicController private constructor(
           event is ReplayRecordingStopRequestEvent ||
           event is ReplayPlaybackLoadRequestEvent ||
           event is ReplayPlaybackStopRequestEvent ||
+          event is BessLoadRequestEvent ||
+          event is BessSaveRequestEvent ||
+          event is BessIoCompletedEvent ||
           event is StatePrepareCloseRequestEvent ||
           event is StateSkipCloseAutosaveRequestEvent ||
           event is StateResumeDecisionEvent ||
@@ -2509,6 +2520,96 @@ class BasicController private constructor(
     stateWorker.catalog(context, event.requestId) { ref ->
       compatibilityManager?.readSnapshotReadOnly(ref.index)
     }
+  }
+
+  private var pendingBessOperation: Long? = null
+
+  private data class BessIoCompletedEvent(
+      val requestId: Long,
+      val sessionId: Long,
+      val path: java.nio.file.Path,
+      val load: Boolean,
+      val state: eu.rekawek.coffeegb.controller.state.MachineState? = null,
+      val failure: Exception? = null,
+  ) : Event
+
+  private fun bessOperationUnavailable(expectedSessionId: Long): String? = when {
+    session == null || expectedSessionId != stateSessionId ->
+        "BESS states require the same active local game that opened the file dialog."
+    loadJob != null || pendingRomSwitch != null || replacementJob != null || stopJob != null ->
+        "Wait for the current game operation to finish before using BESS states."
+    replayRecording != null || armedReplayRecording != null || pendingCleanBootReplay != null ||
+        replayPlaybackSession || pendingReplayPlayback != null ->
+        "Stop input recording or playback before using BESS states."
+    else -> null
+  }
+
+  private fun requestBessOperation(path: java.nio.file.Path, expectedSessionId: Long, load: Boolean) {
+    val unavailable = bessOperationUnavailable(expectedSessionId)
+    if (unavailable != null || pendingBessOperation != null) {
+      eventBus.post(BessOperationFailedEvent(unavailable ?: "A BESS state operation is already in progress."))
+      return
+    }
+    val currentSession = session ?: return
+    val requestId = nextInternalStateRequestId()
+    try {
+      // The copy aligns to an instruction boundary on the worker without advancing the live game.
+      val captured = if (load) null else DetachedStateAdapter.capture(currentSession.gameboy)
+      val configuration = currentSession.config.forBessTransfer(currentSession.gameboy)
+      pendingBessOperation = requestId
+      loadExecutor.execute {
+        val result = try {
+          if (load) {
+            BessIoCompletedEvent(requestId, expectedSessionId, path, true,
+                state = BessFiles.load(path, configuration))
+          } else {
+            BessFiles.save(path, configuration, checkNotNull(captured))
+            BessIoCompletedEvent(requestId, expectedSessionId, path, false)
+          }
+        } catch (failure: Exception) {
+          BessIoCompletedEvent(requestId, expectedSessionId, path, load, failure = failure)
+        }
+        eventBus.post(result)
+      }
+    } catch (failure: Exception) {
+      pendingBessOperation = null
+      eventBus.post(BessOperationFailedEvent("BESS state could not be prepared: ${failure.message}"))
+    }
+  }
+
+  private fun finishBessOperation(event: BessIoCompletedEvent) {
+    if (pendingBessOperation != event.requestId) return
+    pendingBessOperation = null
+    if (event.failure != null) {
+      eventBus.post(BessOperationFailedEvent("BESS state could not be ${if (event.load) "loaded" else "saved"}: ${event.failure.message}"))
+      return
+    }
+    if (event.load) {
+      val unavailable = bessOperationUnavailable(event.sessionId)
+      if (unavailable != null) {
+        eventBus.post(BessOperationFailedEvent(unavailable))
+        return
+      }
+      val currentSession = session ?: return
+      val mobileExternalIo = hasMobileAdapterExternalIo()
+      try {
+        currentSession.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
+        DetachedStateAdapter.apply(currentSession.gameboy, checkNotNull(event.state))
+        currentSession.serialEndpoint.disconnect()
+        relinquishDebugBreakpointPauseOwnership()
+        currentSession.gameboy.setCartridgeClockPaused(isEffectivelyPaused())
+        resetDebugTimelineObservation(currentSession.gameboy)
+        rewindManager.clear()
+        debugCheckpointHistory.clear(DebugHistoryTruncationReason.SESSION_BOUNDARY)
+        if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
+          mobileAdapterStateLoadCompleted()
+        }
+      } catch (failure: Exception) {
+        eventBus.post(BessOperationFailedEvent("BESS state could not be applied: ${failure.message}"))
+        return
+      }
+    }
+    eventBus.post(BessOperationCompletedEvent(event.path, event.load))
   }
 
   private fun requestStateSave(event: StateSaveRequestEvent) {

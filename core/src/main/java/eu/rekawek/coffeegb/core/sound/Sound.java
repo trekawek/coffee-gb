@@ -981,6 +981,37 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         return s.getByte(address);
     }
 
+    /** BESS needs the write-only frequency latches and physical wave RAM, not bus masks. */
+    public void captureBessRegisters(byte[] io) {
+        materializePendingPerformanceTicks();
+        for (int address = 0xff10; address <= 0xff25; address++) {
+            AddressSpace space = getAddressSpace(address);
+            if (space != null) {
+                io[address & 0x7f] = (byte) space.getByte(address);
+            }
+        }
+        io[0x26] = (byte) getByte(0xff26);
+        System.arraycopy(mode3.copyDebugWaveRam(), 0, io, 0x30, 0x10);
+    }
+
+    /** Restores an APU on a fresh machine without interpreting NRx4 as trigger commands. */
+    public void restoreBessRegisters(byte[] io) {
+        setByte(0xff26, 0);
+        setByte(0xff26, io[0x26] & 0x80);
+        for (int address = 0xff10; address <= 0xff25; address++) {
+            int value = io[address & 0x7f] & 0xff;
+            if (address == 0xff14 || address == 0xff19 || address == 0xff1e || address == 0xff23) {
+                value &= 0x7f;
+            }
+            if (accepts(address)) {
+                setByte(address, value);
+            }
+        }
+        for (int i = 0; i < 0x10; i++) {
+            setByte(0xff30 + i, io[0x30 + i] & 0xff);
+        }
+    }
+
     private void start() {
         // the registers were zeroed at power-off and the length counters keep their values
         for (AbstractSoundMode m : allModes) {

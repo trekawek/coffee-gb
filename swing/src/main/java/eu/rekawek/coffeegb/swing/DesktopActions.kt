@@ -28,6 +28,8 @@ internal enum class DesktopCommand {
   RESET,
   SAVE_STATE,
   LOAD_STATE,
+  LOAD_BESS_STATE,
+  SAVE_BESS_STATE,
   MANAGE_STATES,
   OPEN_SAVE_FOLDER,
   NETPLAY,
@@ -93,6 +95,8 @@ internal data class DesktopCommandHandlers(
     val inputRecording: () -> Unit = {},
     val stopInputRecording: () -> Unit = {},
     val loadInputRecording: () -> Unit = {},
+    val loadBessState: () -> Unit = {},
+    val saveBessState: () -> Unit = {},
     /** Opens one entry selected from the portable Recent Games page. */
     val openRecentGame: ((PortableMenuRecentGame) -> Unit)? = null,
     val preferencesForCategory: ((PreferencesCategory) -> Unit)? = null,
@@ -488,6 +492,8 @@ internal class DesktopActionRegistry(
       DesktopCommand.RESET -> handlers.reset()
       DesktopCommand.SAVE_STATE -> handlers.saveState(presentation.stateSlot)
       DesktopCommand.LOAD_STATE -> handlers.loadState(presentation.stateSlot)
+      DesktopCommand.LOAD_BESS_STATE -> handlers.loadBessState()
+      DesktopCommand.SAVE_BESS_STATE -> handlers.saveBessState()
       DesktopCommand.MANAGE_STATES -> handlers.manageStates()
       DesktopCommand.OPEN_SAVE_FOLDER -> handlers.openSaveFolder()
       DesktopCommand.NETPLAY -> handlers.netplay()
@@ -530,7 +536,9 @@ internal class DesktopActionRegistry(
                 (state.recordingPhase == ReplayRecordingPhase.ARMING ||
                     state.recordingPhase == ReplayRecordingPhase.RECORDING) &&
                 (state.gameLoaded || state.netplaySession)
-        DesktopCommand.LOAD_INPUT_RECORDING ->
+        DesktopCommand.LOAD_INPUT_RECORDING,
+        DesktopCommand.LOAD_BESS_STATE,
+        DesktopCommand.SAVE_BESS_STATE ->
             state.gameLoaded &&
                 !state.netplaySession &&
                 state.inputRecordingPhase == ReplayRecordingPhase.IDLE &&
@@ -583,6 +591,10 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
           DesktopActionMetadata("Save", "Save the current state slot")
       DesktopCommand.LOAD_STATE ->
           DesktopActionMetadata("Load", "Load the current state slot")
+      DesktopCommand.LOAD_BESS_STATE ->
+          DesktopActionMetadata("Load BESS state", "Load an interoperable BESS state for the current ROM")
+      DesktopCommand.SAVE_BESS_STATE ->
+          DesktopActionMetadata("Save BESS state", "Save the current game as an interoperable BESS state")
       DesktopCommand.MANAGE_STATES ->
           DesktopActionMetadata("Manage States…", "Open saved-state management")
       DesktopCommand.OPEN_SAVE_FOLDER ->

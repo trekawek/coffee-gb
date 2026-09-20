@@ -188,6 +188,29 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         addressSpace.init(eventBus);
     }
 
+    public eu.rekawek.coffeegb.core.state.bess.BessCartridgeState captureBessState() {
+        return addressSpace.captureBessState();
+    }
+
+    public void restoreBessState(byte[] ram,
+            java.util.List<eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite> writes,
+            java.util.Map<String, byte[]> extensions) {
+        // Capability check precedes any mutation, including writes to device-mapped RAM.
+        addressSpace.captureBessState();
+        addressSpace.restoreBessRam(ram);
+        for (var write : writes) {
+            int address = write.address();
+            if (!((address >= 0 && address <= 0x7fff)
+                    || (address >= 0xa000 && address <= 0xbfff))
+                    || write.value() < 0 || write.value() > 255) {
+                throw new IllegalArgumentException("Invalid BESS mapper write");
+            }
+            addressSpace.restoreBessWrite(address, write.value());
+        }
+        // RTC blocks restore the latch after MBC writes, which may themselves latch the clock.
+        addressSpace.restoreBessExtensions(extensions);
+    }
+
     /** Supplies only the persistence error route for a pass-through slot cartridge. */
     public void initBattery(EventBus eventBus) {
         battery.init(eventBus);

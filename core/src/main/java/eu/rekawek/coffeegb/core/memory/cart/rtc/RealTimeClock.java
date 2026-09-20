@@ -313,6 +313,40 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         return clockData;
     }
 
+    /** BESS uses the VBA battery layout, but preserves the independent RTC read latch. */
+    public byte[] captureBessRtc() {
+        long[] values = serialize();
+        if (latched) {
+            values[5] = latchedSeconds;
+            values[6] = latchedMinutes;
+            values[7] = latchedHours;
+            values[8] = latchedDays & 0xff;
+            values[9] = ((latchedDays >> 8) & 1) | (latchedHalt ? 0x40 : 0)
+                    | (latchedCounterOverflow ? 0x80 : 0);
+        }
+        var buffer = java.nio.ByteBuffer.allocate(0x30).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < 10; i++) buffer.putInt((int) values[i]);
+        buffer.putLong(values[10]);
+        return buffer.array();
+    }
+
+    public void restoreBessRtc(byte[] data) {
+        if (data.length != 0x30) throw new IllegalArgumentException("Invalid BESS RTC block size");
+        var buffer = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        long[] values = new long[11];
+        for (int i = 0; i < 10; i++) values[i] = buffer.getInt() & 0xff;
+        // A state resumes its saved clock; wall time spent outside this state is not gameplay.
+        buffer.getLong();
+        deserialize(values);
+        latchedSeconds = (int) values[5] & 0x3f;
+        latchedMinutes = (int) values[6] & 0x3f;
+        latchedHours = (int) values[7] & 0x1f;
+        latchedDays = (int) values[8] | (((int) values[9] & 1) << 8);
+        latchedHalt = (values[9] & 0x40) != 0;
+        latchedCounterOverflow = (values[9] & 0x80) != 0;
+        latched = true;
+    }
+
     @Override
     public ComponentState<RealTimeClock> captureState() {
         catchUpPausedTime();

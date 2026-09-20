@@ -8,6 +8,22 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import java.util.Objects;
 
 public interface MemoryController extends AddressSpace, StatefulComponent<MemoryController> {
+    default eu.rekawek.coffeegb.core.state.bess.BessCartridgeState captureBessState() {
+        throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+    }
+
+    default void restoreBessRam(byte[] ram) {
+        throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+    }
+
+    default void restoreBessExtensions(java.util.Map<String, byte[]> extensions) {
+    }
+
+    /** Replays one portable hardware register write, in the order supplied by the file. */
+    default void restoreBessWrite(int address, int value) {
+        setByte(address, value);
+    }
+
     /** True only when ROM-window reads have no emulated side effects under a bounded lease. */
     default boolean isPerformanceRomPeekSafe() {
         return false;

@@ -300,6 +300,11 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         return regValue;
     }
 
+    /** Restores FF46 without starting a new transfer. The target machine must be fresh. */
+    public void restoreBessRegister(int value) {
+        regValue = value;
+    }
+
     public boolean isOamBlocked() {
         return restarted || (transferInProgress && ticks >= 5);
     }

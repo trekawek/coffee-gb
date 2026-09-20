@@ -16,6 +16,7 @@ import eu.rekawek.coffeegb.core.performance.PerformanceDiagnostics;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
+import eu.rekawek.coffeegb.core.state.bess.BessState;
 import eu.rekawek.coffeegb.core.timer.Timer;
 
 import java.util.List;
@@ -3757,6 +3758,34 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     public State getState() {
         return state;
+    }
+
+    /** BESS has no representation for partially executed instructions or delayed EI. */
+    public boolean isBessBoundary() {
+        return (state == State.OPCODE || state == State.HALTED || state == State.STOPPED)
+                && !hdmaOpcodePrefetched && !haltBugMode && !interruptManager.isInterruptEnablePending();
+    }
+
+    /** Restores the architectural state on a newly constructed, unexecuted CPU. */
+    public void restoreBessState(BessState.Core core) {
+        registers.setPC(core.pc());
+        registers.setAF(core.af());
+        registers.setBC(core.bc());
+        registers.setDE(core.de());
+        registers.setHL(core.hl());
+        registers.setSP(core.sp());
+        state = switch (core.executionState()) {
+            case 0 -> State.OPCODE;
+            case 1 -> State.HALTED;
+            case 2 -> State.STOPPED;
+            default -> throw new IllegalArgumentException("Invalid BESS CPU execution state");
+        };
+        clockCycle = 0;
+        setCurrentOpcode(null);
+        ops = null;
+        if (state == State.STOPPED) {
+            display.disableLcd();
+        }
     }
 
     /** Enables allocation-free instruction-retirement observation for an attached debugger. */

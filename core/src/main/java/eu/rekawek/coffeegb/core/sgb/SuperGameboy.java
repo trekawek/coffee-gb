@@ -139,6 +139,11 @@ public class SuperGameboy implements StatefulComponent<SuperGameboy> {
         }
     }
 
+    /** BESS stores committed SGB display memory, without packet or VRAM-transfer phases. */
+    public boolean hasBessPendingTransfer() {
+        return multipacketIndex != 0 || waitingTransferCommand != null;
+    }
+
     private static boolean isPacket(int[] packet) {
         if (packet == null || packet.length != Commands.PACKET_SIZE) {
             return false;

@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
+import eu.rekawek.coffeegb.core.state.bess.BessCartridgeState;
+import eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -10,6 +12,8 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -50,6 +54,26 @@ public class Huc1 implements MemoryController {
         Arrays.fill(ram, 0xff);
         this.battery = battery;
         battery.loadRam(ram);
+    }
+
+
+    @Override
+    public BessCartridgeState captureBessState() {
+        if (getClass() != Huc1.class) {
+            throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+        }
+        return new BessCartridgeState(BessCartridgeState.bytes(ram),
+                List.of(new MbcWrite(0x0000, 0x0e),
+                        new MbcWrite(0xa000, irOutput ? 1 : 0),
+                        new MbcWrite(0x0000, irMode ? 0x0e : 0x0a),
+                        new MbcWrite(0x2000, romBank),
+                        new MbcWrite(0x4000, ramBank)), Map.of());
+    }
+
+    @Override
+    public void restoreBessRam(byte[] data) {
+        BessCartridgeState.restoreRam(data, ram);
+        ramUpdated = true;
     }
 
     @Override

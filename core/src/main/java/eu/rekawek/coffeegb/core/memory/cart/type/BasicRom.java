@@ -1,5 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.state.bess.BessCartridgeState;
+import eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite;
+import java.util.List;
+import java.util.Map;
+
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -13,6 +18,22 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import java.util.Arrays;
 
 public class BasicRom implements MemoryController, PerformanceRomAccessProvider {
+
+
+    @Override
+    public BessCartridgeState captureBessState() {
+        if (getClass() != BasicRom.class) {
+            throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+        }
+        return new BessCartridgeState(BessCartridgeState.bytes(ram),
+                List.of(), Map.of());
+    }
+
+    @Override
+    public void restoreBessRam(byte[] data) {
+        BessCartridgeState.restoreRam(data, ram);
+        ramUpdated = true;
+    }
 
     @Override
     public boolean isPerformanceRamAccessSafe() {

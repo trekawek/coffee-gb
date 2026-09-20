@@ -48,6 +48,12 @@ internal data class DebuggerMenuActions(
 /** A dynamic Pause/Resume label is a command, not a checked state in the platform menu. */
 internal fun pauseResumeMenuItem(action: Action): JMenuItem = JMenuItem(action)
 
+internal fun addBessStateMenuSection(menu: JMenu, actions: DesktopActionRegistry) {
+  menu.addSeparator()
+  menu.add(JMenuItem(actions[DesktopCommand.LOAD_BESS_STATE]))
+  menu.add(JMenuItem(actions[DesktopCommand.SAVE_BESS_STATE]))
+}
+
 /** Routes native Recent ROM items through the exact-origin opener when the host provides it. */
 internal fun openRecentRomPath(
     path: Path,
@@ -90,6 +96,11 @@ private enum class StopGameDecision {
 
 private enum class PersistenceRetryDecision {
   RETRY,
+  CANCEL,
+}
+
+private enum class BessOverwriteDecision {
+  REPLACE,
   CANCEL,
 }
 
@@ -148,6 +159,7 @@ internal class SwingMenu(
     private val onDesktopStatus: (String) -> Unit = {},
     /** Exact recent-game route; null preserves legacy hosts that only expose path opening. */
     private val onOpenRecentRom: ((Path) -> Unit)? = null,
+    private val onBessStatus: (String) -> Unit = onDesktopStatus,
 ) {
   private var sonarSessionGeneration: Long? = null
   private var turboFileSessionGeneration: Long? = null
@@ -172,6 +184,29 @@ internal class SwingMenu(
   private val sewingMachineWindow = SewingMachineWindow(window, eventBus)
 
   private var sewingSessionGeneration: Long? = null
+
+  private var bessDirectory: File? = null
+
+  private val bessStates =
+      BessStateDesktopController(
+          eventBus = eventBus,
+          isAvailable = { desktopActions[DesktopCommand.LOAD_BESS_STATE].isEnabled },
+          chooseFile = ::chooseBessFile,
+          confirmOverwrite = ::confirmBessOverwrite,
+          showError = { message ->
+            desktopDialogFactory.showError(
+                window,
+                DesktopErrorSpec(
+                    title = "BESS state operation failed",
+                    summary = message,
+                    recovery = "Check the selected file and try again.",
+                    buttons =
+                        DesktopDialogButtons(cancel = DesktopDialogAction("Close", Unit)),
+                ),
+            )
+          },
+          showStatus = onBessStatus,
+      )
 
   private val barcodeBoyDialog = BarcodeBoyDialog(desktopDialogFactory)
 
@@ -347,6 +382,8 @@ internal class SwingMenu(
     val openSaveFolder = JMenuItem(desktopActions[DesktopCommand.OPEN_SAVE_FOLDER])
     fileMenu.add(openSaveFolder)
 
+    addBessStateMenuSection(fileMenu, desktopActions)
+
     fileMenu.addSeparator()
     val preferences = JMenuItem(desktopActions[DesktopCommand.PREFERENCES])
     fileMenu.add(preferences)
@@ -357,6 +394,44 @@ internal class SwingMenu(
 
     return fileMenu
   }
+
+  internal fun loadBessState() = bessStates.load()
+
+  internal fun saveBessState() = bessStates.save()
+
+  private fun chooseBessFile(load: Boolean): Path? {
+    val chooser =
+        JFileChooser(bessDirectory).apply {
+          dialogTitle = if (load) "Load BESS state" else "Save BESS state"
+          fileSelectionMode = JFileChooser.FILES_ONLY
+          isMultiSelectionEnabled = false
+          fileFilter = FileNameExtensionFilter("BESS states (*.bess)", "bess")
+          isAcceptAllFileFilterUsed = load
+          if (!load) selectedFile = File("${currentRomFileName ?: "state"}.bess")
+        }
+    val result = if (load) chooser.showOpenDialog(window) else chooser.showSaveDialog(window)
+    if (result != JFileChooser.APPROVE_OPTION) return null
+    bessDirectory = chooser.currentDirectory
+    return chooser.selectedFile?.toPath()
+  }
+
+  private fun confirmBessOverwrite(path: Path): Boolean =
+      desktopDialogFactory.showDecision(
+          window,
+          DesktopDecisionSpec(
+              title = "Replace BESS state",
+              heading = "Replace ${path.fileName}?",
+              message = "A file already exists at $path. Saving will replace it.",
+              buttons =
+                  DesktopDialogButtons(
+                      primary =
+                          DesktopDialogAction(
+                              "Replace file", BessOverwriteDecision.REPLACE, destructive = true),
+                      cancel = DesktopDialogAction("Cancel", BessOverwriteDecision.CANCEL),
+                      defaultButton = DesktopDialogDefaultButton.CANCEL,
+                  ),
+          ),
+      ) == BessOverwriteDecision.REPLACE
 
   /** Returns true only when the native chooser supplied a ROM to the opening pipeline. */
   internal fun openRomChooser(): Boolean {

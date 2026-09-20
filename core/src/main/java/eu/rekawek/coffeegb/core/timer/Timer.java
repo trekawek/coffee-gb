@@ -80,6 +80,20 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return div;
     }
 
+    /** Restores BESS's coarse divider phase without synthesizing timer input edges. */
+    public void restoreBessRegisters(byte[] io) {
+        presetDiv((io[4] & 0xff) << 8);
+        tima = io[5] & 0xff;
+        tma = io[6] & 0xff;
+        tac = io[7] & 7;
+        previousBit = timerInput(div, tac);
+        overflow = false;
+        ticksSinceOverflow = 0;
+        divReset = false;
+        haltWakeDelay = 0;
+        suppressNextInterruptRequest = false;
+    }
+
     public int getDebugTima() {
         return tima;
     }
