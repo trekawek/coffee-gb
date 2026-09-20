@@ -8,11 +8,11 @@ of the CGB's built-in infrared port.
 
 Open a supported game and enter its GBKiss file menu.
 
-- To install a file, choose **Peripherals → GBKiss Link → Send GBF file**, open a
+- To install a file, choose **Peripherals → Infrared → GBKiss Link → Send GBF file**, open a
   `.gbf` file, and select **Receive** in the game. In GBKiss Mini Games, Start is
   the Receive shortcut. Choose a free slot; sending a duplicate title does not
   overwrite the existing file.
-- To export a file, choose **Peripherals → GBKiss Link → Receive GBF file**, then
+- To export a file, choose **Peripherals → Infrared → GBKiss Link → Receive GBF file**, then
   select the file and **Send** in the game. Confirm the game's connection screen.
   A save dialog opens when the complete file arrives. Choose a new filename.
 - **Cancel transfer** disconnects the modem. If you cancel the save dialog, the

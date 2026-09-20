@@ -34,9 +34,8 @@ class SwingMenuTest {
 
     SwingUtilities.invokeAndWait {
       val item = mobileAdapterConfigurationMenuItem { opens++ }
-
-      assertEquals("Configure Mobile Adapter…", item.text)
-      assertTrue(item.accessibleContext.accessibleDescription.contains("session permissions"))
+      assertEquals("Configure…", item.text)
+      assertEquals("Configure Mobile Adapter", item.accessibleContext.accessibleName)
       item.doClick()
     }
 
@@ -44,26 +43,32 @@ class SwingMenuTest {
   }
 
   @Test
-  fun `desktop startup contract requires both Mobile Adapter entry points`() {
+  fun `desktop startup requires Mobile Adapter connection and controls in one submenu`() {
     val menuBar = JMenuBar()
     val peripherals = JMenu("Peripherals")
-    val linkPort = JMenu("Link-port device")
-    linkPort.add("Mobile Adapter GB")
+    val linkPort = JMenu("Link port")
+    val mobileAdapter = JMenu("Mobile Adapter GB")
+    val connect = mobileAdapter.add("Connect")
+    linkPort.add(mobileAdapter)
     peripherals.add(linkPort)
     menuBar.add(peripherals)
 
     assertFalse(hasMobileAdapterDesktopControls(menuBar))
-
     val configuration = mobileAdapterConfigurationMenuItem {}
-    peripherals.add(configuration)
+    mobileAdapter.add(configuration)
     assertTrue(hasMobileAdapterDesktopControls(menuBar))
 
-    configuration.isEnabled = false
-    assertFalse(hasMobileAdapterDesktopControls(menuBar))
-    configuration.isEnabled = true
+    mobileAdapter.text = "Mobile Adapter GB (selected)"
+    assertTrue(hasMobileAdapterDesktopControls(menuBar))
 
-    val owner = linkPort.getItem(0)
-    owner.isVisible = false
+    linkPort.isEnabled = false
+    assertFalse(hasMobileAdapterDesktopControls(menuBar))
+    linkPort.isEnabled = true
+
+    connect.isVisible = false
+    assertFalse(hasMobileAdapterDesktopControls(menuBar))
+    connect.isVisible = true
+    configuration.isEnabled = false
     assertFalse(hasMobileAdapterDesktopControls(menuBar))
   }
 }

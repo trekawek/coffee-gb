@@ -50,27 +50,6 @@ class DevicePreferencesEditorsTest {
       }
 
   @Test
-  fun `peripherals page presents redacted Mobile Adapter summary and opens configuration`() =
-      onEdt {
-        var configureCalls = 0
-        val summary = "Custom Server · 2 mappings · networking blocked for this session"
-        val editor =
-            PeripheralsPreferencesEditor(
-                ApplicationSettings.Peripherals(),
-                mobileAdapterSummary = summary,
-                configureMobileAdapter = { configureCalls++ },
-            )
-
-        assertEquals(summary, editor.mobileAdapterStatus.text)
-        assertEquals(
-            "Mobile Adapter configuration summary",
-            editor.mobileAdapterStatus.accessibleContext.accessibleName,
-        )
-        editor.configureMobileAdapterButton.doClick()
-        assertEquals(1, configureCalls)
-      }
-
-  @Test
   fun `gamepad snapshot choices retain unavailable assignments and persist per-device tuning`() =
       onEdt {
         val unavailableId = gamepadId('a')

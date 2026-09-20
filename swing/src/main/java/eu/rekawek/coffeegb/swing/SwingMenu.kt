@@ -64,7 +64,8 @@ internal fun openRecentRomPath(
 }
 
 internal fun mobileAdapterConfigurationMenuItem(onShow: () -> Unit): JMenuItem =
-    JMenuItem("Configure Mobile Adapter…").apply {
+    JMenuItem("Configure…").apply {
+      accessibleContext.accessibleName = "Configure Mobile Adapter"
       accessibleContext.accessibleDescription =
           "Import a private adapter image, configure a custom service, grant session permissions, and inspect network status"
       addActionListener { onShow() }
@@ -76,17 +77,18 @@ internal fun hasMobileAdapterDesktopControls(menuBar: JMenuBar): Boolean {
           ?: return false
   val linkPort =
       peripherals.menuComponents.filterIsInstance<JMenu>().singleOrNull {
-        it.text == "Link-port device"
+        it.text == "Link port"
       } ?: return false
-  val ownerVisible =
-      linkPort.menuComponents.filterIsInstance<JMenuItem>().any {
-        it.text == "Mobile Adapter GB" && it.isVisible && it.isEnabled
+  val mobileAdapter =
+      linkPort.menuComponents.filterIsInstance<JMenu>().singleOrNull {
+        it.text.removeSuffix(" (selected)") == "Mobile Adapter GB"
+      } ?: return false
+  return listOf(peripherals, linkPort, mobileAdapter).all { it.isVisible && it.isEnabled } &&
+      listOf("Connect", "Configure…").all { label ->
+        mobileAdapter.menuComponents.filterIsInstance<JMenuItem>().any {
+          it.text == label && it.isVisible && it.isEnabled
+        }
       }
-  val configurationVisible =
-      peripherals.menuComponents.filterIsInstance<JMenuItem>().any {
-        it.text == "Configure Mobile Adapter…" && it.isVisible && it.isEnabled
-      }
-  return ownerVisible && configurationVisible
 }
 
 private enum class StopGameDecision {
@@ -536,11 +538,12 @@ internal class SwingMenu(
 
   private fun createPeripheralsMenu(): JMenu {
     val peripheralsMenu = JMenu("Peripherals")
+    val cartridgeMenu = JMenu("Cartridge")
+    val infraredMenu = JMenu("Infrared")
     val sonarMenu = pocketSonarMenu(
         configure = { scene, power -> eventBus.post(Controller.SetPocketSonarEvent(scene, power, sonarSessionGeneration)) },
         loadImage = ::loadPocketSonarImage,
     ).apply { isEnabled = false }
-    peripheralsMenu.add(sonarMenu)
     eventBus.register<Controller.SessionPresentationEvent> { event ->
       SwingUtilities.invokeLater {
         sonarSessionGeneration = event.sessionGeneration
@@ -553,19 +556,27 @@ internal class SwingMenu(
         sonarMenu.isEnabled = false
       }
     }
-    val turboMenu = turboFileMenu(::controlTurboFile).apply { isEnabled = false }
-    peripheralsMenu.add(turboMenu)
-    eventBus.register<Controller.SerialPeripheralSelectionChangedEvent> { event ->
+    val turboMenu = turboFileMenu(::controlTurboFile)
+    val turboControls = turboMenu.menuComponents.filterIsInstance<JMenuItem>()
+    fun updateTurboControls(
+        selection: SerialPeripheralSelection = serialPeripheralBinding.snapshot().selection,
+    ) {
+      val enabled = turboFileSessionGeneration != null &&
+          selection == SerialPeripheralSelection.TURBO_FILE_GB
+      turboControls.forEach { it.isEnabled = enabled }
+    }
+    turboControls.forEach { it.isEnabled = false }
+    eventBus.register<Controller.SessionPresentationEvent> { event ->
       SwingUtilities.invokeLater {
-        turboMenu.isEnabled = event.selection == SerialPeripheralSelection.TURBO_FILE_GB ||
-            event.selection == SerialPeripheralSelection.TURBO_FILE_ADVANCE
+        turboFileSessionGeneration = event.sessionGeneration
+        updateTurboControls()
       }
     }
-    eventBus.register<Controller.SessionPresentationEvent> { event ->
-      SwingUtilities.invokeLater { turboFileSessionGeneration = event.sessionGeneration }
-    }
     eventBus.register<EmulationStoppedEvent> {
-      SwingUtilities.invokeLater { turboMenu.isEnabled = false; turboFileSessionGeneration = null }
+      SwingUtilities.invokeLater {
+        turboFileSessionGeneration = null
+        updateTurboControls()
+      }
     }
     eventBus.register<Controller.TurboFileStorageErrorEvent> { event ->
       SwingUtilities.invokeLater { onDesktopStatus(event.message) }
@@ -574,7 +585,6 @@ internal class SwingMenu(
     // the Game Boy Camera's webcam source is a cartridge sensor, not a link-port device, so
     // it is independent of the netplay/Barcode Boy/printer/GPS group below
     val camera = JCheckBoxMenuItem("Enable Game Boy Camera", false)
-    peripheralsMenu.add(camera)
     cameraController =
         CameraPeripheralController(
             opener = WebcamCameraSource::open,
@@ -622,25 +632,35 @@ internal class SwingMenu(
                   linkedControllerActive = isLinkedControllerActive(),
               )
             },
+            onRendered = { snapshot -> updateTurboControls(snapshot.selection) },
         )
     peripheralsMenu.add(serialPeripheralBinding.menu)
-    peripheralsMenu.add(mobileAdapterConfigurationMenuItem(onMobileAdapterConfiguration))
+    serialPeripheralBinding.groupDeviceControls(
+        turboMenu,
+        SerialPeripheralSelection.TURBO_FILE_GB,
+    )
+    serialPeripheralBinding.groupDeviceControls(
+        JMenu(SerialPeripheralMenuBinding.label(SerialPeripheralSelection.MOBILE_ADAPTER_GB)).apply {
+          add(mobileAdapterConfigurationMenuItem(onMobileAdapterConfiguration))
+        },
+        SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+    )
 
     val gbKiss = GbKissMenuBinding(window, eventBus, onDesktopStatus)
-    peripheralsMenu.add(gbKiss.menu)
     gbKiss.menu.isEnabled = false
     enableWhenEmulationActive(gbKiss.menu)
 
     val actionReplaySlot = JMenuItem("Action Replay Slot…")
     actionReplaySlot.accessibleContext.accessibleDescription =
         "Review, choose, or remove the cartridge attached to the Action Replay slot"
-    peripheralsMenu.add(actionReplaySlot)
+    cartridgeMenu.add(actionReplaySlot)
+    cartridgeMenu.add(camera)
+    cartridgeMenu.add(sonarMenu)
     actionReplaySlot.addActionListener { showActionReplaySlot() }
 
     // the Full Changer, the IR toy of Zok Zok Heroes: picking a Cosmic Character sends
     // its transformation over the CGB infrared port (issue #94)
     val fullChanger = JMenuItem("Full Changer…")
-    peripheralsMenu.add(fullChanger)
     fullChanger.isEnabled = false
     enableWhenEmulationActive(fullChanger)
     fullChanger.addActionListener {
@@ -662,15 +682,22 @@ internal class SwingMenu(
     val tvRemote = JMenuItem("Send TV Remote Signal")
     tvRemote.accessibleContext.accessibleDescription =
         "Send a generic NEC television-remote signal to the Game Boy Color infrared sensor"
-    peripheralsMenu.add(tvRemote)
+    infraredMenu.add(fullChanger)
+    infraredMenu.add(gbKiss.menu)
+    infraredMenu.add(tvRemote)
     tvRemote.isEnabled = false
     enableWhenEmulationActive(tvRemote)
     tvRemote.addActionListener { eventBus.post(TvRemote.SendSignalEvent()) }
 
-    val scanBarcode = JMenuItem("Barcode Boy…")
+    val scanBarcode = JMenuItem("Scan barcode…").apply { isEnabled = false }
     scanBarcode.accessibleContext.accessibleDescription =
         "Enter and send a 13-digit barcode to the Barcode Boy peripheral"
-    peripheralsMenu.add(scanBarcode)
+    serialPeripheralBinding.groupDeviceControls(
+        JMenu(SerialPeripheralMenuBinding.label(SerialPeripheralSelection.BARCODE_BOY)).apply {
+          add(scanBarcode)
+        },
+        SerialPeripheralSelection.BARCODE_BOY,
+    )
     scanBarcode.addActionListener {
       barcodeBoyDialog.show(
           owner = window,
@@ -682,10 +709,15 @@ internal class SwingMenu(
     }
     enableWhenEmulationActive(scanBarcode)
 
-    val scanBardigun = JMenuItem("Bardigun Reader…")
+    val scanBardigun = JMenuItem("Scan barcode…").apply { isEnabled = false }
     scanBardigun.accessibleContext.accessibleDescription =
         "Scan a 13-digit barcode with the Barcode Taisen Bardigun reader"
-    peripheralsMenu.add(scanBardigun)
+    serialPeripheralBinding.groupDeviceControls(
+        JMenu(SerialPeripheralMenuBinding.label(SerialPeripheralSelection.BARDIGUN)).apply {
+          add(scanBardigun)
+        },
+        SerialPeripheralSelection.BARDIGUN,
+    )
     scanBardigun.addActionListener {
       bardigunDialog.show(
           owner = window,
@@ -696,8 +728,13 @@ internal class SwingMenu(
     }
     enableWhenEmulationActive(scanBardigun)
 
-    val sewing = JMenuItem("Sewing machine…")
-    peripheralsMenu.add(sewing)
+    val sewing = JMenuItem("Open controls…").apply { isEnabled = false }
+    serialPeripheralBinding.groupDeviceControls(
+        JMenu(SerialPeripheralMenuBinding.label(SerialPeripheralSelection.SEWING_MACHINE)).apply {
+          add(sewing)
+        },
+        SerialPeripheralSelection.SEWING_MACHINE,
+    )
     enableWhenEmulationActive(sewing)
     sewing.addActionListener {
       if (serialPeripheralBinding.snapshot().selection != SerialPeripheralSelection.SEWING_MACHINE &&
@@ -722,6 +759,8 @@ internal class SwingMenu(
         SwingUtilities.invokeLater { sewingMachineWindow.sessionChanged() }
       }
     }
+    peripheralsMenu.add(cartridgeMenu)
+    peripheralsMenu.add(infraredMenu)
     return peripheralsMenu
   }
 

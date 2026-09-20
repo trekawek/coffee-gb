@@ -1,27 +1,27 @@
-# Turbo File GB and Turbo File Advance
+# Turbo File GB
 
-Choose **Peripherals → Link-port device → Turbo File GB** for RPG Tsukuru GB or
-Uchuujin Tanaka Tarou de RPG Tsuku-ru GB 2. The **Turbo File** submenu imports or
-exports each 1 MiB memory image, inserts/ejects the card and controls write protection.
+Choose **Peripherals → Link port → Turbo File GB → Connect** for RPG Tsukuru GB or
+Uchuujin Tanaka Tarou de RPG Tsuku-ru GB 2. The same submenu imports or exports each
+1 MiB memory image, inserts/ejects the card and controls write protection.
 An ejected card retains its contents; importing a card image replaces them.
 
 The device has 1 MiB of internal flash and a separate 1 MiB removable card. Guest
 writes persist at the end of a transfer session and when the device is detached.
-The combined 2 MiB backing files, `turbo-file-gb.bin` and
-`turbo-file-advance.bin`, live beside the application settings file. They belong
-to the device, independently of the game cartridge's battery save. Save states
+The combined 2 MiB backing file, `turbo-file-gb.bin`, lives beside the application
+settings file. It belongs to the device, independently of the game cartridge's battery save. Save states
 also preserve flash, switches, banking and partially transmitted packets/bits.
 Host imports require an explicit replacement confirmation. A failed durable write
 retains dirty memory for retry and reports an error; individual memories can
 still be exported from the menu. Card attachment and the write-protect switch
 start off when attaching a device.
 
-Both models implement the documented external-clock serial packet protocol,
-checksums, status, read/write banks and 64-byte transfers. The Advance model also
-supports command 34, the 64-byte block-fill operation. Coffee GB does not emulate
-GBA software: Advance support covers the peripheral's shared eight-bit protocol
-and its extension, tested with synthetic transactions. Physical compatibility of
-a Turbo File Advance with GB software is not established by the hardware research.
+The implementation covers the documented external-clock serial packet protocol,
+checksums, status, read/write banks and 64-byte transfers. The earlier Turbo File
+Advance protocol model remains available internally for existing save states, but
+is no longer offered in the menu: it is a GBA peripheral, and Coffee GB does not
+emulate GBA software. Its additional block-fill command was tested only with
+synthetic transactions; compatibility with GB software is not established by the
+hardware research. Existing `turbo-file-advance.bin` storage is preserved.
 The modeled clock is 8192 bits/second on the master clock, including CGB double
 speed; this is a compatibility rate rather than a measured hardware clock.
 

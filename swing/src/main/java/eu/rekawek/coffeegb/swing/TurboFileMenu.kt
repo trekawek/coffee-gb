@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller.TurboFileAction
 import javax.swing.JMenu
 import javax.swing.JMenuItem
 
-internal fun turboFileMenu(run: (TurboFileAction) -> Unit): JMenu = JMenu("Turbo File").apply {
+internal fun turboFileMenu(run: (TurboFileAction) -> Unit): JMenu = JMenu("Turbo File GB").apply {
   fun command(label: String, action: TurboFileAction) {
     add(JMenuItem(label).apply { addActionListener { run(action) } })
   }

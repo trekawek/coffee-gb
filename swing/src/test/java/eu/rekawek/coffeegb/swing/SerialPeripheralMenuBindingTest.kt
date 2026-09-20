@@ -14,6 +14,8 @@ import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.swing.JMenu
+import javax.swing.JMenuItem
 import javax.swing.SwingUtilities
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
@@ -87,6 +89,138 @@ class SerialPeripheralMenuBindingTest {
       assertTrue(realNetworkActions.isEmpty(), "offline selection must not post network actions")
     } finally {
       eventBus.close()
+    }
+  }
+
+  @Test
+  fun `device controls retain exclusive selection and their own actions after grouping`() {
+    val eventBus = EventBusImpl()
+    try {
+      val requested = mutableListOf<SerialPeripheralSelection>()
+      eventBus.register<Controller.SetSerialPeripheralEvent> { event ->
+        requested += event.selection
+        eventBus.post(Controller.SerialPeripheralSelectionChangedEvent(event.selection))
+      }
+      onEdt {
+        val binding = SerialPeripheralMenuBinding(eventBus)
+        var scans = 0
+        val scan = JMenuItem("Scan barcode…").apply { addActionListener { scans++ } }
+        val barcode = JMenu("Barcode Boy").apply { add(scan) }
+        val turbo = JMenu("Turbo File GB").apply { add("Export internal memory…") }
+        binding.groupDeviceControls(barcode, SerialPeripheralSelection.BARCODE_BOY)
+        binding.groupDeviceControls(
+            turbo,
+            SerialPeripheralSelection.TURBO_FILE_GB,
+        )
+
+        assertEquals("Connect", barcode.getItem(0).text)
+        assertEquals("Connect", turbo.getItem(0).text)
+        barcode.getItem(0).doClick()
+        assertEquals(
+            listOf(SerialPeripheralSelection.BARCODE_BOY),
+            binding.items.filterValues { it.isSelected }.keys.toList(),
+        )
+        barcode.menuComponents.filterIsInstance<JMenuItem>().single { it === scan }.doClick()
+        assertEquals(1, scans)
+        assertEquals(listOf(SerialPeripheralSelection.BARCODE_BOY), requested)
+
+        turbo.getItem(0).doClick()
+        binding.items.getValue(SerialPeripheralSelection.PRINTER).doClick()
+        assertEquals(
+            listOf(SerialPeripheralSelection.PRINTER),
+            binding.items.filterValues { it.isSelected }.keys.toList(),
+        )
+        assertEquals(
+            listOf(
+                SerialPeripheralSelection.BARCODE_BOY,
+                SerialPeripheralSelection.TURBO_FILE_GB,
+                SerialPeripheralSelection.PRINTER,
+            ),
+            requested,
+        )
+      }
+    } finally {
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `grouped device titles follow committed ownership through failed handoff and reset`() {
+    val eventBus = EventBusImpl()
+    try {
+      onEdt {
+        val binding =
+            SerialPeripheralMenuBinding(
+                eventBus, initialSelection = SerialPeripheralSelection.BARCODE_BOY)
+        val barcode = JMenu("Barcode Boy").apply { add("Scan barcode…") }
+        val turbo = JMenu("Turbo File GB").apply { add("Export internal memory…") }
+        binding.groupDeviceControls(barcode, SerialPeripheralSelection.BARCODE_BOY)
+        binding.groupDeviceControls(
+            turbo,
+            SerialPeripheralSelection.TURBO_FILE_GB,
+        )
+        assertEquals("Barcode Boy (selected)", barcode.text)
+        assertEquals("Turbo File GB", turbo.text)
+
+        turbo.getItem(0).doClick()
+        assertTrue(binding.isSelected(SerialPeripheralSelection.TURBO_FILE_GB))
+        assertEquals("Barcode Boy (selected)", barcode.text)
+        assertEquals("Turbo File GB", turbo.text)
+        eventBus.post(
+            Controller.SerialPeripheralStatusEvent(
+                SerialPeripheralSelection.TURBO_FILE_GB,
+                SerialPeripheralStatus.UNAVAILABLE,
+                SerialPeripheralError.PORT_OWNED_BY_LINK,
+            ))
+        assertTrue(binding.isSelected(SerialPeripheralSelection.BARCODE_BOY))
+        assertFalse(binding.isSelected(SerialPeripheralSelection.TURBO_FILE_GB))
+        assertEquals("Barcode Boy (selected)", barcode.text)
+        assertEquals("Turbo File GB", turbo.text)
+
+        eventBus.post(
+            Controller.SerialPeripheralSelectionChangedEvent(
+                SerialPeripheralSelection.TURBO_FILE_GB))
+        assertEquals("Barcode Boy", barcode.text)
+        assertEquals("Turbo File GB (selected)", turbo.text)
+        assertTrue(binding.isSelected(SerialPeripheralSelection.TURBO_FILE_GB))
+
+        eventBus.post(ControllerOwnershipCommittedEvent())
+        assertEquals("Barcode Boy", barcode.text)
+        assertEquals("Turbo File GB", turbo.text)
+        assertTrue(binding.isSelected(SerialPeripheralSelection.PEER_TO_PEER))
+        assertFalse(binding.isSelected(SerialPeripheralSelection.TURBO_FILE_GB))
+      }
+    } finally {
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `legacy Advance ownership remains restorable without offering it in the menu`() {
+    EventBusImpl().use { eventBus ->
+      onEdt {
+        val binding = SerialPeripheralMenuBinding(eventBus)
+        val legacy = SerialPeripheralSelection.TURBO_FILE_ADVANCE
+        assertNull(binding.items.getValue(legacy).parent)
+
+        eventBus.post(Controller.SerialPeripheralSelectionChangedEvent(legacy))
+        assertEquals(legacy, binding.snapshot().selection)
+        assertTrue(binding.isSelected(legacy))
+        assertTrue(binding.statusItem.text.contains("Turbo File Advance"))
+        binding.items.getValue(SerialPeripheralSelection.TURBO_FILE_GB).doClick()
+        eventBus.post(
+            Controller.SerialPeripheralStatusEvent(
+                SerialPeripheralSelection.TURBO_FILE_GB,
+                SerialPeripheralStatus.UNAVAILABLE,
+                SerialPeripheralError.PORT_OWNED_BY_LINK,
+            ))
+        assertTrue(binding.isSelected(legacy))
+        assertFalse(binding.isSelected(SerialPeripheralSelection.TURBO_FILE_GB))
+
+        eventBus.post(ControllerOwnershipCommittedEvent())
+        assertFalse(binding.isSelected(legacy))
+        assertTrue(binding.isSelected(SerialPeripheralSelection.PEER_TO_PEER))
+      }
     }
   }
 

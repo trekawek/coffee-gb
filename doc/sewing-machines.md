@@ -1,7 +1,8 @@
 # Game Boy sewing machines
 
-Choose **Peripherals → Sewing machine…** to attach the link peripheral and open
-its controls beside the running game. The machine selector offers the Singer
+Choose **Peripherals → Link port → Sewing machine → Connect** to attach the link
+peripheral, then **Open controls…** in the same submenu to open its controls beside
+the running game. The machine selector offers the Singer
 IZEK-1500, Jaguar JN-100, and Jaguar JN-2000. Only the JN-2000 accepts the EM-2000
 embroidery arm; its attachment and hoop size are independent controls.
 
