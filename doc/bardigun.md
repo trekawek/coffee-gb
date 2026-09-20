@@ -3,12 +3,11 @@
 TAM's reader used by Barcode Taisen Bardigun has its own serial protocol. Namco's
 Barcode Boy, used by Battle Space and other games, remains a separate peripheral.
 
-Open Barcode Taisen Bardigun, then choose **Peripherals → Bardigun Reader…**.
-Select the reader as the link-port device and enter the 13 digits printed under
-an EAN-13 barcode. When the game is waiting for a scan, choose **Scan**. The game
-decides whether the number is valid and what monster or attack it represents;
-Coffee GB does not replace or calculate its check digit. The reader can also be
-selected through **Peripherals → Link-port device**.
+Open Barcode Taisen Bardigun, then choose **Peripherals → Link port → Bardigun
+Reader → Connect**. Choose **Scan barcode…** in the same submenu and enter the
+13 digits printed under an EAN-13 barcode. When the game is waiting for a scan,
+choose **Scan**. The game decides whether the number is valid and what monster
+or attack it represents; Coffee GB does not replace or calculate its check digit.
 
 The scanner uses the Game Boy's internal serial clock. It reports `00` while its
 button is released and streams sampled white/black bars during a swipe. Coffee

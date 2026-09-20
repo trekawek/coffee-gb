@@ -103,9 +103,16 @@ internal class SerialPeripheralMenuBinding(
         },
     private val onRendered: (SerialPeripheralUiSnapshot) -> Unit = {},
 ) {
-  val menu = JMenu("Link-port device")
+  val menu = JMenu("Link port")
   val statusItem = JMenuItem()
   val items: Map<SerialPeripheralSelection, JRadioButtonMenuItem>
+  private val deviceMenus = mutableListOf<DeviceMenu>()
+
+  private data class DeviceMenu(
+      val menu: JMenu,
+      val label: String,
+      val selections: List<SerialPeripheralSelection>,
+  )
 
   @Volatile
   private var current =
@@ -120,7 +127,8 @@ internal class SerialPeripheralMenuBinding(
   init {
     val group = ButtonGroup()
     val mutableItems = EnumMap<SerialPeripheralSelection, JRadioButtonMenuItem>(SerialPeripheralSelection::class.java)
-    DISPLAY_ORDER.forEach { selection ->
+    // Retain radio models for legacy state selections, even when no menu choice exposes them.
+    SerialPeripheralSelection.entries.forEach { selection ->
       val item = JRadioButtonMenuItem(label(selection), selection == initialSelection)
       item.accessibleContext.accessibleDescription = description(selection)
       item.addActionListener {
@@ -166,10 +174,10 @@ internal class SerialPeripheralMenuBinding(
         }
       }
       group.add(item)
-      menu.add(item)
       mutableItems[selection] = item
     }
     items = Collections.unmodifiableMap(mutableItems)
+    DISPLAY_ORDER.forEach { menu.add(items.getValue(it)) }
     menu.addSeparator()
     statusItem.isEnabled = false
     menu.add(statusItem)
@@ -246,6 +254,30 @@ internal class SerialPeripheralMenuBinding(
 
   fun isSelected(selection: SerialPeripheralSelection): Boolean = items[selection]?.isSelected == true
 
+  /** Keeps each device's connection choice beside its controls, in the same exclusive group. */
+  fun groupDeviceControls(deviceMenu: JMenu, vararg selections: SerialPeripheralSelection) {
+    check(SwingUtilities.isEventDispatchThread())
+    require(selections.isNotEmpty())
+    val choices = selections.map(items::getValue)
+    require(choices.all { it.parent == menu.popupMenu })
+    val index = menu.menuComponents.indexOf(choices.first())
+    choices.forEach(menu::remove)
+    if (deviceMenu.menuComponentCount > 0) deviceMenu.insertSeparator(0)
+    choices.forEachIndexed { choiceIndex, item ->
+      item.text = if (choices.size == 1) "Connect" else "Connect ${label(selections[choiceIndex])}"
+      deviceMenu.insert(item, choiceIndex)
+    }
+    deviceMenus += DeviceMenu(deviceMenu, deviceMenu.text, selections.toList())
+    menu.insert(deviceMenu, index)
+    renderDeviceMenus()
+  }
+
+  private fun renderDeviceMenus() {
+    deviceMenus.forEach { device ->
+      device.menu.text = device.label + if (current.selection in device.selections) " (selected)" else ""
+    }
+  }
+
   private fun postSelectionWithoutOwnershipRollback(selection: SerialPeripheralSelection) {
     try {
       eventBus.post(Controller.SetSerialPeripheralEvent(selection))
@@ -276,6 +308,7 @@ internal class SerialPeripheralMenuBinding(
     check(SwingUtilities.isEventDispatchThread()) {
       "Serial peripheral menu rendering must run on the Event Dispatch Thread"
     }
+    renderDeviceMenus()
     statusItem.text = statusText(snapshot, mobileNetwork)
     statusItem.toolTipText =
         if (snapshot.statusSelection == SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
@@ -291,20 +324,19 @@ internal class SerialPeripheralMenuBinding(
         listOf(
             SerialPeripheralSelection.PEER_TO_PEER,
             SerialPeripheralSelection.NONE,
-            SerialPeripheralSelection.PRINTER,
             SerialPeripheralSelection.BARCODE_BOY,
             SerialPeripheralSelection.BARDIGUN,
-            SerialPeripheralSelection.TURBO_FILE_GB,
-            SerialPeripheralSelection.TURBO_FILE_ADVANCE,
-            SerialPeripheralSelection.SEWING_MACHINE,
+            SerialPeripheralSelection.PRINTER,
             SerialPeripheralSelection.GPS_RECEIVER,
             SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+            SerialPeripheralSelection.SEWING_MACHINE,
+            SerialPeripheralSelection.TURBO_FILE_GB,
         )
 
     internal fun label(selection: SerialPeripheralSelection): String =
         when (selection) {
           SerialPeripheralSelection.PEER_TO_PEER -> "Link cable (default)"
-          SerialPeripheralSelection.NONE -> "No link-port peripheral"
+          SerialPeripheralSelection.NONE -> "None"
           SerialPeripheralSelection.PRINTER -> "Game Boy Printer"
           SerialPeripheralSelection.BARCODE_BOY -> "Barcode Boy"
           SerialPeripheralSelection.BARDIGUN -> "Bardigun Reader"

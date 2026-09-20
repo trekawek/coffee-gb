@@ -534,7 +534,7 @@ class SwingGui private constructor(
             ),
             desktopActions,
             emulator::isLinkedControllerActive,
-            mobileAdapterWindow::show,
+            mobileAdapterWindow::showOrRaise,
             { themeManager.current?.tokens ?: initialTheme.tokens },
             { message ->
               desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
@@ -1178,8 +1178,6 @@ class SwingGui private constructor(
             requestedCategory
                 ?: desktopUiStateController.lastPreferencesCategory().toPreferencesCategory(),
         initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.PREFERENCES),
-        mobileAdapterSummary = mobileAdapterWindow.currentSummary().preferencesText(),
-        configureMobileAdapter = mobileAdapterWindow::showOrRaise,
         onCategoryChanged = { category ->
           desktopUiStateController.rememberPreferencesCategory(category.toDesktopCategory())
         },

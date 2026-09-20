@@ -10,8 +10,8 @@ input returns zero, including when running DMG software. Turning sensor power
 off returns FF. This is modeled independently of the ROM's color-support flag.
 
 The default input is a repeating **simulated** seabed with isolated fish echoes.
-Peripherals → Pocket Sonar provides open water, the default scene, power controls,
-and PNG input. PNGs must be 160 × 96 or 160 × 192. White is water, black is an
+**Peripherals → Cartridge → Pocket Sonar** provides open water, the default scene,
+power controls, and PNG input. PNGs must be 160 × 96 or 160 × 192. White is water, black is an
 echo, dark gray (#555555) begins the floor, and light gray (#AAAAAA) is sediment
 below it (a weaker echo above it). Short images hold their final row for the
 additional samples used by magnification. Columns repeat after 160 pulses.
