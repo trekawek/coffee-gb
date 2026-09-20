@@ -58,6 +58,13 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
         return dmgCompat;
     }
 
+    public void restoreBessState(int key0, int key1) {
+        dmgCompat = gbc && (key0 & 4) != 0;
+        currentSpeed = gbc && !dmgCompat && (key1 & 0x80) != 0;
+        prepareSpeedSwitch = gbc && !dmgCompat && (key1 & 1) != 0;
+        notifyTimingStateChanged();
+    }
+
     @Override
     public boolean accepts(int address) {
         return address == 0xff4c || address == 0xff4d;

@@ -1,5 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.state.bess.BessCartridgeState;
+import eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite;
+import java.util.List;
+import java.util.Map;
+
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
@@ -17,6 +22,44 @@ import org.slf4j.LoggerFactory;
 import java.util.Arrays;
 
 public class Mbc1 implements MemoryController {
+
+
+    @Override
+    public BessCartridgeState captureBessState() {
+        if (getClass() != Mbc1.class) {
+            throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+        }
+        if (wideBank || hongKongPokemonRed || workMasterFlashCart) {
+            throw new IllegalArgumentException("BESS cannot represent this MBC1 banking variant");
+        }
+        return new BessCartridgeState(BessCartridgeState.bytes(ram),
+                List.of(new MbcWrite(0x0000, ramWriteEnabled ? 0x0a : 0),
+                        new MbcWrite(0x2000, selectedRomBank & 0x1f),
+                        new MbcWrite(0x4000, memoryModel == 0
+                                ? selectedRomBank >> 5 : selectedRamBank),
+                        new MbcWrite(0x6000, memoryModel)), Map.of());
+    }
+
+    @Override
+    public void restoreBessWrite(int address, int value) {
+        if (address >= 0x4000 && address < 0x6000) {
+            // The physical upper bank latch is shared between ROM and RAM banking. Portable
+            // files may restore it before switching mode, so update both internal views.
+            selectedRamBank = value & 3;
+            selectedRomBank = (selectedRomBank & 0x1f) | ((value & 3) << 5);
+            upperRegisterUsed = true;
+            wideBank = false;
+            cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
+        } else {
+            setByte(address, value);
+        }
+    }
+
+    @Override
+    public void restoreBessRam(byte[] data) {
+        BessCartridgeState.restoreRam(data, ram);
+        ramUpdated = true;
+    }
 
     @Override
     public boolean isPerformanceRamAccessSafe() {

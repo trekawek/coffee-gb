@@ -41,6 +41,35 @@ incompatible managed state remains authoritative and is reported instead of sile
 older sidecar. Legacy sidecars are never deleted, rewritten, or overwritten by this path; new
 desktop quick saves use the managed portable `StateFile` layout described below.
 
+## BESS state interchange
+
+The File menu has a separate section with **Load BESS state** and **Save BESS state**.
+Open the matching ROM before loading or saving. Saves use the `.bess` extension; the load
+dialog also accepts other extensions because some emulators append BESS data to their native
+state files. Existing destinations require overwrite confirmation, and replacement is atomic.
+
+Coffee GB reads and writes [BESS 1.1](https://github.com/LIJI32/SameBoy/blob/master/BESS.md).
+It supports DMG, Pocket, Color (including Color's DMG compatibility mode), and Super Game Boy
+hardware, with
+plain ROM/RAM, MBC1, MBC2, MBC3/MBC30, MBC5, MBC7, HuC1, and HuC3 cartridges. Banked RAM, Color
+palettes, Super Game Boy borders/colorization/multiplayer selection, and supported cartridge
+clocks are preserved. The loaded console family must match
+the file. When present, the file's ROM title and global checksum must match the opened ROM.
+Pass-through cartridges and unsupported mapper variants are rejected explicitly.
+MBC7 preserves EEPROM data and tilt latches while its EEPROM interface is idle; a state with
+an in-progress EEPROM command is rejected.
+
+BESS stores architectural state without complete CPU, video, audio, or peripheral pipeline
+timing. Video and audio pipelines restart on import; native Coffee GB states remain the option
+for exact continuation, rewind, and input recordings. BESS operations are unavailable during
+netplay or input recording/playback. A BESS load clears rewind/debugger history and disconnects
+the current serial peripheral's session.
+
+File work runs in the background. Export reaches a safe instruction boundary on an isolated copy,
+without advancing the running game. Import builds and validates a temporary machine before
+transactionally replacing the active state. A malformed, incompatible, or outdated-session
+request leaves the active game intact.
+
 ## Storage layout and directory changes
 
 The default game root is:

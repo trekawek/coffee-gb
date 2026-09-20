@@ -74,6 +74,12 @@ public class Background implements StatefulComponent<Background> {
     }
 
     private void render(Commands.PctTrnCmd picture) {
+        if (eventBus != null) {
+            eventBus.post(renderPicture(picture));
+        }
+    }
+
+    private SgbBackgroundReadyEvent renderPicture(Commands.PctTrnCmd picture) {
         int[] buffer = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
         int[] mask = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
         for (int i = 0; i < buffer.length; i++) {
@@ -107,9 +113,50 @@ public class Background implements StatefulComponent<Background> {
             mask[i] = pixel;
             buffer[i] = picture.getPaletteColor(e.getPaletteNumber(), pixel);
         }
+        return new SgbBackgroundReadyEvent(buffer, mask);
+    }
+
+    public byte[] captureBessTiles() {
+        return eu.rekawek.coffeegb.core.state.bess.BessMemory.copy(tiles);
+    }
+
+    public byte[] captureBessTilemap() {
+        return captureBessPictureRange(0, 0x800);
+    }
+
+    public byte[] captureBessPalettes() {
+        return captureBessPictureRange(0x800, 0x80);
+    }
+
+    private byte[] captureBessPictureRange(int offset, int length) {
+        if (pendingPicture == null) return new byte[0];
+        byte[] result = new byte[length];
+        for (int i = 0; i < length; i++) result[i] = (byte) pendingPicture.dataTransfer[offset + i];
+        return result;
+    }
+
+    /** Reconstructs the SNES border immediately; BESS has no border-animation phase. */
+    public SgbBackgroundReadyEvent restoreBessState(byte[] tileData, byte[] tilemap, byte[] palettes) {
+        eu.rekawek.coffeegb.core.state.bess.BessMemory.restore(tiles, tileData, 0);
+        borderAnimation = 0;
+        pendingPicture = null;
+        if (tilemap.length == 0 && palettes.length == 0) return null;
+        int[] packet = new int[16];
+        packet[0] = (0x14 << 3) | 1;
+        Commands.PctTrnCmd picture = new Commands.PctTrnCmd(packet);
+        int[] data = new int[0x1000];
+        for (int i = 0; i < Math.min(tilemap.length, 0x800); i++) data[i] = tilemap[i] & 0xff;
+        for (int i = 0; i < Math.min(palettes.length, 0x80); i++) data[0x800 + i] = palettes[i] & 0xff;
+        picture.setDataTransfer(data);
+        String violation = Commands.validateTransferCommitData(picture, data);
+        if (violation != null) throw new IllegalArgumentException("Unsupported BESS SGB border: " + violation);
+        pendingPicture = picture;
+        SgbBackgroundReadyEvent rendered = renderPicture(picture);
         if (eventBus != null) {
-            eventBus.post(new SgbBackgroundReadyEvent(buffer, mask));
+            eventBus.post(rendered);
+            eventBus.post(new SgbBackgroundFadeEvent(0));
         }
+        return rendered;
     }
 
     private int getPixel(int tileId, int x, int y) {

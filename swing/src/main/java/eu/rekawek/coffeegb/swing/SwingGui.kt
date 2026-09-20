@@ -476,6 +476,8 @@ class SwingGui private constructor(
                 inputRecording = inputRecordingWindow::show,
                 stopInputRecording = ::stopInputRecording,
                 loadInputRecording = stateUxController::loadInputRecording,
+                loadBessState = { menu.loadBessState() },
+                saveBessState = { menu.saveBessState() },
                 setCommandBarVisible = ::setCommandBarVisible,
                 selectStateSlot = { slot ->
                   desktopUiCoordinator.stateSlot(slot)
@@ -540,6 +542,7 @@ class SwingGui private constructor(
             onOpenRecentRom = { path ->
               romOpen.openRecent(path, recentGameMetadataStore.read(path)?.origin)
             },
+            onBessStatus = { message -> desktopUiCoordinator.warning(message) },
         )
     menu.addMenu()
 

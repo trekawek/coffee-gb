@@ -373,6 +373,21 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         length = 0x7f;
     }
 
+    public void captureBessRegisters(byte[] io) {
+        io[0x51] = (byte) (src >>> 8);
+        io[0x52] = (byte) src;
+        io[0x53] = (byte) (dst >>> 8);
+        io[0x54] = (byte) dst;
+        io[0x55] = (byte) getByte(HDMA5);
+    }
+
+    /** Restores address/length latches on a fresh machine without triggering VRAM DMA. */
+    public void restoreBessRegisters(byte[] io) {
+        src = ((io[0x51] & 0xff) << 8) | (io[0x52] & 0xf0);
+        dst = ((io[0x53] & 0x1f) << 8) | (io[0x54] & 0xf0);
+        length = io[0x55] & 0x7f;
+    }
+
     public void onGpuUpdate(Mode newGpuMode) {
         this.gpuMode = newGpuMode;
         if (newGpuMode == Mode.HBlank) {

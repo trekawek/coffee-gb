@@ -37,6 +37,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private static final int INPUT_FILTER_MASK = (1 << INPUT_FILTER_SAMPLES) - 1;
 
+    /** BESS's command-disable flag supplements the existing serialized multiplayer scalar. */
+    private static final int STATE_SGB_COMMANDS_DISABLED = 0x100;
+
     /** BOGA clocks the DMG JOYP receiver once per four 4.194304 MHz master ticks. */
     static final int JOYP_CLOCK_TICKS = 4;
 
@@ -109,6 +112,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private int players;
     private int currentPlayer;
+    private boolean sgbCommandsDisabled;
 
     private boolean transferInProgress;
     private boolean transferReadyForData;
@@ -134,6 +138,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         transferInProgress = isSgb;
         transferReadyForData = false;
         sgbBus.register(event -> {
+            if (sgbCommandsDisabled) {
+                return;
+            }
             invalidateInputFastPaths();
             players = event.getMultiplayerControl() & 0x03;
             if (players == 2) {
@@ -589,7 +596,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (nextSelection != previousSelection) {
             invalidateInputFastPaths();
         }
-        if (isSgb) {
+        if (isSgb && !sgbCommandsDisabled) {
             int input = nextSelection;
             // The ICD2 receiver reacts to line transitions. Rewriting the level that is
             // already on JOYP must neither add a bit nor abort an in-flight packet.
@@ -739,7 +746,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         // release event ever arriving, stick when forward emulation resumes (issue: rewind
         // replays past button presses).
         return new JoypadState(p1, tick, inputHistory, filteredInputLines,
-                inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
+                inputChangedSinceLastTick, encodedPlayers(), currentPlayer, transferInProgress,
                 transferReadyForData, pendingTransferBit, currentByte, currentPacket.clone(),
                 currentByteIndex, currentPacketIndex);
     }
@@ -747,7 +754,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     @Override
     public ComponentState<Joypad> captureState(MachineStateCapture capture) {
         return new JoypadState(p1, tick, inputHistory, filteredInputLines,
-                inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
+                inputChangedSinceLastTick, encodedPlayers(), currentPlayer, transferInProgress,
                 transferReadyForData, pendingTransferBit, currentByte, capture.ints(currentPacket),
                 currentByteIndex, currentPacketIndex);
     }
@@ -764,7 +771,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         this.inputHistory = mem.inputHistory;
         this.filteredInputLines = mem.filteredInputLines;
         this.inputChangedSinceLastTick = mem.inputChangedSinceLastTick;
-        this.players = mem.players;
+        this.players = mem.players & 3;
+        this.sgbCommandsDisabled = (mem.players & STATE_SGB_COMMANDS_DISABLED) != 0;
         this.currentPlayer = mem.currentPlayer;
         this.transferInProgress = mem.transferInProgress;
         this.transferReadyForData = mem.transferReadyForData;
@@ -908,10 +916,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if ((state.p1 & 0xcf) != 0) {
             throw new IllegalArgumentException("Invalid JOYP selector state");
         }
-        if (state.players < 0 || state.players > 3) {
+        if ((state.players & ~(3 | STATE_SGB_COMMANDS_DISABLED)) != 0) {
             throw new IllegalArgumentException("Invalid SGB multiplayer control");
         }
-        boolean validPlayer = switch (state.players) {
+        boolean validPlayer = switch (state.players & 3) {
             case 0 -> state.currentPlayer == 0;
             case 1 -> state.currentPlayer >= 0 && state.currentPlayer <= 1;
             case 2 -> state.currentPlayer == 0 || state.currentPlayer == 2;
@@ -950,6 +958,41 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     /** Stable platform-neutral SGB multiplayer diagnostics for UI/status consumers. */
     public SgbMultiplayerStatus getSgbMultiplayerStatus() {
         return new SgbMultiplayerStatus(SgbMultiplayerMode.fromControl(players), currentPlayer);
+    }
+
+    public boolean areBessSgbCommandsEnabled() {
+        return isSgb && !sgbCommandsDisabled;
+    }
+
+    public boolean hasBessPendingPacket() {
+        return transferInProgress && (currentPacketIndex != 0 || currentByteIndex != 0 || pendingTransferBit >= 0);
+    }
+
+    public int captureBessMultiplayerStatus() {
+        // BESS cannot distinguish the undocumented control-2 selection protocol. Preserve
+        // its physical controller index through the ordinary four-player representation.
+        int count = players == 2 ? 4 : players + 1;
+        return (count << 4) | currentPlayer;
+    }
+
+    public void restoreBessSgbState(boolean commandsEnabled, int multiplayerStatus) {
+        int count = multiplayerStatus >>> 4;
+        int current = multiplayerStatus & 15;
+        if ((count != 1 && count != 2 && count != 4) || current >= count) {
+            throw new IllegalArgumentException("Invalid BESS multiplayer status");
+        }
+        invalidateInputFastPaths();
+        sgbCommandsDisabled = !commandsEnabled;
+        players = commandsEnabled ? count - 1 : 0;
+        currentPlayer = commandsEnabled ? current : 0;
+        abortSgbPacket();
+        currentByte = currentByteIndex = currentPacketIndex = 0;
+        Arrays.fill(currentPacket, 0);
+        refreshReleasedInputFastPathEligibility();
+    }
+
+    private int encodedPlayers() {
+        return players | (sgbCommandsDisabled ? STATE_SGB_COMMANDS_DISABLED : 0);
     }
 
     public enum SgbMultiplayerMode {

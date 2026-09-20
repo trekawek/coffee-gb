@@ -173,6 +173,42 @@ public class Mbc7Eeprom  {
         return doBit;
     }
 
+    /** BESS stores EEPROM words in little-endian order, unlike our byte-oriented backing store. */
+    public byte[] captureBessRam() {
+        byte[] result = new byte[eeprom.length];
+        for (int i = 0; i < result.length; i++) result[i] = (byte) eeprom[i ^ 1];
+        return result;
+    }
+
+    public void restoreBessRam(byte[] data) {
+        for (int i = 0; i < eeprom.length; i++) {
+            eeprom[i ^ 1] = i < data.length ? data[i] & 0xff : 0;
+        }
+        dirty = true;
+    }
+
+    public int captureBessFlags() {
+        if (state != State.IDLE) {
+            throw new IllegalArgumentException("BESS cannot save an active MBC7 EEPROM command");
+        }
+        // DI and CS do not affect an idle command and will be supplied by the next CPU write.
+        return (doBit << 1) | (sk ? 8 : 0) | (writeEnabled ? 0x20 : 0);
+    }
+
+    public void restoreBessControl(int flags, int argumentBits, int command, int pendingBits) {
+        if (argumentBits != 0 || command != 0 || pendingBits != 0xffff) {
+            throw new IllegalArgumentException("BESS cannot load an active MBC7 EEPROM command");
+        }
+        state = State.IDLE;
+        bitsRead = 0;
+        this.command = 0;
+        address = 0;
+        writeValue = 0;
+        doBit = (flags >> 1) & 1;
+        sk = (flags & 8) != 0;
+        writeEnabled = (flags & 0x20) != 0;
+    }
+
     public ComponentState<Mbc7Eeprom> captureState() {
         return new EepromState(
                 eeprom.clone(),

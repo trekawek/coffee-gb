@@ -342,9 +342,11 @@ internal object StateSemantics {
       put("eu.rekawek.coffeegb.core.joypad.Joypad\$JoypadState",
           constrained("SGB packet and multiplayer controller indices are checked against owned buffers.") {
             it.require((it.int("p1") and 0xcf) == 0, "has invalid JOYP selector bits")
-            val control = it.int("players")
+            val packedControl = it.int("players")
+            val control = packedControl and 3
             val current = it.int("currentPlayer")
-            it.range("players", 0, 3)
+            it.require((packedControl and 0x103.inv()) == 0,
+                "has invalid multiplayer or SGB command-disable bits")
             it.require(when (control) {
               0 -> current == 0
               1 -> current in 0..1

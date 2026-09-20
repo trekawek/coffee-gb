@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.gpu.Gpu;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
+import eu.rekawek.coffeegb.core.state.bess.BessMemory;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,36 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu>, PerformanceRom
 
     public void setGpu(Gpu gpu) {
         oamEchoRam.setGpu(gpu);
+    }
+
+    /** Physical WRAM banks, independent of SVBK and compatibility-mode access gates. */
+    public byte[] captureBessRam() {
+        int[] banked = gbc ? ((GbcRam.GbcRamState) gbcRam.captureState()).ram()
+                : ramD000.getSpace();
+        byte[] result = new byte[0x1000 + banked.length];
+        for (int i = 0; i < 0x1000; i++) {
+            result[i] = (byte) ramC000.getSpace()[i];
+        }
+        for (int i = 0; i < banked.length; i++) {
+            result[0x1000 + i] = (byte) banked[i];
+        }
+        return result;
+    }
+
+    public void restoreBessRam(byte[] ram, byte[] hram, int svbk) {
+        BessMemory.restore(ramC000.getSpace(), ram, 0);
+        if (gbc) {
+            int[] banks = new int[7 * 0x1000];
+            BessMemory.restore(banks, ram, 0x1000);
+            gbcRam.restoreState(new GbcRam.GbcRamState(banks, svbk));
+        } else {
+            BessMemory.restore(ramD000.getSpace(), ram, 0x1000);
+        }
+        BessMemory.restore(ramFF80.getSpace(), hram, 0);
+    }
+
+    public byte[] captureBessHighRam() {
+        return BessMemory.copy(ramFF80.getSpace());
     }
 
     private final UndocumentedGbcRegisters undocumentedGbcRegisters = new UndocumentedGbcRegisters();

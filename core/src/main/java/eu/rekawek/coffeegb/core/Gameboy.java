@@ -45,6 +45,8 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
+import eu.rekawek.coffeegb.core.state.bess.BessMemory;
+import eu.rekawek.coffeegb.core.state.bess.BessState;
 import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
@@ -78,6 +80,7 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
@@ -408,7 +411,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             mmu.setCodeBreakerRumble(codeBreakerRumble);
         }
 
-        if (configuration.debugHistoryReplay) {
+        if (configuration.debugHistoryReplay || configuration.bessTransfer) {
             cartridge = new Cartridge(
                     configuration.rom,
                     configuration.debugHistoryPrimaryBatteryShape.createServiceFreeBattery(),
@@ -427,7 +430,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
-            if (configuration.debugHistoryReplay) {
+            if (configuration.debugHistoryReplay || configuration.bessTransfer) {
                 if (configuration.debugHistorySlotBatteryShape == null) {
                     throw new IllegalStateException(
                             "Debug-history replay is missing the live slot battery shape");
@@ -3991,6 +3994,172 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
     }
 
+    /**
+     * Captures BESS architectural state. Run this on a detached copy: completing a pending
+     * instruction or DMA advances the machine, since BESS cannot describe either pipeline.
+     */
+    public BessState captureBessState() {
+        requireBessHardware();
+        // Check mapper support before executing even one dot.
+        cartridge.captureBessState();
+        if (cpu.getState() == Cpu.State.LOCKED) {
+            throw new IllegalArgumentException("BESS cannot represent a CPU locked by an invalid opcode");
+        }
+        int remaining = 4 * 70224;
+        while (!cpu.isBessBoundary() || dma.isTransferInProgress() || hdma.hasActiveOrPendingTransfer()
+                || (hardwareProfile.family() == HardwareProfile.Family.SGB
+                && (superGameboy.hasBessPendingTransfer() || joypad.hasBessPendingPacket()))) {
+            if (--remaining == 0) {
+                throw new IllegalArgumentException("Unable to reach a safe instruction boundary for BESS export");
+            }
+            tick();
+        }
+        var cart = cartridge.captureBessState();
+        byte[] io = new byte[0x80];
+        for (int i = 0; i < io.length; i++) {
+            // IF has CPU read side effects; use the architectural latch instead.
+            io[i] = (byte) (i == 0x0f ? interruptManager.getDebugInterruptFlags()
+                    : mmu.getByte(0xff00 + i));
+        }
+        io[4] = (byte) (timer.getDivCounter() >>> 8);
+        io[0x4c] = (byte) (speedMode.isDmgCompat() ? 4 : 0x80);
+        io[0x50] = (byte) (biosShadow.isBootFinished() ? 1 : 0);
+        sound.captureBessRegisters(io);
+        if (gbc) {
+            hdma.captureBessRegisters(io);
+        }
+        var registers = cpu.getRegisters();
+        int executionState = switch (cpu.getState()) {
+            case HALTED -> 1;
+            case STOPPED -> 2;
+            default -> 0;
+        };
+        String model = switch (hardwareProfile.family()) {
+            case CGB -> hardwareProfile == HardwareProfileRegistry.CGB0 ? "CC0 " : "CC  ";
+            case DMG -> hardwareProfile == HardwareProfileRegistry.MGB ? "GM  " : "GD  ";
+            case SGB -> hardwareProfile == HardwareProfileRegistry.SGB2 ? "S2  " : "SN  ";
+        };
+        BessState.Sgb sgb = joypad.areBessSgbCommandsEnabled()
+                ? new BessState.Sgb(background.captureBessTiles(), background.captureBessTilemap(),
+                background.captureBessPalettes(), sgbDisplay.captureBessActivePalettes(),
+                sgbDisplay.captureBessRamPalettes(), sgbDisplay.captureBessAttributeMap(),
+                sgbDisplay.captureBessAttributeFiles(), joypad.captureBessMultiplayerStatus()) : null;
+        String version = Gameboy.class.getPackage().getImplementationVersion();
+        return new BessState("Coffee GB " + (version == null ? "development" : version),
+                bessCartridgeInfo(), new BessState.Core(
+                model, registers.getPC(), registers.getAF(), registers.getBC(), registers.getDE(),
+                registers.getHL(), registers.getSP(), interruptManager.isIme(),
+                interruptManager.getDebugInterruptEnableFlags(), executionState, io,
+                mmu.captureBessRam(), gpu.captureBessVideoRam(), cart.ram(),
+                BessMemory.copy(oamRam.getSpace()), mmu.captureBessHighRam(),
+                gpu.captureBessBackgroundPalettes(), gpu.captureBessObjectPalettes()),
+                cart.registers(), cart.extensions(), sgb);
+    }
+
+    /**
+     * Imports BESS into a fresh, unattached SKIP-bootstrap machine. The caller publishes its
+     * complete native state only after this succeeds, keeping failed imports transactional.
+     * Pixel/audio pipelines restart because the interchange format does not contain their phase.
+     */
+    public void restoreBessState(BessState state) {
+        requireBessHardware();
+        Objects.requireNonNull(state, "state");
+        var core = state.core();
+        if (core.model().length() != 4 || core.io().length != 0x80) {
+            throw new IllegalArgumentException("Invalid BESS core data");
+        }
+        char family = core.model().charAt(0);
+        char expectedFamily = switch (hardwareProfile.family()) {
+            case CGB -> 'C';
+            case DMG -> 'G';
+            case SGB -> 'S';
+        };
+        if (expectedFamily != family) {
+            String expectedHardware = switch (family) {
+                case 'C' -> "Game Boy Color";
+                case 'S' -> "Super Game Boy";
+                default -> "Game Boy";
+            };
+            throw new IllegalArgumentException("BESS hardware model does not match the running console; "
+                    + "open the ROM using " + expectedHardware + " hardware");
+        }
+        if (state.info() != null && !Arrays.equals(state.info(), bessCartridgeInfo())) {
+            throw new IllegalArgumentException("BESS state belongs to a different ROM");
+        }
+        byte[] io = core.io();
+        if (io[0x50] == 0 && !Bios.hasBundledBootRom(hardwareProfile)) {
+            throw new IllegalArgumentException("This BESS state requires an unavailable boot ROM");
+        }
+        cartridge.restoreBessState(core.mbcRam(), state.mbcWrites(), state.extensions());
+
+        // Turn off the LCD before touching VRAM and its indexed color registers.
+        gpu.setByte(0xff40, 0);
+        speedMode.restoreBessState(io[0x4c] & 0xff, io[0x4d] & 0xff);
+        biosShadow.restoreBessBootState(io[0x50] != 0);
+        int svbk = speedMode.isDmgCompat() ? 1 : io[0x70] & 7;
+        mmu.restoreBessRam(core.ram(), core.hram(), svbk);
+        BessMemory.restore(oamRam.getSpace(), core.oam(), 0);
+        gpu.restoreBessMemory(core.vram(), core.bgPalettes(), core.objPalettes());
+        joypad.setByte(0xff00, io[0] & 0xff);
+        if (family == 'S') {
+            BessState.Sgb sgb = state.sgb();
+            joypad.restoreBessSgbState(sgb != null, sgb == null ? 0x10 : sgb.multiplayerStatus());
+            if (sgb != null) {
+                sgbDisplay.restoreBessState(sgb);
+                sgbDisplay.restoreBessBackground(background.restoreBessState(
+                        sgb.borderTiles(), sgb.borderTilemap(), sgb.borderPalettes()));
+            }
+        }
+        serialPort.restoreBessState(io[1] & 0xff, io[2] & 0xff);
+        timer.restoreBessRegisters(io);
+        sound.restoreBessRegisters(io);
+        dma.restoreBessRegister(io[0x46] & 0xff);
+
+        // LY and STAT's read-only mode/coincidence bits are deliberately rebuilt by the PPU.
+        for (int register : new int[]{0x41, 0x42, 0x43, 0x45, 0x47, 0x48, 0x49, 0x4a, 0x4b}) {
+            mmu.setByte(0xff00 + register, io[register] & 0xff);
+        }
+        if (gbc) {
+            hdma.restoreBessRegisters(io);
+            for (int register : new int[]{0x4f, 0x56, 0x68, 0x6a, 0x72, 0x73, 0x74, 0x75}) {
+                mmu.setByte(0xff00 + register, io[register] & 0xff);
+            }
+            // BESS defines boot-time object priority through KEY0, not a later OPRI write.
+            mmu.setByte(0xff6c, speedMode.isDmgCompat() ? 1 : 0);
+        }
+        gpu.setByte(0xff40, io[0x40] & 0xff);
+        cpu.restoreBessState(core);
+        interruptManager.setByte(0xffff, core.ie());
+        interruptManager.setByte(0xff0f, io[0x0f] & 0xff);
+        interruptManager.clearCpuReadInterruptPreview();
+        if (core.ime()) {
+            interruptManager.enableInterrupts(false);
+        } else {
+            interruptManager.disableInterrupts(false);
+        }
+        lcdDisabled = false;
+        lcdOffTicks = 0;
+        requestedScreenRefresh = true;
+        blankCgbBootTilePending = false;
+        clearBootTilemapPending = false;
+        clearCgbBootOamShadowPending = false;
+        bootCompatibilityResolved = biosShadow.isBootFinished();
+        gpu.setBootCompatibilityResolved(bootCompatibilityResolved);
+    }
+
+    private void requireBessHardware() {
+        if (slotCartridge != null) {
+            throw new IllegalArgumentException("BESS states do not support pass-through cartridges");
+        }
+    }
+
+    private byte[] bessCartridgeInfo() {
+        byte[] result = new byte[0x12];
+        System.arraycopy(cartridge.readDebugRom(0x134, 0x10), 0, result, 0, 0x10);
+        System.arraycopy(cartridge.readDebugRom(0x14e, 2), 0, result, 0x10, 2);
+        return result;
+    }
+
     public AddressSpace getAddressSpace() {
         return gameGenie;
     }
@@ -5055,6 +5224,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         /** Selects service-free batteries while retaining live snapshot record ownership. */
         private boolean debugHistoryReplay;
 
+        /** BESS workers retain battery record shape but cannot access host persistence or input. */
+        private boolean bessTransfer;
+
         private Battery.DebugHistoryReplayShape debugHistoryPrimaryBatteryShape;
 
         private Battery.DebugHistoryReplayShape debugHistorySlotBatteryShape;
@@ -5314,6 +5486,32 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return copy;
         }
 
+        /**
+         * An isolated BESS worker preserves the live battery's state-record shape, without
+         * opening its file or performing legacy-save migration during cartridge construction.
+         * Its clock is frozen here, so time spent queued or loading cannot age the saved RTC.
+         */
+        public GameboyConfiguration forBessTransfer(Gameboy liveGameboy) {
+            Gameboy source = Objects.requireNonNull(liveGameboy, "liveGameboy");
+            GameboyConfiguration copy = forRestore();
+            copy.bessTransfer = true;
+            copy.debugHistoryPrimaryBatteryShape = source.cartridge.debugHistoryReplayBatteryShape();
+            copy.debugHistorySlotBatteryShape = source.slotCartridge == null
+                    ? null : source.slotCartridge.debugHistoryReplayBatteryShape();
+            long capturedTime = rtcTimeSource.currentTimeMillis();
+            copy.rtcTimeSource = () -> capturedTime;
+            copy.playerInputSource = PlayerInputSource.RELEASED;
+            copy.batteryData = null;
+            copy.slotBatteryData = null;
+            copy.batteryStorage = null;
+            copy.slotBatteryStorage = null;
+            return copy;
+        }
+
+        public boolean isBessTransfer() {
+            return bessTransfer;
+        }
+
         /** A boot-equivalent copy that cannot read or write a user's battery save. */
         public GameboyConfiguration forBootTemplate() {
             GameboyConfiguration copy = copy();
@@ -5335,6 +5533,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             copy.batteryStorage = null;
             copy.slotBatteryStorage = null;
             copy.debugHistoryReplay = false;
+            copy.bessTransfer = false;
             copy.debugHistoryPrimaryBatteryShape = null;
             copy.debugHistorySlotBatteryShape = null;
             copy.rtcTimeSource = () -> 0L;
@@ -5354,6 +5553,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             copy.batteryStorage = batteryStorage;
             copy.slotBatteryStorage = slotBatteryStorage;
             copy.debugHistoryReplay = debugHistoryReplay;
+            copy.bessTransfer = bessTransfer;
             copy.debugHistoryPrimaryBatteryShape = debugHistoryPrimaryBatteryShape;
             copy.debugHistorySlotBatteryShape = debugHistorySlotBatteryShape;
             copy.displaySgbBorder = displaySgbBorder;

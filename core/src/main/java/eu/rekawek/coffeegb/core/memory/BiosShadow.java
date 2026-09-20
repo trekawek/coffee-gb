@@ -33,6 +33,11 @@ public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow>,
         return !isEnabled;
     }
 
+    /** BESS also supports snapshots taken while the boot ROM is still mapped. */
+    public void restoreBessBootState(boolean bootFinished) {
+        isEnabled = !bootFinished;
+    }
+
     @Override
     public boolean accepts(int address) {
         if (address == 0xff50) {

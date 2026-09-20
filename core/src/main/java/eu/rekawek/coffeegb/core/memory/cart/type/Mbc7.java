@@ -11,6 +11,12 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.state.bess.BessCartridgeState;
+import eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.List;
+import java.util.Map;
 
 /**
  * MBC7 Mapper implementation.
@@ -49,6 +55,59 @@ public class Mbc7 implements MemoryController, PerformanceRomAccessProvider {
         this.cartridge = rom.getRom();
         this.romBanks = rom.getRomBanks();
         eeprom = new Mbc7Eeprom(battery);
+    }
+
+    @Override
+    public BessCartridgeState captureBessState() {
+        if (getClass() != Mbc7.class) {
+            throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+        }
+        ByteBuffer block = ByteBuffer.allocate(10).order(ByteOrder.LITTLE_ENDIAN);
+        block.put((byte) (eeprom.captureBessFlags() | (latchState == 1 ? 1 : 0)));
+        block.put((byte) 0).putShort((short) 0).putShort((short) 0xffff);
+        block.putShort((short) latchX).putShort((short) latchY);
+        return new BessCartridgeState(eeprom.captureBessRam(), List.of(
+                new MbcWrite(0, ramWriteEnabled1 ? 0x0a : 0),
+                new MbcWrite(0x2000, selectedRomBank % romBanks),
+                new MbcWrite(0x4000, ramWriteEnabled2 ? 0x40 : 0)),
+                Map.of("MBC7", block.array()));
+    }
+
+    @Override
+    public void restoreBessRam(byte[] data) {
+        eeprom.restoreBessRam(data);
+    }
+
+    @Override
+    public void restoreBessWrite(int address, int value) {
+        if (address >= 0x2000 && address < 0x4000) {
+            selectedRomBank = value & 0x7f;
+        } else if (address >= 0x4000 && address < 0x6000) {
+            ramWriteEnabled2 = ramWriteEnabled1 && value == 0x40;
+        } else {
+            setByte(address, value);
+        }
+    }
+
+    @Override
+    public void restoreBessExtensions(Map<String, byte[]> extensions) {
+        byte[] data = extensions.get("MBC7");
+        if (data == null) {
+            eeprom.restoreBessControl(2, 0, 0, 0xffff);
+            latchX = latchY = 0x8000;
+            latchState = 0;
+            return;
+        }
+        if (data.length != 10) throw new IllegalArgumentException("Invalid BESS MBC7 block size");
+        ByteBuffer block = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        int flags = block.get() & 0xff;
+        int arguments = block.get() & 0xff;
+        int command = block.getShort() & 0xffff;
+        int pending = block.getShort() & 0xffff;
+        eeprom.restoreBessControl(flags, arguments, command, pending);
+        latchState = flags & 1;
+        latchX = block.getShort() & 0xffff;
+        latchY = block.getShort() & 0xffff;
     }
 
     public void init(EventBus eventBus) {

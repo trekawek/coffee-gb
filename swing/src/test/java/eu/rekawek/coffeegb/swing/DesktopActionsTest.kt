@@ -16,6 +16,54 @@ import org.junit.Test
 
 class DesktopActionsTest {
   @Test
+  fun `BESS actions require a ready local session and idle recording and playback`() {
+    val calls = mutableListOf<String>()
+    val registry = registry(calls)
+    val commands = listOf(DesktopCommand.LOAD_BESS_STATE, DesktopCommand.SAVE_BESS_STATE)
+    val local = DesktopCommandPresentation(gameLoaded = true)
+    val unavailable =
+        listOf(
+            DesktopCommandPresentation(),
+            local.copy(netplaySession = true),
+            local.copy(sessionBusy = true),
+        ) +
+            ReplayRecordingPhase.entries.filter { it != ReplayRecordingPhase.IDLE }.map {
+              local.copy(inputRecordingPhase = it)
+            } +
+            ReplayPlaybackPhase.entries.filter { it != ReplayPlaybackPhase.IDLE }.map {
+              local.copy(inputPlaybackPhase = it)
+            }
+    unavailable.forEach { state ->
+      registry.update(state)
+      commands.forEach { command ->
+        assertFalse(registry[command].isEnabled, "$command should be unavailable for $state")
+        registry.invoke(command)
+      }
+    }
+    assertTrue(calls.isEmpty())
+
+    registry.update(local)
+    commands.forEach { command ->
+      assertTrue(registry[command].isEnabled)
+      registry.invoke(command)
+    }
+    assertEquals(listOf("load-bess", "save-bess"), calls)
+  }
+
+  @Test
+  fun `BESS File menu section contains its own separator and both named actions`() {
+    val registry = registry(mutableListOf())
+    val menu = javax.swing.JMenu("File")
+    menu.add("Open Save Folder")
+    addBessStateMenuSection(menu, registry)
+
+    assertEquals(4, menu.menuComponentCount)
+    assertTrue(menu.getMenuComponent(1) is javax.swing.JSeparator)
+    assertEquals("Load BESS state", menu.getItem(2).text)
+    assertEquals("Save BESS state", menu.getItem(3).text)
+  }
+
+  @Test
   fun `recording menu entries and shortcut actions follow the netplay diagnostic flag`() {
     val registry = registry(mutableListOf())
     val gameMenuItem = inputRecordingMenuItem(registry[DesktopCommand.INPUT_RECORDING])
@@ -386,6 +434,8 @@ class DesktopActionsTest {
               screenshot = { calls += "screenshot" },
               setCommandBarVisible = { calls += "bar=$it" },
               selectStateSlot = { calls += "slot=$it" },
+              loadBessState = { calls += "load-bess" },
+              saveBessState = { calls += "save-bess" },
           )
 
   private fun event() = ActionEvent(this, ActionEvent.ACTION_PERFORMED, "test")

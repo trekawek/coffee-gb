@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.core.gpu.Display.DmgFrameReadyEvent;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
+import eu.rekawek.coffeegb.core.state.bess.BessState;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.sgb.Commands.MaskEnCmd.GameboyScreenMask;
 
@@ -427,6 +428,93 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         System.arraycopy(sgbBackgroundReadyEvent.buffer(), 0, sgbBuffer, 0, sgbBuffer.length);
         System.arraycopy(sgbBackgroundReadyEvent.mask(), 0, sgbMask, 0, sgbMask.length);
         invalidateBorderCache();
+    }
+
+    /** Imported borders also reach unpublished machines whose host event bus is inert. */
+    public void restoreBessBackground(Background.SgbBackgroundReadyEvent background) {
+        if (background != null) {
+            onSgbBackground(background);
+        }
+    }
+
+    public byte[] captureBessActivePalettes() {
+        byte[] result = copyBessPalettes(palettes);
+        // Color zero is shared by all four colorization palettes on the ICD.
+        for (int i = 1; i < 4; i++) {
+            result[i * 8] = result[0];
+            result[i * 8 + 1] = result[1];
+        }
+        return result;
+    }
+
+    public byte[] captureBessRamPalettes() {
+        return copyBessPalettes(systemPalettes);
+    }
+
+    public byte[] captureBessAttributeMap() {
+        byte[] result = new byte[paletteMap.length];
+        for (int i = 0; i < result.length; i++) result[i] = (byte) paletteMap[i];
+        return result;
+    }
+
+    public byte[] captureBessAttributeFiles() {
+        byte[] result = new byte[45 * 90];
+        for (int file = 0; file < 45; file++) {
+            for (int i = 0; i < 360; i++) {
+                result[file * 90 + i / 4] |= (byte) (attributeFiles[file][i] << (6 - 2 * (i % 4)));
+            }
+        }
+        return result;
+    }
+
+    /** Restores HLE SGB display memory; unrepresented presentation phases use reset defaults. */
+    public void restoreBessState(BessState.Sgb state) {
+        if (state.activePalettes().length != 0) {
+            restoreBessPalettes(palettes, state.activePalettes());
+            for (int i = 1; i < 4; i++) palettes[i][0] = palettes[0][0];
+        }
+        restoreBessPalettes(systemPalettes, state.ramPalettes());
+        byte[] attributes = state.attributeMap();
+        for (int i = 0; i < paletteMap.length; i++) {
+            paletteMap[i] = i < attributes.length ? attributes[i] & 3 : 0;
+        }
+        byte[] files = state.attributeFiles();
+        for (int file = 0; file < 45; file++) {
+            for (int i = 0; i < 360; i++) {
+                int offset = file * 90 + i / 4;
+                attributeFiles[file][i] = offset < files.length
+                        ? (files[offset] >>> (6 - 2 * (i % 4))) & 3 : 0;
+            }
+        }
+        screenMask = GameboyScreenMask.CANCEL;
+        borderFade = 0;
+        palettePriority = false;
+        invalidateBorderCache();
+    }
+
+    private static byte[] copyBessPalettes(int[][] source) {
+        byte[] result = new byte[source.length * 8];
+        for (int row = 0; row < source.length; row++) {
+            for (int color = 0; color < 4; color++) {
+                int value = source[row] == null ? 0 : source[row][color];
+                result[row * 8 + color * 2] = (byte) value;
+                result[row * 8 + color * 2 + 1] = (byte) (value >>> 8);
+            }
+        }
+        return result;
+    }
+
+    private static void restoreBessPalettes(int[][] target, byte[] source) {
+        for (int row = 0; row < target.length; row++) {
+            // Detach any initial predefined palette before replacing its colors.
+            target[row] = new int[4];
+            for (int color = 0; color < 4; color++) {
+                int offset = row * 8 + color * 2;
+                int low = offset < source.length ? source[offset] & 0xff : 0;
+                int high = offset + 1 < source.length ? source[offset + 1] & 0xff : 0;
+                target[row][color] = (low | (high << 8)) & 0x7fff;
+            }
+        }
     }
 
     private void invalidateBorderCache() {

@@ -450,6 +450,16 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         return address == 0xff01 || address == 0xff02;
     }
 
+    /** Restores the latches without sending host serial commands. */
+    public void restoreBessState(int data, int control) {
+        sb = data;
+        sc = control;
+        serialClocks = 0;
+        serialClockSignal = false;
+        receivedBits = 0;
+        haltWakeDelay = 0;
+    }
+
     @Override
     public void setByte(int address, int value) {
         if (address == 0xff01) {

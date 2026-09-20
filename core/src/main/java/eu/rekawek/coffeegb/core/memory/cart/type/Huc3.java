@@ -10,8 +10,14 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
+import eu.rekawek.coffeegb.core.state.bess.BessCartridgeState;
+import eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -22,6 +28,43 @@ import java.util.Objects;
  * (12 bits), accessed nibble-wise through an index register.
  */
 public class Huc3 implements MemoryController {
+
+    @Override
+    public BessCartridgeState captureBessState() {
+        updateRtc();
+        var rtc = ByteBuffer.allocate(0x11).order(ByteOrder.LITTLE_ENDIAN);
+        rtc.putLong(lastRtcSecond).putShort((short) minutes).putShort((short) days)
+                .putShort((short) alarmMinutes).putShort((short) alarmDays)
+                .put((byte) (alarmEnabled ? 1 : 0));
+        return new BessCartridgeState(BessCartridgeState.bytes(ram),
+                List.of(new MbcWrite(0x0000, 0x0e),
+                        new MbcWrite(0xa000, irOutput ? 1 : 0),
+                        new MbcWrite(0x0000, mode), new MbcWrite(0x2000, romBank),
+                        new MbcWrite(0x4000, ramBank)), Map.of("HUC3", rtc.array()));
+    }
+
+    @Override
+    public void restoreBessRam(byte[] data) {
+        BessCartridgeState.restoreRam(data, ram);
+        ramUpdated = true;
+    }
+
+    @Override
+    public void restoreBessExtensions(Map<String, byte[]> extensions) {
+        byte[] data = extensions.get("HUC3");
+        if (data == null) return;
+        if (data.length != 0x11) throw new IllegalArgumentException("Invalid BESS HuC3 block size");
+        var rtc = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        rtc.getLong();
+        minutes = rtc.getShort() & 0xffff;
+        days = rtc.getShort() & 0xffff;
+        alarmMinutes = rtc.getShort() & 0xffff;
+        alarmDays = rtc.getShort() & 0xffff;
+        alarmEnabled = rtc.get() != 0;
+        // A loaded state begins a new timeline, without elapsed host-time catch-up.
+        lastRtcSecond = timeSource.currentTimeMillis() / 1000;
+        accessIndex = accessFlags = readValue = 0;
+    }
 
     private final int[] cartridge;
 

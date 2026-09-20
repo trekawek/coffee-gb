@@ -1,5 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.state.bess.BessCartridgeState;
+import eu.rekawek.coffeegb.core.state.bess.BessState.MbcWrite;
+import java.util.List;
+import java.util.Map;
+
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
@@ -18,6 +23,30 @@ import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import java.util.Arrays;
 
 public class Mbc3 implements MemoryController {
+
+
+    @Override
+    public BessCartridgeState captureBessState() {
+        if (getClass() != Mbc3.class) {
+            throw new IllegalArgumentException("BESS states are not supported for this cartridge mapper");
+        }
+        return new BessCartridgeState(BessCartridgeState.bytes(ram),
+                List.of(new MbcWrite(0x0000, ramEnabled ? 0x0a : 0),
+                        new MbcWrite(0x2000, selectedRomBank),
+                        new MbcWrite(0x4000, selectedRamBank)),
+                hasRtc ? Map.of("RTC ", clock.captureBessRtc()) : Map.of());
+    }
+
+    @Override
+    public void restoreBessRam(byte[] data) {
+        BessCartridgeState.restoreRam(data, ram);
+    }
+
+    @Override
+    public void restoreBessExtensions(Map<String, byte[]> extensions) {
+        byte[] rtc = extensions.get("RTC ");
+        if (hasRtc && rtc != null) clock.restoreBessRtc(rtc);
+    }
 
     @Override
     public boolean isPerformanceRamAccessSafe() {
@@ -40,6 +69,8 @@ public class Mbc3 implements MemoryController {
     private final Battery battery;
 
     private final boolean mbc30;
+
+    private final boolean hasRtc;
 
     private int selectedRamBank;
 
@@ -64,6 +95,7 @@ public class Mbc3 implements MemoryController {
         this.clock = new RealTimeClock(timeSource, clockSpec);
         this.battery = battery;
         this.mbc30 = rom.getRomBanks() > 128 || rom.getRamBanks() > 4;
+        this.hasRtc = rom.getType().isTimer();
 
         long[] clockData = new long[12];
         battery.loadRamWithClock(ram, clockData);

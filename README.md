@@ -23,7 +23,8 @@ orchestration layer use Kotlin and Java.
 - **High compatibility** across commercial games, unusual cartridges, homebrew,
   demos, and diagnostic ROMs.
 - **Save states and rewind**, including ten save slots, named states, previews,
-  autosave and resume, screenshots, deterministic input recordings, and battery-backed saves.
+  autosave and resume, BESS state interchange, screenshots, deterministic input recordings,
+  and battery-backed saves.
 - **Easy game loading** with drag and drop and support for `.gb`, `.gbc`, and
   `.rom` files, either directly or from ZIP and 7z archives.
 - **Rollback netplay** for link-cable games, with synchronized infrared
@@ -73,6 +74,10 @@ preview them, and export them. Autosave and resume settings are under
 **File > Preferences… > Saves & Rewind**. See
 [save states, autosave, screenshots, input recording, and rewind](docs/state-management.md) for
 more details. Pause, save states, and rewind are unavailable during netplay.
+
+Use **File > Load BESS state** and **File > Save BESS state** to exchange states with
+other BESS-compatible emulators. Open the matching ROM first; see the
+[BESS compatibility notes](docs/state-management.md#bess-state-interchange).
 
 ## Compatibility
 

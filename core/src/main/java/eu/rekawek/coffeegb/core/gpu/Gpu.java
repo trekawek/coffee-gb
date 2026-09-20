@@ -17,6 +17,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
+import eu.rekawek.coffeegb.core.state.bess.BessMemory;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.DmaOamAddressSpace;
 import eu.rekawek.coffeegb.core.memory.Hdma;
@@ -4325,6 +4326,43 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     public ColorPalette getBgPalette() {
         exposeMutablePpuState();
         return bgPalette;
+    }
+
+    public byte[] captureBessVideoRam() {
+        materializeSteadyTiming();
+        byte[] result = new byte[gbc ? 0x4000 : 0x2000];
+        System.arraycopy(copyRam(videoRam0), 0, result, 0, 0x2000);
+        if (gbc) {
+            System.arraycopy(copyRam(videoRam1), 0, result, 0x2000, 0x2000);
+        }
+        return result;
+    }
+
+    public byte[] captureBessBackgroundPalettes() {
+        return gbc ? copyPalette(bgPalette) : new byte[0];
+    }
+
+    public byte[] captureBessObjectPalettes() {
+        return gbc ? copyPalette(oamPalette) : new byte[0];
+    }
+
+    /** Bypasses CPU VRAM/palette access locks and leaves palette index latches intact. */
+    public void restoreBessMemory(byte[] vram, byte[] background, byte[] objects) {
+        exposeMutablePpuState();
+        BessMemory.restore(videoRam0.getSpace(), vram, 0);
+        if (gbc) {
+            BessMemory.restore(videoRam1.getSpace(), vram, 0x2000);
+            restoreBessPalette(bgPalette, background);
+            restoreBessPalette(oamPalette, objects);
+        }
+    }
+
+    private static void restoreBessPalette(ColorPalette palette, byte[] bytes) {
+        for (int i = 0; i < 32; i++) {
+            int low = i * 2 < bytes.length ? bytes[i * 2] & 0xff : 0;
+            int high = i * 2 + 1 < bytes.length ? bytes[i * 2 + 1] & 0xff : 0;
+            palette.getPalette(i / 4)[i % 4] = low | (high << 8);
+        }
     }
 
     public Mode getMode() {
