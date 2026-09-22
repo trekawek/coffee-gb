@@ -18,5 +18,8 @@ fun createNetplayLoadEvent(
       state = if (restart) null else state.state,
       // A coordinated fresh boot must also bypass any automatic or prompted state resume.
       allowAutosaveResume = !restart,
+      // The standalone session may be using a transient profile (for example, the DMG fallback
+      // selected for SGB netplay). Do not resolve the linked replacement from saved preferences.
+      hardwareProfileOverride = state.hardwareProfile,
   )
 }

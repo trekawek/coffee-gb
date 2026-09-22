@@ -202,7 +202,12 @@ class SwingEmulator(
     linkedControllerActive = false
     eventBus.post(ControllerOwnershipCommittedEvent())
     if (state != null) {
-      eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
+      eventBus.post(
+          Controller.LoadRomEvent(
+              image = state.rom.image,
+              state = state.state,
+              hardwareProfileOverride = state.hardwareProfile,
+          ))
     }
   }
 

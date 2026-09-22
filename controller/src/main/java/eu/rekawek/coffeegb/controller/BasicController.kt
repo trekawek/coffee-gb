@@ -6339,7 +6339,11 @@ class BasicController private constructor(
       if (!properties.overrides.benchmarkPolicyEnabled && closeState == null) {
         closeState =
             session?.let {
-              Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+              Controller.ControllerState(
+                  DetachedStateAdapter.capture(it.gameboy),
+                  it.config.rom,
+                  it.config.hardwareProfile,
+              )
             }
       }
       if (!closeAutosavePlayDurationCaptured) {
