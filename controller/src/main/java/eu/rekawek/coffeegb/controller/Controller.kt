@@ -105,13 +105,29 @@ interface Controller : AutoCloseable {
        * progress.
        */
       val allowAutosaveResume: Boolean = true,
+      /** One-load hardware choice used by coordinated host workflows; never persisted. */
+      val hardwareProfileOverride: HardwareProfile? = null,
+      /** Correlates a host-requested profile reload with its terminal acknowledgement. */
+      val profileReloadRequestId: Long? = null,
   ) : Event {
+    init {
+      hardwareProfileOverride?.let(HardwareProfileRegistry::requireRegistered)
+      require(profileReloadRequestId == null || profileReloadRequestId > 0L) {
+        "Profile reload request ID must be positive"
+      }
+      require(profileReloadRequestId == null || hardwareProfileOverride != null) {
+        "A correlated profile reload requires a hardware profile override"
+      }
+    }
+
     constructor(
         image: RomImage,
         state: MachineState? = null,
         persistenceStore: RomPersistenceStore? = null,
         openRequestId: Long? = null,
         allowAutosaveResume: Boolean = true,
+        hardwareProfileOverride: HardwareProfile? = null,
+        profileReloadRequestId: Long? = null,
     ) : this(
         image.origin().containerPath().map { it.toFile() }.orElse(File(image.origin().displayName())),
         state,
@@ -119,8 +135,31 @@ interface Controller : AutoCloseable {
         persistenceStore,
         openRequestId,
         allowAutosaveResume,
+        hardwareProfileOverride,
+        profileReloadRequestId,
     )
   }
+
+  /** Restarts the active ROM under one transient hardware profile without changing preferences. */
+  data class ReloadHardwareProfileEvent(
+      val requestId: Long,
+      val profile: HardwareProfile,
+  ) : Event {
+    init {
+      require(requestId > 0L) { "Profile reload request ID must be positive" }
+      HardwareProfileRegistry.requireRegistered(profile)
+    }
+  }
+
+  data class HardwareProfileReloadedEvent(
+      val requestId: Long,
+      val profile: HardwareProfile,
+  ) : Event
+
+  data class HardwareProfileReloadFailedEvent(
+      val requestId: Long,
+      val message: String,
+  ) : Event
 
   data class RomLoadingEvent
   @JvmOverloads
@@ -1021,6 +1060,7 @@ interface Controller : AutoCloseable {
     fun createGameboyConfig(
       properties: EmulatorProperties,
       rom: Rom,
+      hardwareProfileOverride: HardwareProfile? = null,
     ): Gameboy.GameboyConfiguration {
       val config = Gameboy.GameboyConfiguration(rom)
       val isDatel =
@@ -1045,7 +1085,9 @@ interface Controller : AutoCloseable {
           }
         }
       }
-      val hardwareProfile = getHardwareProfile(properties.system, rom)
+      val hardwareProfile =
+          hardwareProfileOverride?.also(HardwareProfileRegistry::requireRegistered)
+              ?: getHardwareProfile(properties.system, rom)
       val bootstrapMode = properties.system.bootstrapMode
       require(bootstrapMode == Gameboy.BootstrapMode.SKIP || Bios.hasBundledBootRom(hardwareProfile)) {
         "Profile ${hardwareProfile.id()} has no bundled boot ROM; " +

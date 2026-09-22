@@ -25,6 +25,7 @@ import eu.rekawek.coffeegb.controller.network.TcpServer
 import eu.rekawek.coffeegb.controller.state.StateProfilePolicy
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
@@ -84,6 +85,7 @@ internal enum class NetplayRole {
 internal enum class NetplayPhase(val title: String) {
   DISCONNECTED("Set up netplay"),
   STARTING_HOST("Starting host"),
+  SWITCHING_PROFILE("Switching to Game Boy"),
   WAITING_FOR_PEERS("Waiting for players"),
   CONNECTING("Connecting"),
   NEGOTIATING("Negotiating and synchronizing"),
@@ -117,6 +119,17 @@ internal sealed interface NetplayAvailability {
     override val message: String = "$profileName is supported by protocol v8."
   }
 
+  data class RequiresDmgRestart(
+      override val gameName: String,
+      val profileId: String,
+      val profileName: String,
+  ) : NetplayAvailability {
+    override val available: Boolean = true
+    override val message: String =
+        "$profileName will restart as Game Boy (DMG) before netplay begins. " +
+            "This does not change your saved hardware preference."
+  }
+
   data class IncompatibleProfile(
       override val gameName: String,
       val profileId: String,
@@ -135,6 +148,7 @@ internal enum class NetplayFailureKind {
   PROTOCOL,
   DISCONNECTED,
   LINK_PORT,
+  PROFILE,
 }
 
 /** A bounded literal message. It is never interpreted as Swing HTML or copied automatically. */
@@ -277,6 +291,8 @@ internal fun presentNetplay(state: NetplayUiState): NetplayUiPresentation {
           ?: when (state.phase) {
             NetplayPhase.DISCONNECTED -> "Choose Host or Join to begin."
             NetplayPhase.STARTING_HOST -> "Starting a protocol-v8 server on TCP port 6688."
+            NetplayPhase.SWITCHING_PROFILE ->
+                "Restarting this game as Game Boy before netplay begins."
             NetplayPhase.WAITING_FOR_PEERS ->
                 "The server is listening on all local interfaces, subject to your firewall."
             NetplayPhase.CONNECTING -> "Resolving and connecting to the selected server."
@@ -374,6 +390,7 @@ internal class NetplayWindowHost(
   private var serialSelectionBeforeNetplay: Controller.SerialPeripheralSelection? = null
   private var restoringSerialSelection: Controller.SerialPeripheralSelection? = null
   private var pendingNetworkStart: PendingNetworkStart? = null
+  private var pendingProfileSwitch: PendingProfileSwitch? = null
   private var activeAttemptId: Long? = null
   private var cancellationAttemptId: Long? = null
   private var nextAttemptId = 1L
@@ -399,6 +416,11 @@ internal class NetplayWindowHost(
   private data class PendingLocalInstanceLaunch(
       val attemptId: Long,
       val count: Int,
+  )
+
+  private data class PendingProfileSwitch(
+      val networkStart: PendingNetworkStart,
+      val previousSerialSelection: Controller.SerialPeripheralSelection,
   )
 
   constructor(
@@ -474,10 +496,13 @@ internal class NetplayWindowHost(
     if (!mayTakePeerToPeerPort(previous)) return
     val pending = PendingNetworkStart.Host(allocateAttemptId(), mode, localInstanceCount)
     cancellationAttemptId = null
+    val switchToDmg = state.availability is NetplayAvailability.RequiresDmgRestart
     update(
         state.copy(
             setupView = NetplaySetupView.HOST,
-            phase = NetplayPhase.STARTING_HOST,
+            phase =
+                if (switchToDmg) NetplayPhase.SWITCHING_PROFILE
+                else NetplayPhase.STARTING_HOST,
             role = NetplayRole.HOST,
             mode = mode,
             endpoint = null,
@@ -488,7 +513,8 @@ internal class NetplayWindowHost(
             failure = null,
             notice = null,
         ))
-    preparePeerToPeerPort(pending, previous)
+    if (switchToDmg) requestDmgRestart(pending, previous)
+    else preparePeerToPeerPort(pending, previous)
   }
 
   private fun join(address: String) {
@@ -500,10 +526,13 @@ internal class NetplayWindowHost(
     if (!mayTakePeerToPeerPort(previous)) return
     val pending = PendingNetworkStart.Client(allocateAttemptId(), endpoint)
     cancellationAttemptId = null
+    val switchToDmg = state.availability is NetplayAvailability.RequiresDmgRestart
     update(
         state.copy(
             setupView = NetplaySetupView.JOIN,
-            phase = NetplayPhase.CONNECTING,
+            phase =
+                if (switchToDmg) NetplayPhase.SWITCHING_PROFILE
+                else NetplayPhase.CONNECTING,
             role = NetplayRole.CLIENT,
             mode = null,
             endpoint = endpoint,
@@ -513,7 +542,21 @@ internal class NetplayWindowHost(
             failure = null,
             notice = null,
         ))
-    preparePeerToPeerPort(pending, previous)
+    if (switchToDmg) requestDmgRestart(pending, previous)
+    else preparePeerToPeerPort(pending, previous)
+  }
+
+  private fun requestDmgRestart(
+      pending: PendingNetworkStart,
+      previous: Controller.SerialPeripheralSelection,
+  ) {
+    pendingProfileSwitch = PendingProfileSwitch(pending, previous)
+    activeAttemptId = pending.attemptId
+    eventBus.post(
+        Controller.ReloadHardwareProfileEvent(
+            pending.attemptId,
+            HardwareProfileRegistry.DMG,
+        ))
   }
 
   private fun startAutomaticJoinIfReady() {
@@ -580,6 +623,7 @@ internal class NetplayWindowHost(
   private fun launchPendingNetworkStart(pending: PendingNetworkStart) {
     if (closed || activeAttemptId != pending.attemptId || pendingNetworkStart != pending) return
     pendingNetworkStart = null
+    pendingProfileSwitch = null
     when (pending) {
       is PendingNetworkStart.Host -> {
         if (pending.localInstanceCount > 0) {
@@ -597,6 +641,7 @@ internal class NetplayWindowHost(
     val previous = serialSelectionBeforeNetplay ?: return
     serialSelectionBeforeNetplay = null
     pendingNetworkStart = null
+    pendingProfileSwitch = null
     if (previous == Controller.SerialPeripheralSelection.PEER_TO_PEER ||
         (!forceRequest && idleSerialSelection == previous)) {
       idleSerialSelection = previous
@@ -805,6 +850,63 @@ internal class NetplayWindowHost(
           update(state.copy(availability = availability(game, event.profile)))
           startAutomaticJoinIfReady()
         }
+      }
+    }
+    eventBus.register<Controller.HardwareProfileReloadedEvent> { event ->
+      dispatchSwingMutation {
+        if (closed) return@dispatchSwingMutation
+        val pending = pendingProfileSwitch
+        if (pending == null || pending.networkStart.attemptId != event.requestId) {
+          return@dispatchSwingMutation
+        }
+        pendingProfileSwitch = null
+        if (event.profile != HardwareProfileRegistry.DMG) {
+          activeAttemptId = null
+          update(
+              state.copy(
+                  phase = NetplayPhase.FAILED,
+                  failure =
+                      NetplayFailure(
+                          NetplayFailureKind.PROFILE,
+                          "Coffee GB restarted the game with an unexpected hardware profile.",
+                      ),
+                  notice = null,
+              ))
+          return@dispatchSwingMutation
+        }
+        update(
+            state.copy(
+                phase =
+                    when (pending.networkStart) {
+                      is PendingNetworkStart.Host -> NetplayPhase.STARTING_HOST
+                      is PendingNetworkStart.Client -> NetplayPhase.CONNECTING
+                    },
+                failure = null,
+                notice = "The game restarted as Game Boy; preparing netplay.",
+            ))
+        preparePeerToPeerPort(pending.networkStart, pending.previousSerialSelection)
+      }
+    }
+    eventBus.register<Controller.HardwareProfileReloadFailedEvent> { event ->
+      dispatchSwingMutation {
+        if (closed) return@dispatchSwingMutation
+        val pending = pendingProfileSwitch
+        if (pending == null || pending.networkStart.attemptId != event.requestId) {
+          return@dispatchSwingMutation
+        }
+        pendingProfileSwitch = null
+        pendingNetworkStart = null
+        activeAttemptId = null
+        update(
+            state.copy(
+                phase = NetplayPhase.FAILED,
+                failure =
+                    NetplayFailure(
+                        NetplayFailureKind.PROFILE,
+                        "Coffee GB could not restart this game as Game Boy. ${event.message}",
+                    ),
+                notice = null,
+            ))
       }
     }
     eventBus.register<Controller.EmulationStartedEvent> { event ->
@@ -1135,10 +1237,17 @@ internal class NetplayWindowHost(
   }
 
   private fun availability(gameName: String, profile: HardwareProfile): NetplayAvailability =
-      if (StateProfilePolicy.protocolV8Representable(profile)) {
-        NetplayAvailability.Available(gameName, profile.id(), profile.displayName())
-      } else {
-        NetplayAvailability.IncompatibleProfile(gameName, profile.id(), profile.displayName())
+      when {
+        profile.family() == HardwareProfile.Family.SGB ->
+            NetplayAvailability.RequiresDmgRestart(
+                gameName,
+                profile.id(),
+                profile.displayName(),
+            )
+        StateProfilePolicy.protocolV8Representable(profile) ->
+            NetplayAvailability.Available(gameName, profile.id(), profile.displayName())
+        else ->
+            NetplayAvailability.IncompatibleProfile(gameName, profile.id(), profile.displayName())
       }
 }
 

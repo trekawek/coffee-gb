@@ -1157,6 +1157,50 @@ class BasicController private constructor(
         }
       }
     }
+    eventQueue.register<Controller.ReloadHardwareProfileEvent> { request ->
+      if (replayPlaybackMutationBlocked("Changing the hardware profile for netplay")) {
+        eventBus.post(
+            Controller.HardwareProfileReloadFailedEvent(
+                request.requestId,
+                "The hardware profile cannot change during input playback.",
+            ))
+        return@register
+      }
+      val currentSession = session
+      if (currentSession == null) {
+        eventBus.post(
+            Controller.HardwareProfileReloadFailedEvent(
+                request.requestId,
+                "No active game is available to restart.",
+            ))
+        return@register
+      }
+      if (currentSession.config.hardwareProfile == request.profile) {
+        eventBus.post(
+            Controller.HardwareProfileReloadedEvent(request.requestId, request.profile))
+        return@register
+      }
+      val image = currentSession.config.rom.image
+      if (image == null) {
+        eventBus.post(
+            Controller.HardwareProfileReloadFailedEvent(
+                request.requestId,
+                "The active game cannot be reopened under another hardware profile.",
+            ))
+        return@register
+      }
+      finishReplayRecording("The hardware profile changed for netplay")
+      requestLoadWithAutosave(
+          properties,
+          Controller.LoadRomEvent(
+              image = image,
+              persistenceStore = currentPersistenceStore,
+              allowAutosaveResume = false,
+              hardwareProfileOverride = request.profile,
+              profileReloadRequestId = request.requestId,
+          ),
+      )
+    }
     eventQueue.register<Controller.UpdatedSavesSettingsEvent> {
       applySavesSettings(it.saves)
     }
@@ -3418,6 +3462,7 @@ class BasicController private constructor(
               Controller.RomLoadFailureKind.PERSISTENCE,
               error.detail,
           ))
+      postProfileReloadFailure(event, error.summary)
       return
     }
     try {
@@ -3449,6 +3494,7 @@ class BasicController private constructor(
               Controller.RomLoadFailureKind.PERSISTENCE,
               error.detail,
           ))
+      postProfileReloadFailure(event, error.summary)
     }
   }
 
@@ -4456,8 +4502,7 @@ class BasicController private constructor(
     job.ready = null
     job.prepared.discard()
     if (notifyCancellation) {
-      eventBus.post(
-          Controller.RomLoadingCancelledEvent(job.event.rom, job.event.openRequestId))
+      postLoadCancellation(job.event)
     }
     if (restorePause) {
       restorePauseStateAfterLoading()
@@ -4856,6 +4901,15 @@ class BasicController private constructor(
     try {
       committedSession.activate()
       start(job.event.openRequestId, job.event.allowAutosaveResume)
+      job.event.profileReloadRequestId?.let { requestId ->
+        postSessionEventSafely(
+            committedSession,
+            Controller.HardwareProfileReloadedEvent(
+                requestId,
+                committedSession.config.hardwareProfile,
+            ),
+        )
+      }
       if (pauseStateBeforeResume != null) {
         // start() acquired the resume-scan pause for the new session. Carry the loading workflow's
         // desired user state underneath it without releasing either pause owner.
@@ -4896,6 +4950,7 @@ class BasicController private constructor(
               Controller.RomLoadFailureKind.CORE_STARTUP,
               sanitizedPersistenceDetail(activationFailure),
           ))
+      postProfileReloadFailure(job.event, message)
       if (activatedReplayPlayer != null) {
         postReplayPlaybackFailure(
             stateSessionId.takeIf { it > 0L },
@@ -4937,7 +4992,19 @@ class BasicController private constructor(
             Controller.RomLoadFailureKind.CORE_STARTUP,
             sanitizedPersistenceDetail(error),
         ))
+    postProfileReloadFailure(event, message)
     restorePauseStateAfterLoading()
+  }
+
+  private fun postProfileReloadFailure(event: Controller.LoadRomEvent, message: String) {
+    event.profileReloadRequestId?.let { requestId ->
+      eventBus.post(Controller.HardwareProfileReloadFailedEvent(requestId, message))
+    }
+  }
+
+  private fun postLoadCancellation(event: Controller.LoadRomEvent) {
+    eventBus.post(Controller.RomLoadingCancelledEvent(event.rom, event.openRequestId))
+    postProfileReloadFailure(event, "The hardware profile restart was canceled.")
   }
 
   private fun cancelLoadJob(notifyCancellation: Boolean = true) {
@@ -4945,8 +5012,7 @@ class BasicController private constructor(
     loadJob = null
     job.task.cancelAndDiscard()
     if (notifyCancellation) {
-      eventBus.post(
-          Controller.RomLoadingCancelledEvent(job.event.rom, job.event.openRequestId))
+      postLoadCancellation(job.event)
     }
   }
 
@@ -4957,11 +5023,7 @@ class BasicController private constructor(
     val pending = pendingRomSwitch ?: return
     pendingRomSwitch = null
     if (notifyCancellation) {
-      eventBus.post(
-          Controller.RomLoadingCancelledEvent(
-              pending.event.rom,
-              pending.event.openRequestId,
-          ))
+      postLoadCancellation(pending.event)
     }
     if (restorePause) {
       restorePauseStateAfterLoading()

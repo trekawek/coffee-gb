@@ -42,7 +42,7 @@ internal class RomSessionPreparer(
     ensureActive()
     val rom = event.image?.let(::Rom) ?: Rom(event.rom)
     val config =
-        Controller.createGameboyConfig(properties, rom)
+        Controller.createGameboyConfig(properties, rom, event.hardwareProfileOverride)
             .also(configure)
             .setBootCancellation { Thread.currentThread().isInterrupted }
     ensureActive()

@@ -130,7 +130,9 @@ are tracked separately and are not included in the 5,858 automated verdicts.
 For link-cable multiplayer, open **Game > Netplay…**. One player selects
 **Host > Start hosting**; the other selects **Join**, enters the host's address,
 and selects **Join game**. Netplay uses a direct, unencrypted TCP connection, so
-play only with people and networks you trust.
+play only with people and networks you trust. When a game is running under an
+SGB or SGB2 profile, starting or joining netplay restarts that game in DMG mode
+for the current session without changing the saved hardware-profile preference.
 
 ## Project history
 
