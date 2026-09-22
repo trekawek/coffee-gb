@@ -290,6 +290,172 @@ class NetplayWindowTest {
   }
 
   @Test
+  fun `SGB host restarts as DMG before reserving the link port or starting the server`() {
+    val bus = EventBusImpl()
+    val reloads = mutableListOf<Controller.ReloadHardwareProfileEvent>()
+    val selections = mutableListOf<Controller.SerialPeripheralSelection>()
+    val starts = mutableListOf<StartServerEvent>()
+    val launches = mutableListOf<LocalLaunch>()
+    bus.register<Controller.ReloadHardwareProfileEvent>(reloads::add)
+    bus.register<Controller.SetSerialPeripheralEvent> { selections += it.selection }
+    bus.register<StartServerEvent>(starts::add)
+    val fixture =
+        onEdt {
+          HostFixture(
+              bus,
+              localRomPath = { Path.of("SGB Game.gb") },
+              localInstanceLauncher =
+                  LocalNetplayInstanceLauncher { rom, profile, endpoint, count ->
+                    launches += LocalLaunch(rom, profile.id(), endpoint.startClientValue, count)
+                    LocalNetplayInstanceLaunchResult(count, count, launcherAvailable = true)
+                  },
+          )
+        }
+
+    try {
+      bus.post(Controller.HardwareProfileEvent(HardwareProfileRegistry.SGB))
+      bus.post(Controller.EmulationStartedEvent("SGB Game"))
+      flushEdt()
+      val available = onEdt { fixture.host.currentPresentation() }
+      assertTrue(available.canStart)
+      assertIs<NetplayAvailability.RequiresDmgRestart>(available.state.availability)
+      assertTrue(available.availabilityText.contains("restart as Game Boy"))
+      assertTrue(available.availabilityText.contains("does not change"))
+
+      onEdt {
+        fixture.host.show()
+        fixture.view.actions.startHosting(LinkMode.NORMAL, 1)
+      }
+      val reload = reloads.single()
+      assertEquals(HardwareProfileRegistry.DMG, reload.profile)
+      assertEquals(NetplayPhase.SWITCHING_PROFILE, onEdt { fixture.host.currentPresentation().state.phase })
+      assertTrue(selections.isEmpty(), "the link port must remain untouched during the restart")
+      assertTrue(starts.isEmpty(), "the server must wait for correlated DMG activation")
+
+      bus.post(
+          Controller.HardwareProfileReloadedEvent(
+              reload.requestId + 1,
+              HardwareProfileRegistry.DMG,
+          ))
+      flushEdt()
+      assertTrue(starts.isEmpty(), "a stale reload acknowledgement must be ignored")
+
+      bus.post(Controller.EmulationStoppedEvent())
+      bus.post(Controller.HardwareProfileEvent(HardwareProfileRegistry.DMG))
+      bus.post(Controller.EmulationStartedEvent("SGB Game"))
+      bus.post(
+          Controller.HardwareProfileReloadedEvent(
+              reload.requestId,
+              HardwareProfileRegistry.DMG,
+          ))
+      flushEdt()
+
+      assertEquals(
+          listOf(Controller.SerialPeripheralSelection.PEER_TO_PEER),
+          selections,
+      )
+      val start = starts.single()
+      assertEquals(reload.requestId, start.attemptId)
+      assertEquals(NetplayPhase.STARTING_HOST, onEdt { fixture.host.currentPresentation().state.phase })
+
+      bus.post(ServerStartedEvent(LinkMode.NORMAL, start.attemptId))
+      flushEdt()
+      assertEquals(
+          listOf(LocalLaunch(Path.of("SGB Game.gb"), "dmg", "localhost", 1)),
+          launches,
+      )
+    } finally {
+      onEdt { fixture.host.close() }
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `automatic SGB2 join waits for correlated DMG activation before connecting`() {
+    val bus = EventBusImpl()
+    val reloads = mutableListOf<Controller.ReloadHardwareProfileEvent>()
+    val starts = mutableListOf<StartClientEvent>()
+    bus.register<Controller.ReloadHardwareProfileEvent>(reloads::add)
+    bus.register<StartClientEvent>(starts::add)
+    val fixture = onEdt { HostFixture(bus, initialJoinEndpoint = validEndpoint("localhost")) }
+
+    try {
+      bus.post(Controller.HardwareProfileEvent(HardwareProfileRegistry.SGB2))
+      bus.post(Controller.EmulationStartedEvent("SGB2 Game"))
+      flushEdt()
+
+      val reload = reloads.single()
+      assertTrue(starts.isEmpty())
+      assertEquals(NetplayPhase.SWITCHING_PROFILE, onEdt { fixture.host.currentPresentation().state.phase })
+
+      bus.post(
+          Controller.HardwareProfileReloadFailedEvent(
+              reload.requestId + 1,
+              "stale failure",
+          ))
+      flushEdt()
+      assertEquals(NetplayPhase.SWITCHING_PROFILE, onEdt { fixture.host.currentPresentation().state.phase })
+
+      bus.post(Controller.EmulationStoppedEvent())
+      bus.post(Controller.HardwareProfileEvent(HardwareProfileRegistry.DMG))
+      bus.post(Controller.EmulationStartedEvent("SGB2 Game"))
+      bus.post(
+          Controller.HardwareProfileReloadedEvent(
+              reload.requestId,
+              HardwareProfileRegistry.DMG,
+          ))
+      flushEdt()
+
+      assertEquals(listOf("localhost"), starts.map { it.host })
+      assertEquals(NetplayPhase.CONNECTING, onEdt { fixture.host.currentPresentation().state.phase })
+    } finally {
+      onEdt { fixture.host.close() }
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `SGB restart failure is retryable and never touches networking`() {
+    val bus = EventBusImpl()
+    val reloads = mutableListOf<Controller.ReloadHardwareProfileEvent>()
+    val selections = mutableListOf<Controller.SerialPeripheralSelection>()
+    val starts = mutableListOf<StartClientEvent>()
+    bus.register<Controller.ReloadHardwareProfileEvent>(reloads::add)
+    bus.register<Controller.SetSerialPeripheralEvent> { selections += it.selection }
+    bus.register<StartClientEvent>(starts::add)
+    val fixture = onEdt { HostFixture(bus) }
+
+    try {
+      bus.post(Controller.HardwareProfileEvent(HardwareProfileRegistry.SGB))
+      bus.post(Controller.EmulationStartedEvent("SGB Game"))
+      flushEdt()
+      onEdt {
+        fixture.host.show()
+        fixture.view.actions.join("gameserver.local")
+      }
+
+      val reload = reloads.single()
+      bus.post(
+          Controller.HardwareProfileReloadFailedEvent(
+              reload.requestId,
+              "The game could not be reopened.",
+          ))
+      flushEdt()
+
+      val failed = onEdt { fixture.host.currentPresentation() }
+      assertEquals(NetplayPhase.FAILED, failed.state.phase)
+      assertEquals(NetplayFailureKind.PROFILE, failed.state.failure?.kind)
+      assertEquals(NetplaySessionAction.TRY_AGAIN, failed.sessionAction)
+      assertTrue(failed.status.contains("could not restart"))
+      assertTrue(selections.isEmpty())
+      assertTrue(starts.isEmpty())
+    } finally {
+      onEdt { fixture.host.close() }
+      bus.close()
+    }
+  }
+
+  @Test
   fun `host launches requested local clients after the server is listening`() {
     val bus = EventBusImpl()
     val starts = mutableListOf<StartServerEvent>()

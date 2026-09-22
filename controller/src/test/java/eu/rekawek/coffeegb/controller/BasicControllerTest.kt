@@ -784,6 +784,63 @@ class BasicControllerTest {
   }
 
   @Test
+  fun transientNetplayProfileReloadUsesDmgWithoutChangingTheSavedSgbSelection() {
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties()
+    val profileEvents = LinkedBlockingQueue<HardwareProfileEvent>()
+    val reloads = LinkedBlockingQueue<Controller.HardwareProfileReloadedEvent>()
+    val failures = LinkedBlockingQueue<Controller.HardwareProfileReloadFailedEvent>()
+    eventBus.register<HardwareProfileEvent>(profileEvents::add)
+    eventBus.register<Controller.HardwareProfileReloadedEvent>(reloads::add)
+    eventBus.register<Controller.HardwareProfileReloadFailedEvent>(failures::add)
+    val sgbRom =
+        Files.createTempFile("coffee-gb-netplay-profile-reload", ".gb").toFile().also { file ->
+          file.writeBytes(
+              ROM.readBytes().also { bytes ->
+                bytes[0x143] = 0
+                bytes[0x146] = 0x03
+              })
+        }
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+        HardwareProfileRegistry.SGB.id()
+    val controller = BasicController(eventBus, properties, null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(sgbRom))
+      assertEquals(
+          HardwareProfileRegistry.SGB,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+
+      eventBus.post(
+          Controller.ReloadHardwareProfileEvent(
+              41L,
+              HardwareProfileRegistry.DMG,
+          ))
+
+      assertEquals(
+          HardwareProfileRegistry.DMG,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+      val completed = assertNotNull(reloads.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(41L, completed.requestId)
+      assertEquals(HardwareProfileRegistry.DMG, completed.profile)
+      assertEquals(
+          HardwareProfileRegistry.SGB,
+          properties.system.dmgGamesProfile,
+          "the netplay fallback must remain session-only",
+      )
+      assertNull(failures.poll(250, TimeUnit.MILLISECONDS))
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      sgbRom.delete()
+    }
+  }
+
+  @Test
   fun hostPersistenceStoreSurvivesPathlessProfileReloadsAndReset() {
     val directory = Files.createTempDirectory("coffee-gb-host-persistence-reload")
     val eventBus = EventBusImpl()

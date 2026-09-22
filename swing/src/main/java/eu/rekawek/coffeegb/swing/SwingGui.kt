@@ -1398,6 +1398,7 @@ internal fun netplaySummary(presentation: NetplayUiPresentation): String {
       when (presentation.state.phase) {
         NetplayPhase.DISCONNECTED -> "Off"
         NetplayPhase.STARTING_HOST -> "Starting"
+        NetplayPhase.SWITCHING_PROFILE -> "Switching hardware"
         NetplayPhase.WAITING_FOR_PEERS -> "Hosting"
         NetplayPhase.CONNECTING -> "Connecting"
         NetplayPhase.NEGOTIATING -> "Synchronizing"
