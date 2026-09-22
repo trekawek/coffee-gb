@@ -1317,7 +1317,11 @@ class LinkedController(
     // transport shutdown can return to that exact pre-link machine.
     rejectedLocalState =
         job.token.event.state?.let { state ->
-          Controller.ControllerState(state, rejected.config.rom)
+          Controller.ControllerState(
+              state,
+              rejected.config.rom,
+              job.token.event.hardwareProfileOverride ?: rejected.config.hardwareProfile,
+          )
         }
     postHostEventSafely(
         Controller.LoadRomFailedEvent(
@@ -3189,7 +3193,11 @@ class LinkedController(
     if (closeState == null) {
       closeState =
           sessions[localPlayer]?.let {
-            Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+            Controller.ControllerState(
+                DetachedStateAdapter.capture(it.gameboy),
+                it.config.rom,
+                it.config.hardwareProfile,
+            )
           } ?: rejectedLocalState
     }
     if (closeCapture == null) {

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.controller.BasicController
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.RomSessionPreparer
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.Connection
 import eu.rekawek.coffeegb.controller.network.ConnectionController
@@ -15,6 +16,8 @@ import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Feature
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -67,6 +70,41 @@ class NetplayStartupTest {
         assertSame(state.state, resume.state)
         assertTrue(resume.allowAutosaveResume)
       }
+    } finally {
+      properties.close()
+    }
+  }
+
+  @Test
+  fun transientDmgProfileSurvivesTheStandaloneToNetplayHandoff() {
+    val properties = properties(0)
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+        HardwareProfileRegistry.SGB2.id()
+    val rom =
+        Rom(
+            testRom().also { bytes ->
+              bytes[0x143] = 0
+              bytes[0x146] = 0x03
+            })
+    val state =
+        Controller.ControllerState(
+            machineState(properties, rom, HardwareProfileRegistry.DMG),
+            rom,
+            HardwareProfileRegistry.DMG,
+        )
+
+    try {
+      val request = createNetplayLoadEvent(state, LinkMode.NORMAL)
+      assertEquals(HardwareProfileRegistry.DMG, request.hardwareProfileOverride)
+
+      val prepared = RomSessionPreparer().prepare(properties, request)
+      val gameboy = prepared.materialize()
+      try {
+        assertEquals(HardwareProfileRegistry.DMG, gameboy.hardwareProfile)
+      } finally {
+        gameboy.discardUnstarted()
+      }
+      assertEquals(HardwareProfileRegistry.SGB2, properties.system.dmgGamesProfile)
     } finally {
       properties.close()
     }
@@ -193,8 +231,12 @@ class NetplayStartupTest {
     }
   }
 
-  private fun machineState(properties: EmulatorProperties, rom: Rom): MachineState {
-    val gameboy = Controller.createGameboyConfig(properties, rom).build()
+  private fun machineState(
+      properties: EmulatorProperties,
+      rom: Rom,
+      hardwareProfileOverride: HardwareProfile? = null,
+  ): MachineState {
+    val gameboy = Controller.createGameboyConfig(properties, rom, hardwareProfileOverride).build()
     return try { DetachedStateAdapter.capture(gameboy) } finally { gameboy.discardUnstarted() }
   }
 

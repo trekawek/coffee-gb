@@ -1028,7 +1028,18 @@ interface Controller : AutoCloseable {
       val exposure: Int,
   ) : Event
 
-  data class ControllerState(val state: MachineState, val rom: Rom)
+  data class ControllerState
+  @JvmOverloads
+  constructor(
+      val state: MachineState,
+      val rom: Rom,
+      /** Exact profile of the captured machine, retained across controller ownership handoffs. */
+      val hardwareProfile: HardwareProfile? = null,
+  ) {
+    init {
+      hardwareProfile?.let(HardwareProfileRegistry::requireRegistered)
+    }
+  }
 
   companion object {
     /**
