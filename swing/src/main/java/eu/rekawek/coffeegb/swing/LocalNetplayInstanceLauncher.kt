@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import java.io.InputStream
+import java.io.PrintStream
+import java.nio.charset.Charset
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -52,7 +55,7 @@ internal data class LocalNetplayInstanceLaunchResult(
  */
 internal class CurrentProcessLocalNetplayInstanceLauncher(
     private val currentCommand: List<String> = currentProcessCommand(),
-    private val startProcess: (List<String>) -> Unit = ::startLocalNetplayProcess,
+    private val startProcess: (List<String>, String) -> Unit = ::startLocalNetplayProcess,
 ) : LocalNetplayInstanceLauncher {
 
   override fun launch(
@@ -83,7 +86,7 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
                     endpoint.startClientValue,
                     normalizedRom.toString(),
                 )
-        startProcess(command)
+        startProcess(command, "netplay-client-${index + 1}")
         started++
       } catch (_: Exception) {
         return LocalNetplayInstanceLaunchResult(started, count, launcherAvailable = true)
@@ -110,17 +113,54 @@ private fun copyHostBatteryIfClientIsNew(hostBattery: Path, clientBattery: Path)
 
 /**
  * A packaged GUI process may have no valid console handles, especially when started from the
- * Windows Start menu. Route child output to the platform null device so relaunch never depends on
- * inheritable standard streams and an unobserved pipe cannot fill up and stall emulation.
+ * Windows Start menu. Always drain the child's merged output on an owned daemon thread: when a
+ * console exists its lines appear in the parent output, and without one the child still cannot
+ * fill an unobserved pipe and stall emulation.
  */
-private fun startLocalNetplayProcess(command: List<String>) {
-  localNetplayProcessBuilder(command).start()
+private fun startLocalNetplayProcess(command: List<String>, outputPrefix: String) {
+  startLocalNetplayProcessWithOutput(command, outputPrefix)
 }
 
 internal fun localNetplayProcessBuilder(command: List<String>): ProcessBuilder =
-    ProcessBuilder(command)
-        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-        .redirectError(ProcessBuilder.Redirect.DISCARD)
+    ProcessBuilder(command).redirectErrorStream(true)
+
+internal fun startLocalNetplayProcessWithOutput(
+    command: List<String>,
+    outputPrefix: String,
+    output: PrintStream = System.out,
+): Process {
+  val child = localNetplayProcessBuilder(command).start()
+  val forwarder =
+      Thread(
+              {
+                child.inputStream.use { input ->
+                  forwardPrefixedLocalNetplayOutput(input, outputPrefix, output)
+                }
+              },
+              "coffee-gb-$outputPrefix-output",
+          )
+          .apply { isDaemon = true }
+  try {
+    forwarder.start()
+  } catch (failure: RuntimeException) {
+    child.destroy()
+    throw failure
+  }
+  return child
+}
+
+internal fun forwardPrefixedLocalNetplayOutput(
+    input: InputStream,
+    prefix: String,
+    output: PrintStream,
+) {
+  input.bufferedReader(Charset.defaultCharset()).forEachLine { line ->
+    synchronized(output) {
+      output.println("[$prefix] $line")
+      output.flush()
+    }
+  }
+}
 
 /** Builds a fresh Coffee GB command without replaying this process's app arguments. */
 internal fun localNetplayLauncherPrefix(command: List<String>): List<String>? {

@@ -168,8 +168,8 @@ private fun observedPackagedLocalNetplayLauncher(
   }
   return CurrentProcessLocalNetplayInstanceLauncher(
       currentProcessCommand(),
-  ) { command ->
-    val child = localNetplayProcessBuilder(command).start()
+  ) { command, outputPrefix ->
+    val child = startLocalNetplayProcessWithOutput(command, outputPrefix)
     try {
       writeExclusivePidMarker(pidMarker, child.pid())
     } catch (failure: Exception) {

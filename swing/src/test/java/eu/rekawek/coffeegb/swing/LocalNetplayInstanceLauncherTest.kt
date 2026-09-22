@@ -1,6 +1,9 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertContentEquals
@@ -21,18 +24,36 @@ class LocalNetplayInstanceLauncherTest {
   }
 
   @Test
-  fun `child processes do not require host console handles or retain unread pipes`() {
+  fun `child processes merge stderr into the drained stdout pipe`() {
     val builder = localNetplayProcessBuilder(listOf("coffee-gb"))
-    assertEquals(
-        ProcessBuilder.Redirect.DISCARD,
-        builder.redirectOutput(),
+    assertTrue(builder.redirectErrorStream())
+    assertEquals(ProcessBuilder.Redirect.PIPE, builder.redirectOutput())
+    assertEquals(ProcessBuilder.Redirect.PIPE, builder.redirectError())
+  }
+
+  @Test
+  fun `child output lines are forwarded with the client prefix`() {
+    val bytes = ByteArrayOutputStream()
+    val output = PrintStream(bytes, true, Charsets.UTF_8)
+
+    forwardPrefixedLocalNetplayOutput(
+        ByteArrayInputStream("first line\nwarning line\nlast line".toByteArray()),
+        "netplay-client-2",
+        output,
     )
-    assertEquals(ProcessBuilder.Redirect.DISCARD, builder.redirectError())
+
+    val newline = System.lineSeparator()
+    assertEquals(
+        "[netplay-client-2] first line$newline" +
+            "[netplay-client-2] warning line$newline" +
+            "[netplay-client-2] last line$newline",
+        bytes.toString(Charsets.UTF_8),
+    )
   }
 
   @Test
   fun `jar launcher gives every client a persistent copy of the host battery save`() {
-    val started = mutableListOf<List<String>>()
+    val started = mutableListOf<Pair<List<String>, String>>()
     val directory = temporaryFolder.newFolder("test data").toPath()
     val rom = Files.createFile(directory.resolve("Tetris.gb"))
     val hostSave = Files.write(directory.resolve("Tetris.sav"), byteArrayOf(1, 2, 3))
@@ -41,15 +62,16 @@ class LocalNetplayInstanceLauncherTest {
     val launcher =
         CurrentProcessLocalNetplayInstanceLauncher(
             listOf("/usr/bin/java", "-Dcoffee-gb.theme=dark", "-jar", "/apps/coffee-gb.jar", "old.gb"),
-        started::add,
+        { command, prefix -> started += command to prefix },
     )
 
     val result = launcher.launch(rom, HardwareProfileRegistry.CGB, endpoint("localhost"), 3)
 
     assertEquals(3, result.started)
     assertEquals(3, started.size)
-    started.forEachIndexed { index, command ->
+    started.forEachIndexed { index, (command, prefix) ->
       val clientSave = directory.resolve("Tetris-client${index + 1}.sav")
+      assertEquals("netplay-client-${index + 1}", prefix)
       assertEquals(
           listOf(
               "/usr/bin/java",
@@ -137,7 +159,7 @@ class LocalNetplayInstanceLauncherTest {
     val launcher =
         CurrentProcessLocalNetplayInstanceLauncher(
             listOf("coffee-gb"),
-        ) {
+        ) { _, _ ->
           attempts++
           if (attempts == 2) throw IllegalStateException("synthetic failure")
         }
