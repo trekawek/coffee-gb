@@ -108,6 +108,20 @@ class NetplayDiagnosticsTest {
   }
 
   @Test
+  fun statePresenceDiagnosticKeepsComponentPathWithoutTreatingItAsAHostname() {
+    assertEquals(
+        "machine > cartridgeMemento > batteryMemento has incompatible state presence",
+        NetplayDiagnosticSanitizer.redactStateValidationDetail(
+            "machine.cartridgeMemento.batteryMemento has incompatible state presence"),
+    )
+    assertEquals(
+        "[redacted-host] has incompatible state presence",
+        NetplayDiagnosticSanitizer.redactStateValidationDetail(
+            "peer.example.test has incompatible state presence"),
+    )
+  }
+
+  @Test
   fun finalBoundedSnapshotIsDeliveredWithoutBlockingItsProducer() {
     val publisher = BoundedSnapshotPublisher(0, "netplay-diagnostics-close-test")
     val delivered = CountDownLatch(1)

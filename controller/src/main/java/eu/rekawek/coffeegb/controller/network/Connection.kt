@@ -929,7 +929,7 @@ class Connection(
   private fun portableStateMismatchDetail(failure: Exception): String? =
       failure.message
           ?.takeIf(String::isNotBlank)
-          ?.let(NetplayDiagnosticSanitizer::redact)
+          ?.let(NetplayDiagnosticSanitizer::redactStateValidationDetail)
           ?.takeIf(String::isNotBlank)
 
   private fun readNetworkState(
