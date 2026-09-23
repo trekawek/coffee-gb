@@ -301,7 +301,13 @@ class LinkedControllerTest {
     val rom = directory.resolve("linked-battery.gb")
     val battery = directory.resolve("linked-battery.sav")
     val batteryBytes = byteArrayOf(0x12, 0x34, 0x56, 0x78)
-    Files.copy(ROM.toPath(), rom)
+    Files.write(
+        rom,
+        ROM.readBytes().also { bytes ->
+          bytes[0x147] = 0x03 // MBC1 + RAM + battery
+          bytes[0x149] = 0x02 // 8 KiB RAM
+        },
+    )
     Files.write(battery, batteryBytes)
 
     fun load(enabled: Boolean): LinkedController.LocalRomLoadedEvent {
@@ -336,6 +342,37 @@ class LinkedControllerTest {
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
       deleteTestDirectory(directory)
+    }
+  }
+
+  @Test
+  fun localRomEventIgnoresAdjacentBatteryForBatterylessRom() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-batteryless")
+    val rom = directory.resolve("batteryless.gb")
+    val battery = directory.resolve("batteryless.sav")
+    Files.copy(ROM.toPath(), rom)
+    Files.write(battery, byteArrayOf(0x12, 0x34))
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val received = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent>(received::add)
+
+    try {
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+
+      assertNull(assertNotNull(received.poll(1, TimeUnit.SECONDS)).batteryFile)
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      directory.toFile().deleteRecursively()
     }
   }
 
