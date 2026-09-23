@@ -120,6 +120,7 @@ interface Controller : AutoCloseable {
       }
     }
 
+    @JvmOverloads
     constructor(
         image: RomImage,
         state: MachineState? = null,
