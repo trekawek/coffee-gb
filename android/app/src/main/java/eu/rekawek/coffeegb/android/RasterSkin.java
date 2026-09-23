@@ -65,11 +65,32 @@ final class RasterSkin {
             float menuControlX, float menuControlY) {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inScaled = false;
+        options.inMutable = true;
         Bitmap bitmap = BitmapFactory.decodeResource(context.getResources(), resource, options);
         if (bitmap == null) {
             throw new IllegalStateException("Unable to load Coffee GB raster skin");
         }
+        addActionBridgeCue(context, bitmap);
         return new RasterSkin(bitmap, transparentWindow(bitmap), menuControlX, menuControlY);
+    }
+
+    /** Composite once so the shared A+B cue is also part of the cached surface layer. */
+    private static void addActionBridgeCue(Context context, Bitmap bitmap) {
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inScaled = false;
+        Bitmap cue = BitmapFactory.decodeResource(context.getResources(),
+                R.drawable.coffee_gb_action_bridge_cue, options);
+        if (cue == null) {
+            throw new IllegalStateException("Unable to load Coffee GB action bridge cue");
+        }
+        try {
+            SkinTransform.Bounds bounds = TouchControlsLayout.actionBridgeCueBounds(
+                    bitmap.getWidth(), bitmap.getHeight());
+            new Canvas(bitmap).drawBitmap(cue, null, rectF(bounds),
+                    new Paint(Paint.FILTER_BITMAP_FLAG));
+        } finally {
+            cue.recycle();
+        }
     }
 
     SkinTransform transform(int viewWidth, int viewHeight) {

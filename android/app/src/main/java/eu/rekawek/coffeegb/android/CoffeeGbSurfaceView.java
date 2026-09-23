@@ -99,6 +99,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private volatile MenuTouchInput menuInput;
     private final TouchControlsPreferences touchPreferences;
     private volatile TouchControlsLayout touchLayout;
+    private final TouchPressState touchPressState = new TouchPressState();
     private volatile String transientMessage;
     private volatile long transientExpiresAt;
     /** One-time benchmark-only blank post used to establish a real Surface layer anchor. */
@@ -159,6 +160,9 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         if (presentation == null) {
             clearMenuPresentation();
             return;
+        }
+        if (presentation.visible() && (menuPresentation == null || !menuPresentation.visible())) {
+            clearTouchFeedback();
         }
         menuPresentation = presentation;
         onFrameAvailable();
@@ -278,6 +282,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
 
     /** Installs the input bridge used to consume skin controls while the menu is visible. */
     public void setMenuInput(MenuTouchInput input) {
+        clearTouchFeedback();
         menuPointerGesture.cancel();
         MenuTouchInput previous = menuInput;
         if (previous != null) {
@@ -306,6 +311,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
 
     /** Releases only the Surface subscription; the active emulator keeps running in its service. */
     public void detach() {
+        clearTouchFeedback();
         clearTransientMessage();
         menuPresentation = null;
         updateMenuAnimation();
@@ -342,6 +348,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
         if (menu != null && (menuVisible || menuPointer)) {
             if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_OUTSIDE) {
+                clearTouchFeedback();
                 menuPointerGesture.cancel();
                 menu.releaseAllPointers();
                 synchronized (menuTouchPointers) {
@@ -350,6 +357,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 return true;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+                releaseTouchFeedback(actionPointerId);
                 menu.releasePointer(actionPointerId);
                 synchronized (menuTouchPointers) {
                     menuTouchPointers.remove(actionPointerId);
@@ -372,6 +380,9 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                             menuPointerGesture.press(pointerId,
                                     menuTargetAt(event.getX(index), event.getY(index)));
                         }
+                        updateTouchFeedback(pointerId, menuPointerGesture.captured(pointerId)
+                                ? List.of() : buttonsAtViewPoint(touchLayout,
+                                        event.getX(index), event.getY(index)));
                         menu.updatePointer(pointerId, menuPointerGesture.captured(pointerId)
                                 ? List.of() : menuKeysAt(event.getX(index), event.getY(index)));
                         synchronized (menuTouchPointers) {
@@ -390,10 +401,12 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             return false;
         }
         if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_OUTSIDE) {
+            clearTouchFeedback();
             router.releaseAllTouch();
             return true;
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+            releaseTouchFeedback(actionPointerId);
             router.releaseTouchPointer(event.getPointerId(event.getActionIndex()));
             return true;
         }
@@ -404,6 +417,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 List<Button> buttons = buttonsAtViewPoint(layout,
                         event.getX(index), event.getY(index));
                 router.updateTouchPointer(event.getPointerId(index), buttons);
+                updateTouchFeedback(event.getPointerId(index), buttons);
                 if (index == event.getActionIndex() && action != MotionEvent.ACTION_MOVE
                         && !buttons.isEmpty() && layout.haptics()) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
@@ -412,6 +426,36 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    private void updateTouchFeedback(int pointerId, List<Button> buttons) {
+        if (touchPressState.update(pointerId, buttons)) {
+            onFrameAvailable();
+        }
+    }
+
+    private void releaseTouchFeedback(int pointerId) {
+        if (touchPressState.release(pointerId)) {
+            onFrameAvailable();
+        }
+    }
+
+    void clearTouchFeedback() {
+        if (touchPressState.clear()) {
+            onFrameAvailable();
+        }
+    }
+
+    int pressedButtons() {
+        return touchPressState.mask();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (!hasWindowFocus) {
+            clearTouchFeedback();
+        }
     }
 
     @Override
@@ -499,6 +543,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        clearTouchFeedback();
         surfaceReady = false;
         updateMenuAnimation();
         surfaceFrameRateHintApplied = false;
@@ -639,8 +684,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         /**
          * Each baked skin is immutable and used to be scaled and composited on every game frame.
          * Keep one exact-size transparent overlay per renderer so the hot path can blit it after
-         * the native frame and transient UI. A presentation switch changes the skin identity and
-         * rebuilds this layer once.
+         * the native frame and transient UI. A presentation switch or touch-state change rebuilds
+         * this layer once.
          *
          * <p>The cache lives on the renderer rather than the View: a Surface recreation gets a
          * fresh cache and the old potentially-large bitmap becomes collectible with its thread.
@@ -649,6 +694,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         private int staticLayerWidth;
         private int staticLayerHeight;
         private RasterSkin staticLayerSkin;
+        private int staticLayerPressedMask;
+        private final PressedControlsArt pressedControlsArt = new PressedControlsArt(skinContext);
         /** Hardware Canvas is preferred, but one failed lock permanently selects the safe fallback
          * for this short-lived renderer. A new Surface gets a fresh RenderThread. */
         private boolean hardwareCanvasAvailable = true;
@@ -827,30 +874,31 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
 
         /**
-         * Draws the immutable skin overlay. This is intentionally exact in view coordinates:
-         * the only scaled operation is performed once when a Surface or orientation changes,
-         * instead of once per submitted game frame. Matte and aperture fills stay before the
-         * video/menu layers, while this cached overlay retains the original final compositing
-         * order and masks the same rounded corners.
+         * Draws the cached skin and pressed controls in exact view coordinates. Scaling happens
+         * when the surface, skin or held-button mask changes. Each submitted game frame reuses
+         * that layer, retaining the final compositing order and rounded display aperture.
          */
         private void drawCachedSkin(Canvas canvas, RasterSkin skin, SkinTransform transform) {
             int width = canvas.getWidth();
             int height = canvas.getHeight();
+            int pressedMask = touchPressState.mask();
             if (!staticLayerMatches(staticLayer, staticLayerWidth, staticLayerHeight,
-                    staticLayerSkin, width, height, skin)) {
+                    staticLayerSkin, width, height, skin) || staticLayerPressedMask != pressedMask) {
                 if (staticLayer == null
                         || staticLayerWidth != width || staticLayerHeight != height) {
                     staticLayer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                     staticLayerWidth = width;
                     staticLayerHeight = height;
                 } else {
-                    // A family-only change keeps the canvas size. Reuse this large allocation,
-                    // clearing the former skin so its pixels cannot survive under the new hole.
+                    // Reuse this allocation when the family or pressed state changes.
+                    // Clear old pixels, including any former aperture or pressed overlays.
                     staticLayer.eraseColor(Color.TRANSPARENT);
                 }
                 staticLayerSkin = skin;
+                staticLayerPressedMask = pressedMask;
                 Canvas layerCanvas = new Canvas(staticLayer);
                 skin.draw(layerCanvas, skinPaint, transform);
+                pressedControlsArt.draw(layerCanvas, skinPaint, transform, pressedMask);
             }
             canvas.drawBitmap(staticLayer, 0, 0, staticLayerPaint);
         }

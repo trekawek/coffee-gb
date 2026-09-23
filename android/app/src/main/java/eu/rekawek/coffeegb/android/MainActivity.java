@@ -572,6 +572,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         activityResumed = false;
         if (video != null) {
             video.clearTransientMessage();
+            video.clearTouchFeedback();
         }
         super.onPause();
     }
