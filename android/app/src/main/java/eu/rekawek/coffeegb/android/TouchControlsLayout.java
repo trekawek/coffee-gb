@@ -128,6 +128,19 @@ final class TouchControlsLayout {
         return a ? geometry.aY : geometry.bY;
     }
 
+    /** The visual marker slightly overlaps both buttons; the shared target extends beyond it. */
+    static SkinTransform.Bounds actionBridgeCueBounds(int width, int height) {
+        Geometry geometry = geometry(width, height);
+        // Measured midpoints of the painted buttons in the native 941x1672 / 1672x941 skins.
+        // The more approximate hit centers put the portrait cue low and the landscape cue right.
+        boolean portrait = height >= width;
+        float centerX = portrait ? width * (738.25f / 941f) : width * (1497.5f / 1672f);
+        float centerY = portrait ? height * (1180f / 1672f) : height * (478f / 941f);
+        float halfSize = geometry.actionRadius * .45f;
+        return new SkinTransform.Bounds(centerX - halfSize, centerY - halfSize,
+                centerX + halfSize, centerY + halfSize);
+    }
+
     float utilityCenterX(int width, int height, boolean start) {
         Geometry geometry = geometry(width, height);
         return start ? geometry.startX : geometry.selectX;
