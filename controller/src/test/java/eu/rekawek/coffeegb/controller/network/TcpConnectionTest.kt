@@ -148,6 +148,64 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun batterylessMachineCheckpointIgnoresAStaleSidecarOverTcp() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverReady = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
+    val clientReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    val clientErrors = LinkedBlockingQueue<ConnectionController.ClientProtocolErrorEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent>(serverStarted::add)
+    serverBus.register<ConnectionController.ServerGotConnectionEvent>(serverReady::add)
+    clientBus.register<ConnectionController.ClientConnectedToServerEvent>(clientReady::add)
+    clientBus.register<Connection.PeerLoadedGameEvent>(received::add)
+    clientBus.register<ConnectionController.ClientProtocolErrorEvent>(clientErrors::add)
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(serverReady.poll(5, TimeUnit.SECONDS))
+    assertNotNull(clientReady.poll(5, TimeUnit.SECONDS))
+
+    val rom = StateCodecTestSupport.rom()
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(rom))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setGameboyType(GameboyType.DMG)
+            .setSupportBatterySave(false)
+    val sourceBus = EventBusImpl()
+    val source = configuration.build()
+    source.init(sourceBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    val state =
+        try {
+          StateCodec.encode(StateCodec.capture(configuration, source), StateCompression.DEFLATE)
+        } finally {
+          source.stop()
+          source.close()
+          sourceBus.close()
+        }
+
+    serverBus.post(
+        LinkedController.LocalRomLoadedEvent(
+            rom,
+            byteArrayOf(0x12, 0x34),
+            state,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            11,
+        ))
+
+    val game = assertNotNull(received.poll(5, TimeUnit.SECONDS))
+    assertContentEquals(rom, game.rom)
+    assertEquals(11, game.frame)
+    assertTrue(clientErrors.isEmpty(), clientErrors.peek()?.message)
+  }
+
+  @Test
   fun stoppingServerTerminatesItsConnectedClient() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
@@ -933,6 +991,56 @@ class TcpConnectionTest {
             rom,
             null,
             null,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            false,
+            false,
+            false,
+            false,
+            Connection.portableStateHasBattery(file),
+        )
+    val bus = EventBusImpl()
+    val probe = target.build()
+    probe.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    try {
+      assertEquals(
+          0,
+          DetachedStateAdapter.capture(probe).recordCount(MEMORY_BATTERY_STATE),
+      )
+      DetachedStateAdapter.validateTarget(probe, (file.root as MachineStateRoot).machine)
+    } finally {
+      probe.stop()
+      probe.close()
+      bus.close()
+    }
+  }
+
+  @Test
+  fun peerTargetIgnoresAStaleSidecarForABatterylessRomCheckpoint() {
+    val rom = StateCodecTestSupport.rom()
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(rom))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setGameboyType(GameboyType.DMG)
+            .setSupportBatterySave(false)
+    val sourceBus = EventBusImpl()
+    val source = configuration.build()
+    source.init(sourceBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    val file =
+        try {
+          StateCodec.capture(configuration, source)
+        } finally {
+          source.stop()
+          source.close()
+          sourceBus.close()
+        }
+
+    assertFalse(Connection.portableStateHasBattery(file))
+    val target =
+        Connection.peerConfiguration(
+            rom,
+            null,
+            byteArrayOf(0x12, 0x34),
             GameboyType.DMG,
             Gameboy.BootstrapMode.SKIP,
             false,

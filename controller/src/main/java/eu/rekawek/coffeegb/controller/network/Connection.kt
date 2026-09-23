@@ -29,6 +29,7 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
@@ -1599,7 +1600,12 @@ class Connection(
       // A portable checkpoint can retain the sender's battery owner even when no sidecar payload
       // was transferred. Mirror that owner with a service-free MemoryBattery only when the
       // detached graph actually contains one; a battery-less checkpoint must retain its absence.
-      if (battery != null || portableStateHasBattery) {
+      // An adjacent or explicitly selected .sav can outlive a ROM change. Do not let that stale
+      // sidecar invent battery ownership for a cartridge whose mapper has no persistent storage;
+      // its MACHINE checkpoint correctly contains null battery mementos. A checkpoint that
+      // already declares battery state remains authoritative for backward compatibility.
+      if (portableStateHasBattery ||
+          battery != null && Cartridge.supportsBatterySave(primary)) {
         configuration.setBatteryData(battery?.clone() ?: byteArrayOf())
       }
       return configuration

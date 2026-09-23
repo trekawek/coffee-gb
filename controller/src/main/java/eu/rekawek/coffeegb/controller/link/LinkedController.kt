@@ -2779,7 +2779,7 @@ class LinkedController(
       config: GameboyConfiguration,
       token: LocalOpenToken,
   ): ByteArray? {
-    if (!config.isSupportBatterySave) {
+    if (!config.isSupportBatterySave || !Cartridge.supportsBatterySave(config.rom)) {
       return null
     }
     val saveFile =
