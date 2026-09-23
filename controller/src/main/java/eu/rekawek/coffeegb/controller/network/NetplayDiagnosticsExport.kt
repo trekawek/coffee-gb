@@ -96,6 +96,23 @@ object NetplayDiagnosticSanitizer {
   private val ipv4 = Regex("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")
   private val bracketedIpv6 = Regex("\\[(?=[0-9a-zA-Z:._%-]*:)[0-9a-zA-Z:._%-]+]")
   private val dns = Regex("(?i)(?<![a-z0-9-])(?:[a-z0-9-]+\\.)+[a-z]{2,63}(?![a-z0-9-])")
+  private val statePresenceDetail =
+      Regex(
+          "^((?:machine|serial)(?:(?:\\.[A-Za-z_][A-Za-z0-9_]*)|" +
+              "(?:\\[[0-9]+]))*) has incompatible state presence$")
+
+  /**
+   * State compatibility paths contain only pinned record-field names and numeric indices. Keep
+   * that useful local diagnostic while routing every other message through the ordinary secret,
+   * path, and network-address redactor. Replacing separators also prevents a component path such
+   * as `machine.foo.bar` from being mistaken for a DNS hostname.
+   */
+  fun redactStateValidationDetail(value: String): String {
+    val bounded = value.take(MAX_INPUT_CHARS)
+    val match = statePresenceDetail.matchEntire(bounded) ?: return redact(value)
+    return (match.groupValues[1].replace(".", " > ") +
+        " has incompatible state presence").take(MAX_OUTPUT_CHARS)
+  }
 
   fun redact(value: String): String {
     var bounded = value.take(MAX_INPUT_CHARS).map { if (it.code in 0x20..0x7e) it else '?' }
