@@ -120,6 +120,8 @@ public final class CartridgeProperties {
                     Mapper.POCKET_SONAR),
             linkAtBoot("Razor Freestyle Scooter startup link detection",
                     CartridgeProperties::isRazorFreestyleScooter),
+            linkAtBoot("Renju Club startup link detection",
+                    info -> info.title().equals("RENJYU CLUB")),
             features("Pocket Voice V2.0", CartridgeProperties::isPocketVoice,
                     Feature.POCKET_VOICE),
             mapper("Pocket Camera debug tester", CartridgeProperties::isPocketCameraDebugTester,

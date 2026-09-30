@@ -76,6 +76,31 @@ class NetplayStartupTest {
   }
 
   @Test
+  fun renjuClubStartsFreshOnlyForTwoPlayerNetplay() {
+    val properties = properties(0)
+    try {
+      val rom = Rom(testRom("RENJYU CLUB"))
+      assertTrue(rom.cartridgeProperties.isLinkRequiredAtBoot)
+      assertTrue(Feature.entries.none(rom.cartridgeProperties::has))
+      val state = Controller.ControllerState(machineState(properties, rom), rom)
+
+      val normalLink = createNetplayLoadEvent(state, LinkMode.NORMAL)
+      assertSame(rom.image, normalLink.image)
+      assertNull(normalLink.state)
+      assertFalse(normalLink.allowAutosaveResume)
+
+      val fourPlayerAdapter = createNetplayLoadEvent(state, LinkMode.FOUR_PLAYER_ADAPTER)
+      assertSame(state.state, fourPlayerAdapter.state)
+      assertTrue(fourPlayerAdapter.allowAutosaveResume)
+
+      val otherGame = Rom(testRom("OTHER GAME"))
+      assertFalse(otherGame.cartridgeProperties.isLinkRequiredAtBoot)
+    } finally {
+      properties.close()
+    }
+  }
+
+  @Test
   fun transientDmgProfileSurvivesTheStandaloneToNetplayHandoff() {
     val properties = properties(0)
     properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
@@ -254,14 +279,15 @@ class NetplayStartupTest {
   }
 
   /** Synthetic startup marker program; no commercial game code or save data. */
-  private fun testRom(): ByteArray = ByteArray(0x100000).also { bytes ->
-    "RAZOR FREESBRZE".toByteArray(Charsets.US_ASCII).copyInto(bytes, 0x134)
-    bytes[0x143] = 0xc0.toByte()
-    bytes[0x147] = 0x19
-    bytes[0x148] = 5
-    bytes[0x14a] = 1
-    byteArrayOf(0xc3.toByte(), 0x50, 0x01).copyInto(bytes, 0x100)
-    byteArrayOf(0x3e, 0x5a, 0xea.toByte(), 0x00, 0xc0.toByte(), 0x18, 0xfe.toByte())
-        .copyInto(bytes, 0x150)
-  }
+  private fun testRom(title: String = "RAZOR FREESBRZE"): ByteArray =
+      ByteArray(0x100000).also { bytes ->
+        title.toByteArray(Charsets.US_ASCII).copyInto(bytes, 0x134)
+        bytes[0x143] = 0xc0.toByte()
+        bytes[0x147] = 0x19
+        bytes[0x148] = 5
+        bytes[0x14a] = 1
+        byteArrayOf(0xc3.toByte(), 0x50, 0x01).copyInto(bytes, 0x100)
+        byteArrayOf(0x3e, 0x5a, 0xea.toByte(), 0x00, 0xc0.toByte(), 0x18, 0xfe.toByte())
+            .copyInto(bytes, 0x150)
+      }
 }
