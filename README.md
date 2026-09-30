@@ -154,12 +154,19 @@ explains how per-frame snapshots made high-latency link play practical.
 
 ## Kudos
 
-Special thanks to [@ScottNash042](https://github.com/ScottNash042), whose
-thorough compatibility testing, hard-to-find edge-case reports, and thoughtful
-feature proposals have provided enormous value to Coffee GB.
-
-Coffee GB also owes a great deal to the Game Boy hardware research community
+Coffee GB owes a great deal to the Game Boy hardware research community
 and to the authors of every test suite linked above.
+
+Thanks to:
+
+- The authors and contributors of [SuperSnes9x](https://github.com/shanytc/snes9x)
+  for their research, testing, and documentation of Game Boy and Game Boy Color
+  link cable compatibility.
+- [Shonumi](https://shonumi.github.io/index.html) for detailed research into
+  Game Boy hardware and peripherals in the
+  [*Edge of Emulation* series](https://shonumi.github.io/articles.html).
+- [@ScottNash042](https://github.com/ScottNash042) for issue reports and
+  feature suggestions.
 
 ## License
 
