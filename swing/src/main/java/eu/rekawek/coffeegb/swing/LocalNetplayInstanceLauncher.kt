@@ -55,6 +55,7 @@ internal data class LocalNetplayInstanceLaunchResult(
  */
 internal class CurrentProcessLocalNetplayInstanceLauncher(
     private val currentCommand: List<String> = currentProcessCommand(),
+    private val portable: Boolean = false,
     private val startProcess: (List<String>, String) -> Unit = ::startLocalNetplayProcess,
 ) : LocalNetplayInstanceLauncher {
 
@@ -77,6 +78,7 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
         copyHostBatteryIfClientIsNew(hostBattery, clientBattery)
         val command =
             launcher +
+                (if (portable) listOf("--portable") else emptyList()) +
                 listOf(
                     "--profile=${profile.id()}",
                     "--battery-save",

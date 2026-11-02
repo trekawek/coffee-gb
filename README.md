@@ -47,6 +47,28 @@ orchestration layer use Kotlin and Java.
 
 ROM files are not included.
 
+## Configuration
+
+On Windows, Coffee GB stores its settings in
+`%LOCALAPPDATA%\Coffee GB\coffeegb.properties`. If that file does not exist,
+settings from the earlier `%USERPROFILE%\.coffeegb.properties` location are
+loaded when available; subsequent changes are saved to the new location. On
+other platforms, the default settings file remains `~/.coffeegb.properties`.
+
+To keep the properties file beside the application, start the JAR with:
+
+```sh
+java -jar coffee-gb.jar --portable
+```
+
+Portable mode uses `coffeegb.properties` in the JAR's directory and does not
+import the normal settings file. With an unpacked native application image it
+uses the launcher directory. The Windows single-file EXE extracts its launcher
+to a temporary directory, so use the JAR or an unpacked application image for
+portable settings. The application directory must be writable. This option
+controls the properties file; game saves and other application data keep their
+own locations.
+
 ## Controls
 
 Default keyboard controls:

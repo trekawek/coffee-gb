@@ -52,6 +52,7 @@ class ApplicationSettingsStore(
     private val debounceMillis: Long = DEFAULT_DEBOUNCE_MILLIS,
     private val clock: Clock = Clock.systemUTC(),
     private val closeTimeoutMillis: Long = DEFAULT_CLOSE_TIMEOUT_MILLIS,
+    private val legacyPath: Path? = null,
 ) : AutoCloseable {
   val path: Path = settingsPath.toAbsolutePath().normalize()
 
@@ -77,12 +78,30 @@ class ApplicationSettingsStore(
     require(path.fileName != null && path.parent != null) {
       "Settings path must have a file name and parent directory"
     }
-    val loaded = load()
+    var loaded = load()
+    var migrationFailure: IOException? = null
+    if (loaded.fromLegacy && !loaded.readOnly) {
+      try {
+        // Another process may have created the destination since load() checked it. Recheck and
+        // import under the destination's persistence lock so its newer settings always win.
+        val imported = persistence.read(path) { recovered ->
+          if (!Files.notExists(recovered, LinkOption.NOFOLLOW_LINKS)) false
+          else {
+            writeDocument(loaded.document)
+            true
+          }
+        }
+        if (!imported) loaded = load()
+      } catch (failure: IOException) {
+        migrationFailure = failure
+      }
+    }
     document = loaded.document
     readOnly = loaded.readOnly
     loaded.warning?.let(warning::set)
-    if (loaded.migrated && !readOnly) {
+    if ((loaded.migrated && !loaded.fromLegacy && !readOnly) || migrationFailure != null) {
       try {
+        migrationFailure?.let { throw it }
         writeDocument(document)
       } catch (failure: IOException) {
         lastWriteFailure = failure
@@ -299,6 +318,7 @@ class ApplicationSettingsStore(
   }
 
   private fun load(): Loaded {
+    var fromLegacy = false
     val bytes =
         try {
           persistence.read(path) { recovered ->
@@ -317,19 +337,38 @@ class ApplicationSettingsStore(
         } catch (failure: IOException) {
           return readFailure(failure)
         }
-    if (bytes == null) return Loaded(ApplicationSettingsDocument(ApplicationSettings()))
+    val input = bytes ?: run {
+      val legacy = legacyPath ?: return Loaded(ApplicationSettingsDocument(ApplicationSettings()))
+      try {
+        if (Files.notExists(legacy, LinkOption.NOFOLLOW_LINKS)) {
+          return Loaded(ApplicationSettingsDocument(ApplicationSettings()))
+        }
+        Files.newInputStream(legacy).use { stream ->
+          stream.readAtMost(MAX_SETTINGS_BYTES + 1).also {
+            if (it.size > MAX_SETTINGS_BYTES) {
+              throw OversizedSettingsException(
+                  "Settings file exceeds the $MAX_SETTINGS_BYTES-byte limit")
+            }
+          }
+        }.also { fromLegacy = true }
+      } catch (failure: OversizedSettingsException) {
+        return invalidLegacy(failure)
+      } catch (failure: IOException) {
+        return readFailure(failure)
+      }
+    }
 
     val raw =
         try {
-          decodeProperties(bytes)
+          decodeProperties(input)
         } catch (failure: Exception) {
-          return recoverCorrupt(failure)
+          return if (fromLegacy) invalidLegacy(failure) else recoverCorrupt(failure)
         }
     val needsMigration =
         raw[ApplicationSettingsCodec.SCHEMA_VERSION_KEY] !=
             ApplicationSettings.CURRENT_SCHEMA_VERSION.toString()
     return try {
-      Loaded(ApplicationSettingsCodec.decode(raw), migrated = needsMigration)
+      Loaded(ApplicationSettingsCodec.decode(raw), migrated = needsMigration, fromLegacy = fromLegacy)
     } catch (future: UnsupportedApplicationSettingsVersionException) {
       Loaded(
           ApplicationSettingsDocument(ApplicationSettings()),
@@ -341,9 +380,22 @@ class ApplicationSettingsStore(
               ),
       )
     } catch (failure: RuntimeException) {
-      recoverCorrupt(failure)
+      if (fromLegacy) invalidLegacy(failure) else recoverCorrupt(failure)
     }
   }
+
+  /** Never rename or otherwise mutate an imported settings file. */
+  private fun invalidLegacy(failure: Throwable): Loaded =
+      Loaded(
+          ApplicationSettingsDocument(ApplicationSettings()),
+          warning =
+              ApplicationSettingsLoadWarning(
+                  ApplicationSettingsWarningKind.CORRUPT_FILE_RECOVERED,
+                  "Legacy settings are invalid and have been left unchanged; defaults are active " +
+                      "and changes will be saved to the new settings file: " +
+                      (failure.message ?: failure.javaClass.simpleName),
+              ),
+      )
 
   private fun recoverCorrupt(failure: Throwable): Loaded {
     val preserved =
@@ -410,6 +462,7 @@ class ApplicationSettingsStore(
   private data class Loaded(
       val document: ApplicationSettingsDocument,
       val migrated: Boolean = false,
+      val fromLegacy: Boolean = false,
       val readOnly: Boolean = false,
       val warning: ApplicationSettingsLoadWarning? = null,
   )
@@ -423,8 +476,31 @@ class ApplicationSettingsStore(
     private val LOG = LoggerFactory.getLogger(ApplicationSettingsStore::class.java)
     private val CORRUPT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
-    fun defaultPath(): Path =
-        Paths.get(System.getProperty("user.home")).resolve(".coffeegb.properties")
+    internal data class SettingsPaths(val path: Path, val legacyPath: Path? = null)
+
+    internal fun settingsPaths(osName: String, localAppData: String?, userHome: Path): SettingsPaths {
+      val legacy = userHome.resolve(".coffeegb.properties")
+      if (!osName.startsWith("Windows", ignoreCase = true)) return SettingsPaths(legacy)
+      val local = localAppData?.takeIf { it.isNotBlank() }
+          ?.let { runCatching { Paths.get(it) }.getOrNull() }
+          ?.takeIf { it.isAbsolute }
+          ?: userHome.resolve("AppData").resolve("Local")
+      return SettingsPaths(local.resolve("Coffee GB").resolve("coffeegb.properties"), legacy)
+    }
+
+    private fun defaultPaths(): SettingsPaths =
+        settingsPaths(
+            System.getProperty("os.name", ""),
+            System.getenv("LOCALAPPDATA"),
+            Paths.get(System.getProperty("user.home")),
+        )
+
+    fun defaultPath(): Path = defaultPaths().path
+
+    internal fun defaultStore(): ApplicationSettingsStore {
+      val paths = defaultPaths()
+      return ApplicationSettingsStore(paths.path, legacyPath = paths.legacyPath)
+    }
 
     internal fun decodeProperties(
         bytes: ByteArray,
