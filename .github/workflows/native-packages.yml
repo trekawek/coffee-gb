@@ -135,6 +135,37 @@ jobs:
           cache: maven
           cache-dependency-path: "**/pom.xml"
 
+      - name: Install verified Maven 3.8.6
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags origin "$WORKFLOW_SHA"
+          git show "$WORKFLOW_SHA:.github/scripts/setup-release-maven.py" > "$RUNNER_TEMP/setup-release-maven.py"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python "$RUNNER_TEMP/setup-release-maven.py"
+          else
+            python3 "$RUNNER_TEMP/setup-release-maven.py"
+          fi
+
+      - name: Verify pinned Maven is on PATH
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            command -v mvn.cmd
+            version=$(mvn.cmd --version)
+          else
+            command -v mvn
+            version=$(mvn --version)
+          fi
+          first_line=${version%%$'\n'*}
+          first_line=${first_line%$'\r'}
+          if [[ "$first_line" != "Apache Maven 3.8.6 "* ]]; then
+            echo "Unexpected Maven version: $first_line" >&2
+            exit 1
+          fi
+          echo "$first_line"
+
       - name: Reuse prepared release unit-test result
         if: runner.os != 'Windows' && inputs.release_version != ''
         shell: bash
@@ -374,6 +405,37 @@ jobs:
           cache: maven
           cache-dependency-path: "**/pom.xml"
 
+      - name: Install verified Maven 3.8.6
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags origin "$WORKFLOW_SHA"
+          git show "$WORKFLOW_SHA:.github/scripts/setup-release-maven.py" > "$RUNNER_TEMP/setup-release-maven.py"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python "$RUNNER_TEMP/setup-release-maven.py"
+          else
+            python3 "$RUNNER_TEMP/setup-release-maven.py"
+          fi
+
+      - name: Verify pinned Maven is on PATH
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            command -v mvn.cmd
+            version=$(mvn.cmd --version)
+          else
+            command -v mvn
+            version=$(mvn --version)
+          fi
+          first_line=${version%%$'\n'*}
+          first_line=${first_line%$'\r'}
+          if [[ "$first_line" != "Apache Maven 3.8.6 "* ]]; then
+            echo "Unexpected Maven version: $first_line" >&2
+            exit 1
+          fi
+          echo "$first_line"
+
       - name: Download every required target
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -508,6 +570,37 @@ jobs:
           java-version: "21"
           cache: maven
           cache-dependency-path: "**/pom.xml"
+
+      - name: Install verified Maven 3.8.6
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags origin "$WORKFLOW_SHA"
+          git show "$WORKFLOW_SHA:.github/scripts/setup-release-maven.py" > "$RUNNER_TEMP/setup-release-maven.py"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python "$RUNNER_TEMP/setup-release-maven.py"
+          else
+            python3 "$RUNNER_TEMP/setup-release-maven.py"
+          fi
+
+      - name: Verify pinned Maven is on PATH
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            command -v mvn.cmd
+            version=$(mvn.cmd --version)
+          else
+            command -v mvn
+            version=$(mvn --version)
+          fi
+          first_line=${version%%$'\n'*}
+          first_line=${first_line%$'\r'}
+          if [[ "$first_line" != "Apache Maven 3.8.6 "* ]]; then
+            echo "Unexpected Maven version: $first_line" >&2
+            exit 1
+          fi
+          echo "$first_line"
 
       - name: Reuse prepared release unit-test result
         if: runner.os != 'Windows' && inputs.release_version != ''
@@ -862,6 +955,37 @@ jobs:
           java-version: "21"
           cache: maven
           cache-dependency-path: "**/pom.xml"
+
+      - name: Install verified Maven 3.8.6
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags origin "$WORKFLOW_SHA"
+          git show "$WORKFLOW_SHA:.github/scripts/setup-release-maven.py" > "$RUNNER_TEMP/setup-release-maven.py"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python "$RUNNER_TEMP/setup-release-maven.py"
+          else
+            python3 "$RUNNER_TEMP/setup-release-maven.py"
+          fi
+
+      - name: Verify pinned Maven is on PATH
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            command -v mvn.cmd
+            version=$(mvn.cmd --version)
+          else
+            command -v mvn
+            version=$(mvn --version)
+          fi
+          first_line=${version%%$'\n'*}
+          first_line=${first_line%$'\r'}
+          if [[ "$first_line" != "Apache Maven 3.8.6 "* ]]; then
+            echo "Unexpected Maven version: $first_line" >&2
+            exit 1
+          fi
+          echo "$first_line"
 
       - name: Download every verified signed target
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
