@@ -16,6 +16,7 @@ still be opened.
 | `--profile=<id>` | Use an exact stable profile ID reported by `--help`. |
 | `-b`, `--use-bootstrap` | Run the selected profile's bundled bootstrap normally. |
 | `-db`, `--disable-battery-saves` | Disable battery-file reads and writes for this process. |
+| `--portable` | Store application properties beside the application JAR or packaged launcher. |
 | `--debug` | Open the developer console. |
 | `-h`, `--help` | Print usage and exit successfully. |
 | `--version` | Print the packaged application version and exit successfully. |
@@ -45,8 +46,15 @@ The application owns one immutable `ApplicationSettings` value with typed `gener
 `EmulatorProperties` class is a compatibility facade over that model while older menu code is
 migrated.
 
-Schema 8 continues to use `${user.home}/.coffeegb.properties`; schemas 0–7 are migrated in place
-so the portable JAR remains compatible during the migration window.
+On Windows the properties file is `%LOCALAPPDATA%\Coffee GB\coffeegb.properties`. If
+`LOCALAPPDATA` is unavailable, Coffee GB uses `AppData\Local` under the user home directory.
+When the new file is absent, Coffee GB reads the former `${user.home}/.coffeegb.properties`,
+but writes only to the new location. Other systems continue using the home-directory file.
+`--portable` selects `coffeegb.properties` beside the application JAR (or packaged launcher)
+instead, independent of the working directory. The application directory must be writable.
+This option covers application properties; other data such as native caches and saves have their
+own locations. The single-file Windows EXE extracts its application to a temporary directory, so
+use the JAR or an installed application image for persistent portable properties.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
@@ -188,7 +196,7 @@ available. <kbd>Escape</kbd> opens the on-screen menu without leaving fullscreen
 paused game and dismisses the visible menu when pressed again. Menu radio items, Preferences,
 persisted settings, and the live renderer are synchronized through one EDT-owned coordinator.
 
-The typed `.coffeegb.properties` model retains an optional legacy outer-frame width and height as a
+The typed properties model retains an optional legacy outer-frame width and height as a
 startup fallback. A separate, deliberately harmless desktop UI-state store records the main
 window's validated normal x/y/width/height and maximized state. It also records validated bounds for
 Preferences, Netplay, States, Mobile Adapter, and Printer windows plus the last Preferences
@@ -225,11 +233,15 @@ strict UTF-8 with deterministic ASCII escapes.
 
 The complete file is bounded, parsed, migrated, and validated before it can replace the in-memory
 defaults. If syntax or a recognized value is corrupt, Coffee GB moves the original bytes to a
-unique `.coffeegb.properties.corrupt-*` sibling, starts with safe defaults, and displays one
+unique `.corrupt-*` sibling of the settings file, starts with safe defaults, and displays one
 actionable warning. If the original cannot be preserved, persistence is disabled while validated
 changes can still live in the current session.
 Generic read or recovery I/O failures are not classified as corruption: the target remains in
 place, persistence is disabled, and one read-failure warning is displayed.
+If the old Windows home-directory file is corrupt or oversized, it is left in place, defaults are
+used, and subsequent changes are saved to the new location. Coffee GB never renames or writes the
+legacy file during import. Other errors reading the legacy file still disable persistence for that
+session, as does a legacy file with a newer schema.
 
 A schema version newer than this build supports is not corruption. Coffee GB leaves that file
 untouched, starts with safe defaults, and explains that a newer Coffee GB version is required.

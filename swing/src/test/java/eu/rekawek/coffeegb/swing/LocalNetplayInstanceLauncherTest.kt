@@ -62,8 +62,8 @@ class LocalNetplayInstanceLauncherTest {
     val launcher =
         CurrentProcessLocalNetplayInstanceLauncher(
             listOf("/usr/bin/java", "-Dcoffee-gb.theme=dark", "-jar", "/apps/coffee-gb.jar", "old.gb"),
-        { command, prefix -> started += command to prefix },
-    )
+            startProcess = { command, prefix -> started += command to prefix },
+        )
 
     val result = launcher.launch(rom, HardwareProfileRegistry.CGB, endpoint("localhost"), 3)
 
@@ -92,6 +92,25 @@ class LocalNetplayInstanceLauncherTest {
           if (index == 1) Files.readAllBytes(retainedClientSave) else Files.readAllBytes(hostSave),
           Files.readAllBytes(clientSave),
       )
+    }
+  }
+
+  @Test
+  fun `portable mode is forwarded to jar and packaged clients`() {
+    val rom = temporaryFolder.newFile("portable.gb").toPath()
+    for (command in
+        listOf(
+            listOf("/usr/bin/java", "-jar", "/apps/coffee-gb.jar"),
+            listOf("C:\\Coffee GB\\Coffee GB.exe"),
+        )) {
+      val started = mutableListOf<List<String>>()
+      val launcher =
+          CurrentProcessLocalNetplayInstanceLauncher(command, portable = true) { child, _ ->
+            started += child
+          }
+      launcher.launch(rom, HardwareProfileRegistry.DMG, endpoint("localhost"), 1)
+      assertEquals(1, started.size)
+      assertEquals(1, started.single().count { it == "--portable" })
     }
   }
 

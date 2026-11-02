@@ -38,6 +38,7 @@ class MainTest {
     assertEquals("", execution.stdout)
     assertEquals("", execution.stderr)
     assertFalse(request.debug)
+    assertFalse(request.portable)
     assertNull(request.initialRom)
     assertNull(request.joinNetplayHost)
     assertFalse(request.startMuted)
@@ -49,11 +50,12 @@ class MainTest {
 
   @Test
   fun `all launch flags produce one typed process-local request`() {
-    val execution = execute("--debug", "-d", "-b", "-db", "--start-muted", "game.gb")
+    val execution = execute("--debug", "--portable", "-d", "-b", "-db", "--start-muted", "game.gb")
 
     val request = execution.singleLaunch()
     assertEquals(0, execution.exitCode)
     assertTrue(request.debug)
+    assertTrue(request.portable)
     assertEquals(File("game.gb"), request.initialRom)
     assertEquals(HardwareProfileRegistry.DMG, request.settingsOverrides.hardwareProfile)
     assertEquals(BootstrapMode.NORMAL, request.settingsOverrides.bootstrapMode)
@@ -182,6 +184,7 @@ class MainTest {
               "--join-netplay HOST",
               "--start-muted",
               "--debug",
+              "--portable",
               "-h  --help",
               "--version",
               "--package-smoke",
@@ -262,6 +265,10 @@ class MainTest {
             ),
             Failure(
                 arrayOf("--package-smoke", "--debug"),
+                "--package-smoke cannot be combined with launch options or a ROM file",
+            ),
+            Failure(
+                arrayOf("--package-smoke", "--portable"),
                 "--package-smoke cannot be combined with launch options or a ROM file",
             ),
             Failure(
@@ -357,6 +364,7 @@ class MainTest {
                 "Option '--package-smoke' may be specified only once",
             ),
             Failure(arrayOf("--debug", "--debug"), "Option '--debug' may be specified only once"),
+            Failure(arrayOf("--portable", "--portable"), "Option '--portable' may be specified only once"),
             Failure(
                 arrayOf("-d", "--force-dmg"),
                 "Option '--force-dmg' may be specified only once",

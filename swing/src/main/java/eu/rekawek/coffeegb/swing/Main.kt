@@ -19,6 +19,7 @@ private const val DEVELOPMENT_VERSION = "development"
 /** Everything the CLI contributes to one desktop launch. CLI values remain process-local. */
 internal data class CliLaunchRequest(
     val debug: Boolean,
+    val portable: Boolean,
     val initialRom: File?,
     /** Validated direct-host endpoint text to join after [initialRom] has opened. */
     val joinNetplayHost: String?,
@@ -60,6 +61,15 @@ fun main(args: Array<String>) {
             PackageRuntimeSmoke.run(nativeTarget)
           },
       ) { request ->
+        val portableSettingsPath =
+            if (request.portable) {
+              try {
+                portableSettingsPath()
+              } catch (failure: PortableSettingsLocationException) {
+                System.err.println("coffee-gb: ${failure.message}")
+                exitProcess(USAGE_ERROR)
+              }
+            } else null
         // SwingGui installs the macOS open-file handler before resolving package natives so an
         // early Finder event cannot be lost during bootstrap.
         runWithStartupAudio(
@@ -69,6 +79,7 @@ fun main(args: Array<String>) {
             request.joinNetplayHost,
             request.suppressInitialAutosaveResume,
             request.startMuted,
+            portableSettingsPath,
         )
       }
   if (exitCode != SUCCESS) {
@@ -129,6 +140,7 @@ private fun parseCli(args: Array<String>): CliCommand {
   var version = false
   var packageSmoke = false
   var debug = false
+  var portable = false
   var forceDmg = false
   var forceCgb = false
   var useBootstrap = false
@@ -201,6 +213,10 @@ private fun parseCli(args: Array<String>): CliCommand {
         if (debug) repeatedOption("--debug")
         debug = true
       }
+      "--portable" -> {
+        if (portable) repeatedOption("--portable")
+        portable = true
+      }
       "-d", "--force-dmg" -> {
         if (forceDmg) repeatedOption("--force-dmg")
         forceDmg = true
@@ -267,6 +283,7 @@ private fun parseCli(args: Array<String>): CliCommand {
   }
   if (packageSmoke &&
       (debug ||
+          portable ||
           forceDmg ||
           forceCgb ||
           useBootstrap ||
@@ -301,6 +318,7 @@ private fun parseCli(args: Array<String>): CliCommand {
   return CliCommand.Launch(
       CliLaunchRequest(
           debug = debug,
+          portable = portable,
           initialRom = positional.singleOrNull()?.let(::File),
           joinNetplayHost = joinNetplayEndpoint?.startClientValue,
           startMuted = startMuted,
@@ -362,6 +380,7 @@ internal fun printUsage(stream: PrintStream) {
   stream.println("      --join-netplay HOST        Join a netplay host after opening ROM_FILE")
   stream.println("      --start-muted              Start muted without changing saved audio settings")
   stream.println("      --debug                    Enable debug console")
+  stream.println("      --portable                 Store settings beside the application")
   stream.println("  -h  --help                     Display this help and exit")
   stream.println("      --version                  Display version and exit")
   stream.println("      --package-smoke            Run the self-contained headless package self-test")

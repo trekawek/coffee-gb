@@ -22,17 +22,21 @@ internal constructor(
   constructor() :
       this(
           ApplicationSettingsOverrides(),
-          ApplicationSettingsStore(ApplicationSettingsStore.defaultPath()),
+          ApplicationSettingsStore.defaultStore(),
       )
 
   constructor(profileOverride: HardwareProfile?) :
       this(
           ApplicationSettingsOverrides(hardwareProfile = profileOverride),
-          ApplicationSettingsStore(ApplicationSettingsStore.defaultPath()),
+          ApplicationSettingsStore.defaultStore(),
       )
 
   constructor(overrides: ApplicationSettingsOverrides) :
-      this(overrides, ApplicationSettingsStore(ApplicationSettingsStore.defaultPath()))
+      this(overrides, ApplicationSettingsStore.defaultStore())
+
+  /** Opens an explicitly selected settings file without importing the user's default settings. */
+  constructor(overrides: ApplicationSettingsOverrides, settingsPath: Path) :
+      this(overrides, ApplicationSettingsStore(settingsPath))
 
   internal constructor(
       settingsPath: Path,
