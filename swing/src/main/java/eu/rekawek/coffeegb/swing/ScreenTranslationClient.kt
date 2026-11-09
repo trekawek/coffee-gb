@@ -13,6 +13,9 @@ import java.time.Duration
 import java.util.Base64
 import java.util.zip.CRC32
 import java.util.zip.Deflater
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal data class ScreenTranslationResult(
@@ -31,6 +34,33 @@ internal data class ScreenTranslationResult(
           frame.rawWidth(),
           frame.rawHeight(),
           frame.rawRgb(),
+      )
+}
+
+internal data class DetectedTextBand(
+    val x1: Int,
+    val y1: Int,
+    val x2: Int,
+    val y2: Int,
+) {
+  val width: Int
+    get() = x2 - x1 + 1
+
+  val height: Int
+    get() = y2 - y1 + 1
+
+  val centerX: Double
+    get() = (x1 + x2 + 1) / 2.0
+
+  val centerY: Double
+    get() = (y1 + y2 + 1) / 2.0
+
+  fun toNormalizedBbox(sourceWidth: Int, sourceHeight: Int): List<Int> =
+      listOf(
+          (x1 * 1000.0 / sourceWidth).roundToInt().coerceIn(0, 1000),
+          (y1 * 1000.0 / sourceHeight).roundToInt().coerceIn(0, 1000),
+          ((x2 + 1) * 1000.0 / sourceWidth).roundToInt().coerceIn(0, 1000),
+          ((y2 + 1) * 1000.0 / sourceHeight).roundToInt().coerceIn(0, 1000),
       )
 }
 
@@ -88,6 +118,12 @@ internal class HttpScreenTranslationClient(
       frame: SwingDisplay.CapturedTranslationFrame,
       config: ResolvedScreenTranslationConfig,
   ): ScreenTranslationResult {
+    val candidateBands =
+        detectCandidateTextBands(
+            rgb = frame.rotatedRgb(),
+            width = frame.rotatedWidth(),
+            height = frame.rotatedHeight(),
+        )
     val pngBytes =
         encodeRgbPng(
             width = frame.rotatedWidth() * upscaleFactor,
@@ -106,6 +142,7 @@ internal class HttpScreenTranslationClient(
             sourceWidth = frame.rotatedWidth(),
             sourceHeight = frame.rotatedHeight(),
             targetLanguage = config.targetLanguage,
+            candidateBands = candidateBands,
         )
 
     val httpRequest =
@@ -133,6 +170,7 @@ internal class HttpScreenTranslationClient(
         rawModelText = modelText,
         sourceWidth = frame.rotatedWidth(),
         sourceHeight = frame.rotatedHeight(),
+        candidateBands = candidateBands,
     )
   }
 
@@ -148,18 +186,114 @@ internal class HttpScreenTranslationClient(
         sourceWidth: Int,
         sourceHeight: Int,
         targetLanguage: String,
-    ): String =
-        """
-        Locate every visible non-$targetLanguage text block (dialogue boxes, menu panels, title banners, signs) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
-        Rules:
-        - Group lines inside the same dialogue box or menu frame into one region.
-        - Retro Japanese games often write common vocabulary in hiragana/katakana (e.g. たいきょく = Play Match, つめれんじゅ = Puzzle Mode, さいしょからはじめる = New Game, せっていをかえる = Options). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
-        - Provide `bbox_2d` as `[x1, y1, x2, y2]` in 0..1000 normalized screen coordinates covering the text box.
+        candidateBands: List<DetectedTextBand> = emptyList(),
+    ): String {
+      val candidateSection =
+          if (candidateBands.isNotEmpty()) {
+            val formattedBands =
+                candidateBands.joinToString("\n") { band ->
+                  val (bx1, by1, bx2, by2) = band.toNormalizedBbox(sourceWidth, sourceHeight)
+                  "- [$bx1, $by1, $bx2, $by2]"
+                }
+            """
+            Detected candidate text bands (in 0..1000 [x1, y1, x2, y2] coordinates from top to bottom):
+            $formattedBands
+            """
+                .trimIndent() + "\n"
+          } else {
+            ""
+          }
+      return """
+        Locate every visible non-$targetLanguage text block (title banners, menu options, dialogue boxes) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
+        ${candidateSection}Rules:
+        - Put each distinct menu option or title banner in its own region. For dialogue sentences spanning two lines inside a dialogue box, you may either keep each line as its own region or combine the lines' `bbox_2d` into `[min_x1, min_y1, max_x2, max_y2]`.
+        - Use the matching candidate `[x1, y1, x2, y2]` coordinates for each translated text block when candidate bands are listed above, and omit bands that are already in $targetLanguage (such as PUSH START or copyright lines).
+        - Retro Japanese games often write common vocabulary in hiragana/katakana (e.g. たいきょく = Play Match, つめれんじゅ = Puzzle Mode, せん手 = First Move, はじめる = Start, さいしょからはじめる = New Game, せっていをかえる = Options). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
+        - Provide `bbox_2d` as `[x1, y1, x2, y2]` in 0..1000 normalized screen coordinates covering the text block.
         - Return ONLY valid JSON (no markdown fences) matching:
         {"regions":[{"bbox_2d":[x1,y1,x2,y2],"original":"...","translation":"..."}]}
         - If there is no non-$targetLanguage text on screen, return {"regions":[]}.
         """
-            .trimIndent()
+          .trimIndent()
+    }
+
+    internal fun detectCandidateTextBands(
+        rgb: IntArray,
+        width: Int,
+        height: Int,
+    ): List<DetectedTextBand> {
+      if (width <= 8 || height <= 8 || rgb.size < width * height) {
+        return emptyList()
+      }
+      val trans = Array(width) { BooleanArray(height) }
+      for (y in 0 until height) {
+        val rowOffset = y * width
+        for (x in 1 until width) {
+          val curr = rgb[rowOffset + x] and 0x00FFFFFF
+          val prev = rgb[rowOffset + x - 1] and 0x00FFFFFF
+          trans[x][y] = curr != prev
+        }
+      }
+
+      // Suppress continuous vertical box border edges so blank rows inside framed boxes are not
+      // mistaken for text rows.
+      for (x in 1 until width) {
+        var y = 0
+        while (y < height) {
+          if (!trans[x][y]) {
+            y++
+            continue
+          }
+          val leftColor = rgb[y * width + x - 1] and 0x00FFFFFF
+          val rightColor = rgb[y * width + x] and 0x00FFFFFF
+          var yEnd = y + 1
+          while (yEnd < height &&
+              trans[x][yEnd] &&
+              (rgb[yEnd * width + x - 1] and 0x00FFFFFF) == leftColor &&
+              (rgb[yEnd * width + x] and 0x00FFFFFF) == rightColor) {
+            yEnd++
+          }
+          if (yEnd - y >= 14) {
+            for (yy in y until yEnd) {
+              trans[x][yy] = false
+            }
+          }
+          y = yEnd
+        }
+      }
+
+      val bands = mutableListOf<DetectedTextBand>()
+      for (y in 0 until height) {
+        var minX = -1
+        var maxX = -1
+        var count = 0
+        for (x in 1 until width) {
+          if (trans[x][y]) {
+            if (minX == -1) minX = x
+            maxX = x
+            count++
+          }
+        }
+        if (count >= 6 && minX >= 0 && maxX >= minX) {
+          val last = bands.lastOrNull()
+          if (last == null || y - last.y2 > 2) {
+            bands += DetectedTextBand(x1 = minX, y1 = y, x2 = maxX, y2 = y)
+          } else {
+            bands[bands.lastIndex] =
+                DetectedTextBand(
+                    x1 = min(last.x1, minX),
+                    y1 = last.y1,
+                    x2 = max(last.x2, maxX),
+                    y2 = y,
+                )
+          }
+        }
+      }
+
+      return bands.filter { band ->
+        band.height in 5..36 && band.width >= (band.height * 1.2).roundToInt()
+      }
+    }
 
     internal fun buildGeminiRequest(
         config: ResolvedScreenTranslationConfig,
@@ -245,12 +379,13 @@ internal class HttpScreenTranslationClient(
     }
 
     internal fun extractGeminiContentText(responseBody: String): String {
-      val root = MiniJson.parse(responseBody) as? Map<*, *>
-          ?: throw IOException("Invalid JSON response from Gemini")
-      val candidates = root["candidates"] as? List<*>
-          ?: throw IOException("Gemini response did not contain candidates")
-      val firstCandidate = candidates.firstOrNull() as? Map<*, *>
-          ?: return ""
+      val root =
+          MiniJson.parse(responseBody) as? Map<*, *>
+              ?: throw IOException("Invalid JSON response from Gemini")
+      val candidates =
+          root["candidates"] as? List<*>
+              ?: throw IOException("Gemini response did not contain candidates")
+      val firstCandidate = candidates.firstOrNull() as? Map<*, *> ?: return ""
       val content = firstCandidate["content"] as? Map<*, *> ?: return ""
       val parts = content["parts"] as? List<*> ?: return ""
       return parts
@@ -260,10 +395,12 @@ internal class HttpScreenTranslationClient(
     }
 
     internal fun extractOpenAiContentText(responseBody: String): String {
-      val root = MiniJson.parse(responseBody) as? Map<*, *>
-          ?: throw IOException("Invalid JSON response from translation endpoint")
-      val choices = root["choices"] as? List<*>
-          ?: throw IOException("Translation response did not contain choices")
+      val root =
+          MiniJson.parse(responseBody) as? Map<*, *>
+              ?: throw IOException("Invalid JSON response from translation endpoint")
+      val choices =
+          root["choices"] as? List<*>
+              ?: throw IOException("Translation response did not contain choices")
       val firstChoice = choices.firstOrNull() as? Map<*, *> ?: return ""
       val message = firstChoice["message"] as? Map<*, *> ?: return ""
       return when (val content = message["content"]) {
@@ -281,6 +418,7 @@ internal class HttpScreenTranslationClient(
         rawModelText: String,
         sourceWidth: Int,
         sourceHeight: Int,
+        candidateBands: List<DetectedTextBand> = emptyList(),
     ): ScreenTranslationResult {
       val cleaned = stripMarkdownCodeFences(rawModelText).trim()
       if (cleaned.isEmpty()) {
@@ -293,11 +431,18 @@ internal class HttpScreenTranslationClient(
       }
 
       val rawRegions = parsed["regions"] as? List<*> ?: emptyList<Any?>()
-      val regions =
+      val parsedRegions =
           rawRegions.mapNotNull { item ->
             val map = item as? Map<*, *> ?: return@mapNotNull null
             parseRegion(map, sourceWidth, sourceHeight)
           }
+      val regions =
+          alignRegionsToCandidateBands(
+              regions = parsedRegions,
+              candidateBands = candidateBands,
+              sourceWidth = sourceWidth,
+              sourceHeight = sourceHeight,
+          )
       val unlocatedTranslations =
           if (regions.isEmpty()) {
             rawRegions
@@ -324,6 +469,242 @@ internal class HttpScreenTranslationClient(
             else -> unlocatedTranslations
           }
       return ScreenTranslationResult(regions = regions, fallbackText = fallback)
+    }
+
+    internal fun alignRegionsToCandidateBands(
+        regions: List<ScreenTranslationOverlay.Region>,
+        candidateBands: List<DetectedTextBand>,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ): List<ScreenTranslationOverlay.Region> {
+      if (regions.isEmpty()) return emptyList()
+      if (candidateBands.isEmpty()) {
+        return alignStackedPeerColumns(regions, sourceWidth)
+      }
+
+      val sortedRegions = regions.sortedWith(compareBy({ it.y() }, { it.x() }))
+
+      // Case 1: Single region that merges 2+ closely spaced lines inside one menu/dialogue box.
+      if (sortedRegions.size == 1 && candidateBands.size >= 2) {
+        val single = sortedRegions.single()
+        val exactSingle =
+            candidateBands.firstOrNull { band ->
+              abs(single.y() - band.y1) <= 4 && abs(single.height() - band.height) <= 6
+            }
+        if (exactSingle != null) {
+          return listOf(snapRegionToBand(single, exactSingle, sourceWidth, sourceHeight))
+        }
+        val paragraphClusters = clusterAdjacentParagraphBands(candidateBands)
+        val bestCluster =
+            paragraphClusters.minByOrNull { cluster ->
+              val cy = (cluster.y1 + cluster.y2 + 1) / 2.0
+              val ry = single.y() + single.height() / 2.0
+              abs(ry - cy)
+            }
+        if (bestCluster != null) {
+          return listOf(snapRegionToBand(single, bestCluster, sourceWidth, sourceHeight))
+        }
+      }
+
+      // Case 2: Every region already matches a candidate band closely (within 4px).
+      val directMatches =
+          sortedRegions.map { region ->
+            candidateBands.firstOrNull { band ->
+              abs(region.y() - band.y1) <= 4 &&
+                  abs((region.y() + region.height()) - (band.y2 + 1)) <= 6
+            }
+          }
+      if (directMatches.none { it == null }) {
+        val snapped =
+            sortedRegions.indices.map { i ->
+              snapRegionToBand(
+                  sortedRegions[i],
+                  checkNotNull(directMatches[i]),
+                  sourceWidth,
+                  sourceHeight,
+              )
+            }
+        return alignStackedPeerColumns(snapped, sourceWidth)
+      }
+
+      // Case 3: Order-preserving DP alignment between sortedRegions (k) and candidateBands (m).
+      if (sortedRegions.size <= candidateBands.size) {
+        val k = sortedRegions.size
+        val m = candidateBands.size
+        val dp = Array(k) { DoubleArray(m) { Double.POSITIVE_INFINITY } }
+        val prev = Array(k) { IntArray(m) { -1 } }
+
+        for (i in 0 until k) {
+          val region = sortedRegions[i]
+          for (j in i..(m - (k - i))) {
+            val cost = bandMatchCost(region, candidateBands[j], k, m, sourceWidth, sourceHeight)
+            if (i == 0) {
+              dp[0][j] = cost
+            } else {
+              for (p in (i - 1) until j) {
+                val candidateTotal = dp[i - 1][p] + cost
+                if (candidateTotal < dp[i][j]) {
+                  dp[i][j] = candidateTotal
+                  prev[i][j] = p
+                }
+              }
+            }
+          }
+        }
+
+        var bestLastBand = k - 1
+        for (j in (k - 1) until m) {
+          if (dp[k - 1][j] < dp[k - 1][bestLastBand]) {
+            bestLastBand = j
+          }
+        }
+
+        val assignedBands = IntArray(k)
+        var curr = bestLastBand
+        for (i in (k - 1) downTo 0) {
+          assignedBands[i] = curr
+          curr = if (i > 0) prev[i][curr] else -1
+        }
+
+        val snapped =
+            sortedRegions.indices.map { i ->
+              snapRegionToBand(
+                  sortedRegions[i],
+                  candidateBands[assignedBands[i]],
+                  sourceWidth,
+                  sourceHeight,
+              )
+            }
+        return alignStackedPeerColumns(snapped, sourceWidth)
+      }
+
+      return alignStackedPeerColumns(sortedRegions, sourceWidth)
+    }
+
+    private fun clusterAdjacentParagraphBands(
+        bands: List<DetectedTextBand>,
+    ): List<DetectedTextBand> {
+      val clusters = mutableListOf<DetectedTextBand>()
+      for (band in bands) {
+        val prev = clusters.lastOrNull()
+        if (prev != null &&
+            band.y1 - prev.y2 <= 14 &&
+            abs(band.x1 - prev.x1) <= 16 &&
+            band.height <= 14 &&
+            prev.height <= 28) {
+          clusters[clusters.lastIndex] =
+              DetectedTextBand(
+                  x1 = min(prev.x1, band.x1),
+                  y1 = prev.y1,
+                  x2 = max(prev.x2, band.x2),
+                  y2 = band.y2,
+              )
+        } else {
+          clusters += band
+        }
+      }
+      return clusters
+    }
+
+    private fun bandMatchCost(
+        region: ScreenTranslationOverlay.Region,
+        band: DetectedTextBand,
+        regionCount: Int,
+        bandCount: Int,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ): Double {
+      val regionCenterY = (region.y() + region.height() / 2.0) / sourceHeight
+      val bandCenterY = band.centerY / sourceHeight
+      val yDiff = abs(regionCenterY - bandCenterY)
+
+      val regionWidthNorm = region.width().toDouble() / sourceWidth
+      val bandWidthNorm = band.width.toDouble() / sourceWidth
+      val widthDiff = abs(regionWidthNorm - bandWidthNorm) * 0.45
+
+      val regionCenterX = (region.x() + region.width() / 2.0) / sourceWidth
+      val bandCenterX = band.centerX / sourceWidth
+      val xDiff = abs(regionCenterX - bandCenterX) * 0.35
+
+      // Penalize matching a non-bottom region to a wide bottom copyright footer when there are
+      // more bands than translated regions.
+      val footerPenalty =
+          if (regionCount < bandCount &&
+              band.y1 >= sourceHeight * 0.74 &&
+              band.width >= sourceWidth * 0.65 &&
+              regionCenterY < 0.72) {
+            0.65
+          } else {
+            0.0
+          }
+      return yDiff + widthDiff + xDiff + footerPenalty
+    }
+
+    private fun snapRegionToBand(
+        region: ScreenTranslationOverlay.Region,
+        band: DetectedTextBand,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ): ScreenTranslationOverlay.Region {
+      val x = band.x1.coerceIn(0, (sourceWidth - 8).coerceAtLeast(0))
+      val y = band.y1.coerceIn(0, (sourceHeight - 7).coerceAtLeast(0))
+      val width = band.width.coerceIn(8, (sourceWidth - x).coerceAtLeast(8))
+      val height = band.height.coerceIn(7, (sourceHeight - y).coerceAtLeast(7))
+      return ScreenTranslationOverlay.Region(
+          x,
+          y,
+          width,
+          height,
+          region.text(),
+          region.originalText(),
+      )
+    }
+
+    internal fun alignStackedPeerColumns(
+        regions: List<ScreenTranslationOverlay.Region>,
+        sourceWidth: Int,
+    ): List<ScreenTranslationOverlay.Region> {
+      if (regions.size < 2) return regions
+      val result = regions.toMutableList()
+      var i = 0
+      while (i < result.size) {
+        var j = i + 1
+        while (j < result.size) {
+          val prev = result[j - 1]
+          val curr = result[j]
+          val verticalGap = curr.y() - (prev.y() + prev.height())
+          val closeLeftEdge = abs(curr.x() - prev.x()) <= 16
+          val bothCompactRows =
+              prev.height() <= 16 &&
+                  curr.height() <= 16 &&
+                  prev.width() <= (sourceWidth * 0.85).roundToInt() &&
+                  curr.width() <= (sourceWidth * 0.85).roundToInt()
+          if (verticalGap in 0..20 && closeLeftEdge && bothCompactRows) {
+            j++
+          } else {
+            break
+          }
+        }
+        if (j - i >= 2) {
+          val minX = (i until j).minOf { result[it].x() }
+          val maxRight = (i until j).maxOf { result[it].x() + result[it].width() }
+          val commonWidth = (maxRight - minX).coerceAtLeast(8)
+          for (idx in i until j) {
+            val r = result[idx]
+            result[idx] =
+                ScreenTranslationOverlay.Region(
+                    minX,
+                    r.y(),
+                    commonWidth,
+                    r.height(),
+                    r.text(),
+                    r.originalText(),
+                )
+          }
+        }
+        i = j
+      }
+      return result
     }
 
     private fun parseRegion(
@@ -367,7 +748,10 @@ internal class HttpScreenTranslationClient(
           return null
         }
         val isFraction =
-            x1 in 0.0..1.0 && y1 in 0.0..1.0 && x2 in 0.0..1.0 && y2 in 0.0..1.0 &&
+            x1 in 0.0..1.0 &&
+                y1 in 0.0..1.0 &&
+                x2 in 0.0..1.0 &&
+                y2 in 0.0..1.0 &&
                 (x2 < 1.0 || y2 < 1.0)
         if (isFraction) {
           scaledX = x1 * sourceWidth
@@ -386,13 +770,21 @@ internal class HttpScreenTranslationClient(
         val rawW = numberOrNull(map["width"]) ?: numberOrNull(map["w"])
         val rawH = numberOrNull(map["height"]) ?: numberOrNull(map["h"])
 
-        if (rawX == null || rawY == null || rawW == null || rawH == null || rawW <= 0.0 || rawH <= 0.0) {
+        if (rawX == null ||
+            rawY == null ||
+            rawW == null ||
+            rawH == null ||
+            rawW <= 0.0 ||
+            rawH <= 0.0) {
           return null
         }
 
         // Support 0..1 fractional coordinates, 0..1000 normalized coordinates, or native source pixels.
         val isNormalizedFraction =
-            rawX in 0.0..1.0 && rawY in 0.0..1.0 && rawW in 0.0..1.0 && rawH in 0.0..1.0 &&
+            rawX in 0.0..1.0 &&
+                rawY in 0.0..1.0 &&
+                rawW in 0.0..1.0 &&
+                rawH in 0.0..1.0 &&
                 (rawW < 1.0 || rawH < 1.0)
         val exceedsSource =
             rawX + rawW > sourceWidth * 1.15 || rawY + rawH > sourceHeight * 1.15
@@ -413,16 +805,16 @@ internal class HttpScreenTranslationClient(
           else -> {
             scaledX = rawX
             scaledY = rawY
-            scaledW = rawW
+            scaledW = rawY.let { rawW }
             scaledH = rawH
           }
         }
       }
 
       val x = scaledX.roundToInt().coerceIn(0, (sourceWidth - 8).coerceAtLeast(0))
-      val y = scaledY.roundToInt().coerceIn(0, (sourceHeight - 8).coerceAtLeast(0))
+      val y = scaledY.roundToInt().coerceIn(0, (sourceHeight - 7).coerceAtLeast(0))
       val width = scaledW.roundToInt().coerceIn(8, (sourceWidth - x).coerceAtLeast(8))
-      val height = scaledH.roundToInt().coerceIn(8, (sourceHeight - y).coerceAtLeast(8))
+      val height = scaledH.roundToInt().coerceIn(7, (sourceHeight - y).coerceAtLeast(7))
 
       return ScreenTranslationOverlay.Region(x, y, width, height, translation, original)
     }
@@ -439,7 +831,8 @@ internal class HttpScreenTranslationClient(
       if (trimmed.startsWith("```")) {
         val firstNewline = trimmed.indexOf('\n')
         val body =
-            if (firstNewline >= 0) trimmed.substring(firstNewline + 1) else trimmed.removePrefix("```")
+            if (firstNewline >= 0) trimmed.substring(firstNewline + 1)
+            else trimmed.removePrefix("```")
         return body.removeSuffix("```").trim()
       }
       val firstBrace = trimmed.indexOf('{')
@@ -484,7 +877,8 @@ internal class HttpScreenTranslationClient(
     internal fun encodeRgbPng(width: Int, height: Int, rgb: IntArray): ByteArray {
       require(width > 0 && height > 0) { "PNG dimensions must be positive" }
       require(rgb.size == Math.multiplyExact(width, height)) { "RGB length mismatch" }
-      val raw = ByteArray(Math.multiplyExact(height, Math.addExact(Math.multiplyExact(width, 3), 1)))
+      val raw =
+          ByteArray(Math.multiplyExact(height, Math.addExact(Math.multiplyExact(width, 3), 1)))
       var offset = 0
       var pixel = 0
       repeat(height) {

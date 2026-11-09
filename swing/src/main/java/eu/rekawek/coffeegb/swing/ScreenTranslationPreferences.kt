@@ -4,11 +4,30 @@ import java.net.URI
 import java.util.Locale
 import java.util.prefs.Preferences
 
-internal enum class ScreenTranslationProvider(val displayName: String) {
-  AUTO("Auto (Gemini, OpenAI, or Local Ollama)"),
-  GEMINI("Google Gemini API"),
-  OPENAI_COMPATIBLE("OpenAI-Compatible Vision API"),
-  OLLAMA("Ollama (Local — qwen2.5vl:7b)"),
+internal enum class ScreenTranslationProvider(
+    val displayName: String,
+    val requiresApiKey: Boolean,
+    val supportsCustomBaseUrl: Boolean,
+    val supportsModelSelection: Boolean,
+) {
+  GEMINI(
+      displayName = "Google Gemini",
+      requiresApiKey = true,
+      supportsCustomBaseUrl = false,
+      supportsModelSelection = true,
+  ),
+  OPENAI_COMPATIBLE(
+      displayName = "OpenAI",
+      requiresApiKey = true,
+      supportsCustomBaseUrl = false,
+      supportsModelSelection = true,
+  ),
+  OLLAMA(
+      displayName = "Ollama (Local)",
+      requiresApiKey = false,
+      supportsCustomBaseUrl = true,
+      supportsModelSelection = true,
+  ),
 }
 
 internal enum class ResolvedTranslationProtocol {
@@ -26,7 +45,7 @@ internal data class ResolvedScreenTranslationConfig(
 )
 
 internal data class ScreenTranslationSettings(
-    val provider: ScreenTranslationProvider = ScreenTranslationProvider.AUTO,
+    val provider: ScreenTranslationProvider = ScreenTranslationProvider.GEMINI,
     val apiKey: String = "",
     val baseUrl: String = "",
     val model: String = "",
@@ -42,26 +61,11 @@ internal data class ScreenTranslationSettings(
               targetLanguage.trim().take(MAX_LANGUAGE_LENGTH).ifEmpty { DEFAULT_TARGET_LANGUAGE },
       )
 
-  fun resolve(env: (String) -> String? = System::getenv): ResolvedScreenTranslationConfig? {
+  fun resolve(): ResolvedScreenTranslationConfig? {
     val clean = sanitized()
-    val envTranslateKey = env("COFFEEGB_TRANSLATE_API_KEY")?.trim().orEmpty()
-    val envGeminiKey =
-        env("GEMINI_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }
-            ?: env("GOOGLE_API_KEY")?.trim().orEmpty()
-    val envOpenAiKey = env("OPENAI_API_KEY")?.trim().orEmpty()
-    val envBaseUrl =
-        env("COFFEEGB_TRANSLATE_BASE_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-    val envModel = env("COFFEEGB_TRANSLATE_MODEL")?.trim()?.takeIf { it.isNotEmpty() }
-
-    val hasCloudKey =
-        clean.apiKey.isNotEmpty() ||
-            envTranslateKey.isNotEmpty() ||
-            envGeminiKey.isNotEmpty() ||
-            envOpenAiKey.isNotEmpty()
     val ignoreOllamaOverrides =
         clean.provider == ScreenTranslationProvider.GEMINI ||
-            clean.provider == ScreenTranslationProvider.OPENAI_COMPATIBLE ||
-            (clean.provider == ScreenTranslationProvider.AUTO && hasCloudKey)
+            clean.provider == ScreenTranslationProvider.OPENAI_COMPATIBLE
     val effectiveBaseUrl =
         clean.baseUrl.takeUnless { ignoreOllamaOverrides && isOllamaEndpoint(it) }.orEmpty()
     val effectiveModel =
@@ -72,63 +76,38 @@ internal data class ScreenTranslationSettings(
           ScreenTranslationProvider.GEMINI -> ResolvedTranslationProtocol.GEMINI
           ScreenTranslationProvider.OPENAI_COMPATIBLE,
           ScreenTranslationProvider.OLLAMA -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
-          ScreenTranslationProvider.AUTO -> {
-            val candidateUrl = effectiveBaseUrl.ifEmpty { envBaseUrl.orEmpty() }
-            when {
-              candidateUrl.contains("generativelanguage.googleapis.com", ignoreCase = true) ->
-                  ResolvedTranslationProtocol.GEMINI
-              candidateUrl.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
-              clean.apiKey.startsWith("AIza") -> ResolvedTranslationProtocol.GEMINI
-              clean.apiKey.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
-              envTranslateKey.startsWith("AIza") -> ResolvedTranslationProtocol.GEMINI
-              envTranslateKey.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
-              envGeminiKey.isNotEmpty() -> ResolvedTranslationProtocol.GEMINI
-              envOpenAiKey.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
-              else -> ResolvedTranslationProtocol.GEMINI
-            }
-          }
-        }
-
-    val resolvedKey =
-        when {
-          clean.apiKey.isNotEmpty() -> clean.apiKey
-          envTranslateKey.isNotEmpty() -> envTranslateKey
-          protocol == ResolvedTranslationProtocol.GEMINI && envGeminiKey.isNotEmpty() ->
-              envGeminiKey
-          protocol == ResolvedTranslationProtocol.OPENAI_COMPATIBLE && envOpenAiKey.isNotEmpty() ->
-              envOpenAiKey
-          envGeminiKey.isNotEmpty() -> envGeminiKey
-          envOpenAiKey.isNotEmpty() -> envOpenAiKey
-          else -> ""
         }
 
     val resolvedBaseUrl =
-        when {
-          effectiveBaseUrl.isNotEmpty() -> effectiveBaseUrl
-          !envBaseUrl.isNullOrEmpty() -> envBaseUrl
-          clean.provider == ScreenTranslationProvider.OLLAMA -> DEFAULT_OLLAMA_BASE_URL
-          protocol == ResolvedTranslationProtocol.GEMINI ->
-              env("GEMINI_BASE_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-                  ?: DEFAULT_GEMINI_BASE_URL
-          else ->
-              env("OPENAI_BASE_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-                  ?: DEFAULT_OPENAI_BASE_URL
+        when (clean.provider) {
+          ScreenTranslationProvider.GEMINI ->
+              effectiveBaseUrl.ifEmpty { DEFAULT_GEMINI_BASE_URL }
+          ScreenTranslationProvider.OPENAI_COMPATIBLE ->
+              effectiveBaseUrl.ifEmpty { DEFAULT_OPENAI_BASE_URL }
+          ScreenTranslationProvider.OLLAMA ->
+              clean.baseUrl.ifEmpty { DEFAULT_OLLAMA_BASE_URL }
         }
 
     val resolvedModel =
-        when {
-          effectiveModel.isNotEmpty() -> effectiveModel
-          !envModel.isNullOrEmpty() -> envModel
-          clean.provider == ScreenTranslationProvider.OLLAMA ||
-              !isOfficialCloudEndpoint(resolvedBaseUrl) -> DEFAULT_OLLAMA_MODEL
-          protocol == ResolvedTranslationProtocol.GEMINI -> DEFAULT_GEMINI_MODEL
-          else -> DEFAULT_OPENAI_MODEL
+        when (clean.provider) {
+          ScreenTranslationProvider.GEMINI ->
+              effectiveModel.ifEmpty { DEFAULT_GEMINI_MODEL }
+          ScreenTranslationProvider.OPENAI_COMPATIBLE ->
+              effectiveModel.ifEmpty { DEFAULT_OPENAI_MODEL }
+          ScreenTranslationProvider.OLLAMA ->
+              clean.model.ifEmpty { DEFAULT_OLLAMA_MODEL }
         }
 
-    val requiresApiKey =
-        clean.provider != ScreenTranslationProvider.OLLAMA &&
-            isOfficialCloudEndpoint(resolvedBaseUrl)
-    if (requiresApiKey && resolvedKey.isEmpty()) {
+    val resolvedKey =
+        if (clean.provider.requiresApiKey) {
+          clean.apiKey
+        } else {
+          ""
+        }
+
+    if (clean.provider.requiresApiKey &&
+        isOfficialCloudEndpoint(resolvedBaseUrl) &&
+        resolvedKey.isEmpty()) {
       return null
     }
 
@@ -209,14 +188,17 @@ internal class ScreenTranslationPreferencesStore(
   fun load(): ScreenTranslationSettings =
       runCatching {
             val providerName = get(KEY_PROVIDER)
+            val apiKey = get(KEY_API_KEY).orEmpty()
+            val baseUrl = get(KEY_BASE_URL).orEmpty()
+            val model = get(KEY_MODEL).orEmpty()
             val provider =
                 ScreenTranslationProvider.entries.firstOrNull { it.name == providerName }
-                    ?: ScreenTranslationProvider.AUTO
+                    ?: inferProvider(apiKey, baseUrl, model)
             ScreenTranslationSettings(
                     provider = provider,
-                    apiKey = get(KEY_API_KEY).orEmpty(),
-                    baseUrl = get(KEY_BASE_URL).orEmpty(),
-                    model = get(KEY_MODEL).orEmpty(),
+                    apiKey = apiKey,
+                    baseUrl = baseUrl,
+                    model = model,
                     targetLanguage =
                         get(KEY_TARGET_LANGUAGE)
                             ?: ScreenTranslationSettings.DEFAULT_TARGET_LANGUAGE,
@@ -237,6 +219,21 @@ internal class ScreenTranslationPreferencesStore(
       put(KEY_PAUSE_WHILE_TRANSLATING, clean.pauseWhileTranslating.toString())
     }
   }
+
+  private fun inferProvider(
+      apiKey: String,
+      baseUrl: String,
+      model: String,
+  ): ScreenTranslationProvider =
+      when {
+        ScreenTranslationSettings.isOllamaEndpoint(baseUrl) ||
+            ScreenTranslationSettings.isOllamaModel(model) -> ScreenTranslationProvider.OLLAMA
+        apiKey.trim().startsWith("AIza") -> ScreenTranslationProvider.GEMINI
+        apiKey.isNotBlank() -> ScreenTranslationProvider.OPENAI_COMPATIBLE
+        baseUrl.contains("openai", ignoreCase = true) ->
+            ScreenTranslationProvider.OPENAI_COMPATIBLE
+        else -> ScreenTranslationProvider.GEMINI
+      }
 
   private fun get(key: String): String? {
     require(key in ALLOWED_KEYS) { "Disallowed screen translation preference key: $key" }
