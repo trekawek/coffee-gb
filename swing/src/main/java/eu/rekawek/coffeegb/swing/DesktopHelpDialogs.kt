@@ -81,6 +81,7 @@ internal fun desktopShortcutGuide(
                   DesktopShortcutGuideRow("Select state slot", stateSlotShortcut),
                   mainRow("Full Screen", DesktopCommand.FULLSCREEN),
                   mainRow("Screenshot", DesktopCommand.SCREENSHOT),
+                  mainRow("Translate Screen", DesktopCommand.TRANSLATE_SCREEN),
                   mainRow("Input recording", DesktopCommand.INPUT_RECORDING),
               ),
       ),

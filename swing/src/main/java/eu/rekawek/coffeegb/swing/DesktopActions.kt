@@ -40,6 +40,7 @@ internal enum class DesktopCommand {
   STOP_INPUT_RECORDING,
   LOAD_INPUT_RECORDING,
   SHOW_COMMAND_BAR,
+  TRANSLATE_SCREEN,
 }
 
 internal data class DesktopCommandPresentation(
@@ -115,6 +116,7 @@ internal data class DesktopCommandHandlers(
     val preferredRomDirectory: (() -> Path?)? = null,
     /** Opens an exact path selected by the in-screen ROM browser. */
     val openRomPathFromPortableMenu: ((Path) -> Boolean)? = null,
+    val translateScreen: () -> Unit = {},
 )
 
 /** Stable in-screen settings identifiers shared by Swing's production bridge and route host. */
@@ -505,6 +507,7 @@ internal class DesktopActionRegistry(
       DesktopCommand.LOAD_INPUT_RECORDING -> handlers.loadInputRecording()
       DesktopCommand.SHOW_COMMAND_BAR ->
           handlers.setCommandBarVisible(!presentation.commandBarVisible)
+      DesktopCommand.TRANSLATE_SCREEN -> handlers.translateScreen()
     }
   }
 
@@ -518,7 +521,8 @@ internal class DesktopActionRegistry(
         DesktopCommand.SHOW_COMMAND_BAR -> !state.sessionBusy
         DesktopCommand.OPEN_MENU -> !state.sessionBusy
         DesktopCommand.CLOSE_GAME,
-        DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
+        DesktopCommand.RESET,
+        DesktopCommand.TRANSLATE_SCREEN -> state.gameLoaded && !state.sessionBusy
       DesktopCommand.PAUSE ->
             state.gameLoaded && state.pauseSupported && !state.sessionBusy
         DesktopCommand.SAVE_STATE -> state.stateCommandsAvailable && !state.sessionBusy
@@ -614,6 +618,11 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
           DesktopActionMetadata("Load Input Recording", "Play a deterministic CGBR input recording")
       DesktopCommand.SHOW_COMMAND_BAR ->
           DesktopActionMetadata("Show Command Bar", "Show the game command bar in a window")
+      DesktopCommand.TRANSLATE_SCREEN ->
+          DesktopActionMetadata(
+              "Translate Screen",
+              "Translate non-English text on the current screen or dismiss the translation overlay",
+          )
     }
 
 internal data class DesktopShortcut(
@@ -647,6 +656,8 @@ internal class DesktopShortcutRegistry(
             DesktopCommand.LOAD_STATE to KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0),
             DesktopCommand.FULLSCREEN to KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0),
             DesktopCommand.SCREENSHOT to KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0),
+            DesktopCommand.TRANSLATE_SCREEN to
+                KeyStroke.getKeyStroke(KeyEvent.VK_T, platformMenuMask),
             DesktopCommand.INPUT_RECORDING to
                 KeyStroke.getKeyStroke(
                     KeyEvent.VK_R,

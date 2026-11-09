@@ -93,6 +93,10 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private volatile String persistentNotificationText;
 
+    private volatile boolean translating;
+
+    private volatile ScreenTranslationOverlay translationOverlay;
+
     private DesktopMenuPointerInput menuPointerInput;
 
     private final MenuPointerGesture menuPointerGesture = new MenuPointerGesture();
@@ -192,6 +196,8 @@ public class SwingDisplay extends JPanel implements Runnable {
         rumbling = false;
         notificationText = null;
         notificationExpiresAt = 0L;
+        translating = false;
+        translationOverlay = null;
         invalidateFrameForLifecycle();
         resetPresentationFrameRate();
         repaintNotification(0);
@@ -207,6 +213,8 @@ public class SwingDisplay extends JPanel implements Runnable {
             pendingFrame = null;
             previousFrame = null;
             framePublished = false;
+            translating = false;
+            translationOverlay = null;
             notifyAll();
         }
     }
@@ -460,6 +468,94 @@ public class SwingDisplay extends JPanel implements Runnable {
         setMenuOverlay(null);
     }
 
+    /**
+     * Captures the currently published frame in both player-rotated coordinates (for vision OCR)
+     * and raw unrotated coordinates (for fast frame-change dismissal). Returns null before the
+     * first complete frame of the session is published.
+     */
+    public CapturedTranslationFrame captureTranslationFrame() {
+        if (!framePublished) {
+            return null;
+        }
+        DisplayFrameSnapshot frame = displayedFrame.get();
+        int localRotation = rotation;
+        int rawWidth = frame.width();
+        int rawHeight = frame.height();
+        int[] rawRgb = frame.copyRgb();
+        int rotatedWidth = localRotation == 90 || localRotation == 270
+                ? rawHeight : rawWidth;
+        int rotatedHeight = localRotation == 90 || localRotation == 270
+                ? rawWidth : rawHeight;
+        int[] rotatedRgb = new int[Math.multiplyExact(rotatedWidth, rotatedHeight)];
+        for (int y = 0; y < rawHeight; y++) {
+            for (int x = 0; x < rawWidth; x++) {
+                int targetX;
+                int targetY;
+                switch (localRotation) {
+                    case 90 -> {
+                        targetX = rawHeight - 1 - y;
+                        targetY = x;
+                    }
+                    case 180 -> {
+                        targetX = rawWidth - 1 - x;
+                        targetY = rawHeight - 1 - y;
+                    }
+                    case 270 -> {
+                        targetX = y;
+                        targetY = rawWidth - 1 - x;
+                    }
+                    default -> {
+                        targetX = x;
+                        targetY = y;
+                    }
+                }
+                rotatedRgb[targetY * rotatedWidth + targetX] = rawRgb[y * rawWidth + x] & 0x00ffffff;
+            }
+        }
+        return new CapturedTranslationFrame(
+                rotatedWidth,
+                rotatedHeight,
+                rotatedRgb,
+                rawWidth,
+                rawHeight,
+                rawRgb);
+    }
+
+    public ScreenTranslationOverlay getTranslationOverlay() {
+        return translationOverlay;
+    }
+
+    public void setTranslationOverlay(ScreenTranslationOverlay overlay) {
+        this.translationOverlay = overlay;
+        requestRepaint();
+    }
+
+    public boolean clearTranslationOverlay() {
+        ScreenTranslationOverlay existing = this.translationOverlay;
+        this.translationOverlay = null;
+        if (existing != null) {
+            requestRepaint();
+            return true;
+        }
+        return false;
+    }
+
+    public void setTranslating(boolean translating) {
+        if (this.translating == translating) {
+            return;
+        }
+        this.translating = translating;
+        repaintNotification(0);
+    }
+
+    public boolean isTranslating() {
+        return translating;
+    }
+
+    public void showTransientNotification(String text) {
+        showNotification(Objects.requireNonNull(text, "text"));
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         requireEventDispatchThread("Display painting");
@@ -490,6 +586,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         frame.paint(frameGraphics);
         frameGraphics.dispose();
 
+        ScreenTranslationOverlay activeTranslation = this.translationOverlay;
         if (menuOverlay.visible()) {
             // The aspect-fit bars belong to the menu presentation, not the game frame beneath it.
             // Clearing the component first prevents a narrow/tall host from leaking gameplay
@@ -497,6 +594,8 @@ public class SwingDisplay extends JPanel implements Runnable {
             g.setColor(getBackground());
             g.fillRect(0, 0, getWidth(), getHeight());
             menuOverlay.paint((Graphics2D) g, getWidth(), getHeight());
+        } else if (activeTranslation != null) {
+            activeTranslation.paint((Graphics2D) g, viewport);
         }
 
         // Notifications are host feedback, so they must remain visible above the opaque portable
@@ -560,8 +659,14 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private void paintNotification(Graphics2D g, Rectangle bounds, double scale) {
         String persistentText = persistentNotificationText;
-        String text = persistentText != null ? persistentText : notificationText;
-        if (text == null || (persistentText == null && System.nanoTime() >= notificationExpiresAt)) {
+        boolean localTranslating = translating;
+        String text = persistentText != null
+                ? persistentText
+                : (localTranslating ? "Translating…" : notificationText);
+        if (text == null
+                || (persistentText == null
+                        && !localTranslating
+                        && System.nanoTime() >= notificationExpiresAt)) {
             return;
         }
 
@@ -620,6 +725,12 @@ public class SwingDisplay extends JPanel implements Runnable {
                     // frame. Never let an old ROM become the first supposedly valid preview of
                     // the new session.
                     continue;
+                }
+                ScreenTranslationOverlay activeOverlay = this.translationOverlay;
+                if (activeOverlay != null
+                        && activeOverlay.shouldDismissForFrame(
+                                frame.width(), frame.height(), frame.rgb())) {
+                    this.translationOverlay = null;
                 }
                 displayedFrame.set(DisplayFrameSnapshot.takeOwnership(
                         frame.width(), frame.height(), frame.rgb()));
@@ -760,6 +871,32 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     /** Clears a stale presentation-rate sample after a pause or session ownership transition. */
     public record PresentationFrameRateResetEvent() implements Event {
+    }
+
+    /** Detached rotated + raw snapshot of the currently presented frame for screen translation. */
+    public record CapturedTranslationFrame(
+            int rotatedWidth,
+            int rotatedHeight,
+            int[] rotatedRgb,
+            int rawWidth,
+            int rawHeight,
+            int[] rawRgb) {
+        public CapturedTranslationFrame {
+            Objects.requireNonNull(rotatedRgb, "rotatedRgb");
+            Objects.requireNonNull(rawRgb, "rawRgb");
+            rotatedRgb = Arrays.copyOf(rotatedRgb, rotatedRgb.length);
+            rawRgb = Arrays.copyOf(rawRgb, rawRgb.length);
+        }
+
+        @Override
+        public int[] rotatedRgb() {
+            return Arrays.copyOf(rotatedRgb, rotatedRgb.length);
+        }
+
+        @Override
+        public int[] rawRgb() {
+            return Arrays.copyOf(rawRgb, rawRgb.length);
+        }
     }
 
     private record PendingFrame(int width, int height, int[] rgb, boolean resetBlend,
