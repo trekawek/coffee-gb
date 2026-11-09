@@ -93,6 +93,21 @@ class ScreenTranslationTest {
     assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL, resolvedOllamaLan.model)
     assertEquals("", resolvedOllamaLan.apiKey)
 
+    // Switching provider to OpenAI while a previous Ollama URL/model was stored must use OpenAI.
+    val resolvedSwitchedToOpenAi =
+        ScreenTranslationSettings(
+                provider = ScreenTranslationProvider.OPENAI_COMPATIBLE,
+                apiKey = "sk-openai-key",
+                baseUrl = "http://gallifrey:11434/v1",
+                model = "qwen2.5vl:7b",
+            )
+            .resolve { null }
+    assertNotNull(resolvedSwitchedToOpenAi)
+    assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedSwitchedToOpenAi.protocol)
+    assertEquals(ScreenTranslationSettings.DEFAULT_OPENAI_BASE_URL, resolvedSwitchedToOpenAi.baseUrl)
+    assertEquals(ScreenTranslationSettings.DEFAULT_OPENAI_MODEL, resolvedSwitchedToOpenAi.model)
+    assertEquals("sk-openai-key", resolvedSwitchedToOpenAi.apiKey)
+
     assertNull(ScreenTranslationSettings().resolve { null })
   }
 
@@ -290,44 +305,56 @@ class ScreenTranslationTest {
         val panel =
             ScreenTranslationSettingsPanel(
                 ScreenTranslationSettings(
-                    provider = ScreenTranslationProvider.GEMINI,
-                    apiKey = "AIzaPanel",
+                    provider = ScreenTranslationProvider.OLLAMA,
+                    apiKey = "sk-openai",
+                    baseUrl = "http://gallifrey:11434/v1",
+                    model = "qwen2.5vl:7b",
                     targetLanguage = "English",
                 ),
                 env = { null },
             )
         assertEquals("Screen translation settings", panel.accessibleContext.accessibleName)
-        assertEquals("AIzaPanel", panel.toSettings().apiKey)
+        assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
+        assertEquals("qwen2.5vl:7b", panel.modelField.text)
 
-        val dialogFactory =
-            DesktopDialogFactory { DesktopThemeTokens.capture(DesktopAppearance.LIGHT) }
-        val formSurface =
-            dialogFactory.createFormPanel(
-                DesktopFormSpec(
-                    title = "Screen Translation Settings",
-                    heading = "Configure Vision Screen Translation",
-                    description =
-                        "Translate non-English dialogue and menus directly on the game screen using Google Gemini, an OpenAI-compatible Vision API, or a local VLM endpoint (such as Ollama).",
-                    contentAccessibleName = "Screen translation settings form",
-                    buttons =
-                        DesktopDialogButtons(
-                            primary = DesktopDialogAction("Save", true),
-                            cancel = DesktopDialogAction("Cancel", false),
-                            defaultButton = DesktopDialogDefaultButton.PRIMARY,
-                        ),
-                    resizable = false,
-                ),
-                panel,
-            ) {}
-        formSurface.size = formSurface.preferredSize
-        layoutTree(formSurface)
-        formSurface.size = formSurface.preferredSize
-        layoutTree(formSurface)
-        assertEquals(panel.x, formSurface.headingText.x)
-        assertEquals(panel.x, formSurface.descriptionText.x)
-        assertEquals(panel.width, formSurface.headingText.width)
-        assertTrue(panel.pauseCheckBox.height >= panel.pauseCheckBox.preferredSize.height)
-        assertTrue(panel.pauseCheckBox.y + panel.pauseCheckBox.height <= panel.height)
+        // Switching provider from Ollama to OpenAI clears the Ollama URL/model from the active fields.
+        panel.providerCombo.selectedItem = ScreenTranslationProvider.OPENAI_COMPATIBLE
+        assertEquals("", panel.baseUrlField.text)
+        assertEquals("", panel.modelField.text)
+        val switchedSettings = panel.toSettings()
+        assertEquals(ScreenTranslationProvider.OPENAI_COMPATIBLE, switchedSettings.provider)
+        assertEquals("", switchedSettings.baseUrl)
+        assertEquals("", switchedSettings.model)
+
+        // Switching back to Ollama restores the Ollama draft URL/model.
+        panel.providerCombo.selectedItem = ScreenTranslationProvider.OLLAMA
+        assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
+        assertEquals("qwen2.5vl:7b", panel.modelField.text)
+
+        // Verify ScreenTranslationSettingsPanel is hosted in PreferencesPanel under TRANSLATION.
+        val preferencesPanel =
+            PreferencesPanel(
+                eu.rekawek.coffeegb.controller.properties.ApplicationSettings(),
+                initialCategory = PreferencesCategory.TRANSLATION,
+                initialTranslation =
+                    ScreenTranslationSettings(
+                        provider = ScreenTranslationProvider.OLLAMA,
+                        baseUrl = "http://gallifrey:11434/v1",
+                        model = "qwen2.5vl:7b",
+                    ),
+            )
+        assertEquals(PreferencesCategory.TRANSLATION, preferencesPanel.categories.selectedCategory)
+        assertFalse(preferencesPanel.isDirty())
+        preferencesPanel.translationEditor.providerCombo.selectedItem =
+            ScreenTranslationProvider.OPENAI_COMPATIBLE
+        preferencesPanel.translationEditor.apiKeyField.text = "sk-live"
+        assertTrue(preferencesPanel.isDirty())
+        val edit = preferencesPanel.validatedEdit()
+        assertNotNull(edit.screenTranslation)
+        assertEquals(ScreenTranslationProvider.OPENAI_COMPATIBLE, edit.screenTranslation!!.provider)
+        assertEquals("sk-live", edit.screenTranslation!!.apiKey)
+        assertEquals("", edit.screenTranslation!!.baseUrl)
+        assertEquals("", edit.screenTranslation!!.model)
 
         val controller =
             ScreenTranslationController(

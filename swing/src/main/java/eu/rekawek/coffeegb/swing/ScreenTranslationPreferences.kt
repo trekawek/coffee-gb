@@ -53,17 +53,31 @@ internal data class ScreenTranslationSettings(
         env("COFFEEGB_TRANSLATE_BASE_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
     val envModel = env("COFFEEGB_TRANSLATE_MODEL")?.trim()?.takeIf { it.isNotEmpty() }
 
+    val hasCloudKey =
+        clean.apiKey.isNotEmpty() ||
+            envTranslateKey.isNotEmpty() ||
+            envGeminiKey.isNotEmpty() ||
+            envOpenAiKey.isNotEmpty()
+    val ignoreOllamaOverrides =
+        clean.provider == ScreenTranslationProvider.GEMINI ||
+            clean.provider == ScreenTranslationProvider.OPENAI_COMPATIBLE ||
+            (clean.provider == ScreenTranslationProvider.AUTO && hasCloudKey)
+    val effectiveBaseUrl =
+        clean.baseUrl.takeUnless { ignoreOllamaOverrides && isOllamaEndpoint(it) }.orEmpty()
+    val effectiveModel =
+        clean.model.takeUnless { ignoreOllamaOverrides && isOllamaModel(it) }.orEmpty()
+
     val protocol =
         when (clean.provider) {
           ScreenTranslationProvider.GEMINI -> ResolvedTranslationProtocol.GEMINI
           ScreenTranslationProvider.OPENAI_COMPATIBLE,
           ScreenTranslationProvider.OLLAMA -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
           ScreenTranslationProvider.AUTO -> {
-            val effectiveUrl = clean.baseUrl.ifEmpty { envBaseUrl.orEmpty() }
+            val candidateUrl = effectiveBaseUrl.ifEmpty { envBaseUrl.orEmpty() }
             when {
-              effectiveUrl.contains("generativelanguage.googleapis.com", ignoreCase = true) ->
+              candidateUrl.contains("generativelanguage.googleapis.com", ignoreCase = true) ->
                   ResolvedTranslationProtocol.GEMINI
-              effectiveUrl.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
+              candidateUrl.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
               clean.apiKey.startsWith("AIza") -> ResolvedTranslationProtocol.GEMINI
               clean.apiKey.isNotEmpty() -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
               envTranslateKey.startsWith("AIza") -> ResolvedTranslationProtocol.GEMINI
@@ -90,7 +104,7 @@ internal data class ScreenTranslationSettings(
 
     val resolvedBaseUrl =
         when {
-          clean.baseUrl.isNotEmpty() -> clean.baseUrl
+          effectiveBaseUrl.isNotEmpty() -> effectiveBaseUrl
           !envBaseUrl.isNullOrEmpty() -> envBaseUrl
           clean.provider == ScreenTranslationProvider.OLLAMA -> DEFAULT_OLLAMA_BASE_URL
           protocol == ResolvedTranslationProtocol.GEMINI ->
@@ -103,7 +117,7 @@ internal data class ScreenTranslationSettings(
 
     val resolvedModel =
         when {
-          clean.model.isNotEmpty() -> clean.model
+          effectiveModel.isNotEmpty() -> effectiveModel
           !envModel.isNullOrEmpty() -> envModel
           clean.provider == ScreenTranslationProvider.OLLAMA ||
               !isOfficialCloudEndpoint(resolvedBaseUrl) -> DEFAULT_OLLAMA_MODEL
@@ -150,6 +164,23 @@ internal data class ScreenTranslationSettings(
       val host =
           runCatching { URI(baseUrl).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return false
       return host == "generativelanguage.googleapis.com" || host == "api.openai.com"
+    }
+
+    internal fun isOllamaEndpoint(baseUrl: String): Boolean {
+      if (baseUrl.isBlank()) return false
+      val uri = runCatching { URI(baseUrl.trim()) }.getOrNull() ?: return false
+      return uri.port == 11434 || uri.path?.contains("/api/chat") == true
+    }
+
+    internal fun isOllamaModel(model: String): Boolean {
+      if (model.isBlank()) return false
+      val lower = model.trim().lowercase(Locale.ROOT)
+      return ':' in lower ||
+          lower.startsWith("qwen") ||
+          lower.startsWith("llama") ||
+          lower.startsWith("llava") ||
+          lower.startsWith("minicpm") ||
+          lower.startsWith("moondream")
     }
   }
 }
