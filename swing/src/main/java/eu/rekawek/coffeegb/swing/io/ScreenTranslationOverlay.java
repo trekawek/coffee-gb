@@ -10,6 +10,7 @@ import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
@@ -148,8 +149,16 @@ public final class ScreenTranslationOverlay {
             if (!regions.isEmpty()) {
                 double scaleX = viewport.width() / (double) sourceWidth;
                 double scaleY = viewport.height() / (double) sourceHeight;
-                for (Region region : regions) {
-                    paintRegion(overlayGraphics, bounds, viewport.x(), viewport.y(), scaleX, scaleY, region);
+                List<PreparedRegion> prepared =
+                        prepareRegions(
+                                overlayGraphics,
+                                bounds,
+                                viewport.x(),
+                                viewport.y(),
+                                scaleX,
+                                scaleY);
+                for (PreparedRegion item : prepared) {
+                    paintPreparedRegion(overlayGraphics, item);
                 }
             } else if (!fallbackText.isEmpty()) {
                 paintFallbackBanner(overlayGraphics, bounds, viewport.scale());
@@ -161,78 +170,268 @@ public final class ScreenTranslationOverlay {
         }
     }
 
-    private void paintRegion(
+    private List<PreparedRegion> prepareRegions(
             Graphics2D g,
             Rectangle viewportBounds,
             int originX,
             int originY,
             double scaleX,
-            double scaleY,
-            Region region) {
-        int rawX = (int) Math.round(originX + region.x() * scaleX);
-        int rawY = (int) Math.round(originY + region.y() * scaleY);
-        int rawW = Math.max(32, (int) Math.round(region.width() * scaleX));
-        int rawH = Math.max(20, (int) Math.round(region.height() * scaleY));
-
+            double scaleY) {
         int minX = viewportBounds.x + 2;
         int minY = viewportBounds.y + 2;
         int maxRight = viewportBounds.x + viewportBounds.width - 2;
         int maxBottom = viewportBounds.y + viewportBounds.height - 2;
         if (maxRight <= minX || maxBottom <= minY) {
-            return;
+            return List.of();
         }
 
-        int boxX = clamp(rawX, minX, Math.max(minX, maxRight - 32));
-        int boxY = clamp(rawY, minY, Math.max(minY, maxBottom - 20));
-        int boxW = clamp(rawW, 32, maxRight - boxX);
-        int boxH = clamp(rawH, 20, maxBottom - boxY);
+        List<Region> sorted = new ArrayList<>(regions);
+        sorted.sort(Comparator.comparingInt(Region::y).thenComparingInt(Region::x));
 
         double localScale = Math.max(1.0, Math.min(scaleX, scaleY));
-        int maxFontSize = Math.max(11, Math.min(24, (int) Math.round(6.5 * localScale)));
-        int minFontSize = Math.max(9, Math.min(12, maxFontSize));
+        int maxFontSize = Math.max(11, Math.min(22, (int) Math.round(5.8 * localScale)));
+        int minFontSize = Math.max(9, Math.min(11, maxFontSize));
         int paddingX = Math.max(5, (int) Math.round(2.5 * localScale));
-        int paddingY = Math.max(4, (int) Math.round(2.0 * localScale));
+        int paddingY = Math.max(2, (int) Math.round(1.2 * localScale));
+        int minBoxHeight = Math.max(14, (int) Math.round(7.5 * scaleY));
+        int verticalGap = Math.max(2, (int) Math.round(scaleY));
 
-        Font chosenFont = new Font(Font.SANS_SERIF, Font.BOLD, minFontSize);
-        List<String> wrappedLines = List.of(region.text());
-        for (int fontSize = maxFontSize; fontSize >= minFontSize; fontSize--) {
-            Font candidate = new Font(Font.SANS_SERIF, Font.BOLD, fontSize);
-            FontMetrics metrics = g.getFontMetrics(candidate);
-            int availableWidth = Math.max(16, boxW - 2 * paddingX);
-            List<String> lines = wrapText(region.text(), metrics, availableWidth);
-            int neededHeight = lines.size() * metrics.getHeight() + 2 * paddingY;
-            chosenFont = candidate;
-            wrappedLines = lines;
-            if (neededHeight <= boxH) {
-                break;
+        List<PreparedRegion> list = new ArrayList<>(sorted.size());
+        for (int i = 0; i < sorted.size(); i++) {
+            Region region = sorted.get(i);
+            int rawX = (int) Math.round(originX + region.x() * scaleX);
+            int rawY = (int) Math.round(originY + region.y() * scaleY);
+            int rawW = Math.max(32, (int) Math.round(region.width() * scaleX));
+            int rawH = Math.max(minBoxHeight, (int) Math.round(region.height() * scaleY));
+
+            int boxX = clamp(rawX, minX, Math.max(minX, maxRight - 32));
+            int boxY = clamp(rawY, minY, Math.max(minY, maxBottom - minBoxHeight));
+
+            int limitBottom = maxBottom;
+            for (int j = i + 1; j < sorted.size(); j++) {
+                Region next = sorted.get(j);
+                if (next.y() <= region.y()) {
+                    continue;
+                }
+                boolean horizontalOverlap =
+                        next.x() < region.x() + region.width() + 8
+                                && region.x() < next.x() + next.width() + 8;
+                if (horizontalOverlap) {
+                    int nextTopY = (int) Math.round(originY + next.y() * scaleY) - verticalGap;
+                    limitBottom = Math.min(limitBottom, Math.max(boxY + minBoxHeight, nextTopY));
+                    break;
+                }
             }
+
+            int boxW = clamp(rawW, 32, maxRight - boxX);
+            int boxH = clamp(rawH, minBoxHeight, Math.max(minBoxHeight, limitBottom - boxY));
+            boolean singleLinePreferred =
+                    (region.height() <= 16 || limitBottom < maxBottom)
+                            && !region.text().contains("\n");
+
+            Font chosenFont = new Font(Font.SANS_SERIF, Font.BOLD, minFontSize);
+            List<String> wrappedLines = List.of(region.text());
+            for (int fontSize = maxFontSize; fontSize >= minFontSize; fontSize--) {
+                Font candidate = new Font(Font.SANS_SERIF, Font.BOLD, fontSize);
+                FontMetrics metrics = g.getFontMetrics(candidate);
+                if (singleLinePreferred) {
+                    int singleLineWidth = metrics.stringWidth(region.text()) + 2 * paddingX;
+                    int singleLineHeight = metrics.getHeight() + 2 * paddingY;
+                    chosenFont = candidate;
+                    wrappedLines = List.of(region.text());
+                    if (singleLineWidth <= maxRight - minX
+                            && singleLineHeight <= Math.max(boxH, limitBottom - boxY)) {
+                        boxW = Math.max(boxW, Math.min(maxRight - minX, singleLineWidth));
+                        break;
+                    }
+                } else {
+                    int availableWidth = Math.max(16, boxW - 2 * paddingX);
+                    List<String> lines = wrapText(region.text(), metrics, availableWidth);
+                    int neededHeight = lines.size() * metrics.getHeight() + 2 * paddingY;
+                    chosenFont = candidate;
+                    wrappedLines = lines;
+                    if (neededHeight <= boxH) {
+                        break;
+                    }
+                }
+            }
+
+            FontMetrics metrics = g.getFontMetrics(chosenFont);
+            if (singleLinePreferred) {
+                int neededW =
+                        Math.min(
+                                maxRight - minX,
+                                metrics.stringWidth(region.text()) + 2 * paddingX);
+                boxW = Math.max(boxW, neededW);
+                if (boxX + boxW > maxRight) {
+                    boxX = Math.max(minX, maxRight - boxW);
+                }
+            } else {
+                wrappedLines = wrapText(region.text(), metrics, Math.max(16, boxW - 2 * paddingX));
+            }
+
+            boolean isCenteredBanner =
+                    region.width() >= sourceWidth * 0.65
+                            && region.height() >= 20
+                            && wrappedLines.size() == 1
+                            && Math.abs(
+                                            (region.x() + region.width() / 2.0)
+                                                    - (sourceWidth / 2.0))
+                                    <= sourceWidth * 0.15;
+            int finalHeight;
+            if (isCenteredBanner) {
+                int pillW =
+                        clamp(
+                                metrics.stringWidth(wrappedLines.get(0))
+                                        + 2 * paddingX
+                                        + (int) Math.round(10 * localScale),
+                                48,
+                                boxW);
+                int pillH =
+                        clamp(
+                                metrics.getHeight()
+                                        + 2 * paddingY
+                                        + (int) Math.round(2 * localScale),
+                                minBoxHeight,
+                                boxH);
+                boxX = boxX + (boxW - pillW) / 2;
+                boxY = clamp(boxY + (boxH - pillH) / 2, minY, Math.max(minY, limitBottom - pillH));
+                boxW = pillW;
+                finalHeight = pillH;
+            } else {
+                int neededHeight = wrappedLines.size() * metrics.getHeight() + 2 * paddingY;
+                finalHeight =
+                        clamp(
+                                Math.max(boxH, neededHeight),
+                                minBoxHeight,
+                                Math.max(minBoxHeight, limitBottom - boxY));
+            }
+
+            list.add(
+                    new PreparedRegion(
+                            region,
+                            boxX,
+                            boxY,
+                            boxW,
+                            finalHeight,
+                            chosenFont,
+                            wrappedLines,
+                            paddingX,
+                            paddingY,
+                            localScale,
+                            isCenteredBanner));
         }
 
-        g.setFont(chosenFont);
-        FontMetrics metrics = g.getFontMetrics();
-        int neededHeight = wrappedLines.size() * metrics.getHeight() + 2 * paddingY;
-        int finalHeight = Math.max(boxH, Math.min(neededHeight, maxBottom - boxY));
-        int arc = Math.max(6, (int) Math.round(3.0 * localScale));
+        // Unify peer menu items in the same vertical stack so their left/right edges and font size
+        // match.
+        int i = 0;
+        while (i < list.size()) {
+            int j = i + 1;
+            while (j < list.size()) {
+                PreparedRegion prev = list.get(j - 1);
+                PreparedRegion curr = list.get(j);
+                boolean sameSourceColumn =
+                        prev.region.x() == curr.region.x()
+                                && prev.region.width() == curr.region.width()
+                                && prev.region.height() <= 16
+                                && curr.region.height() <= 16;
+                int sourceGap = curr.region.y() - (prev.region.y() + prev.region.height());
+                if (sameSourceColumn && sourceGap >= 0 && sourceGap <= 20) {
+                    j++;
+                } else {
+                    break;
+                }
+            }
+            if (j - i >= 2) {
+                int commonFontSize = Integer.MAX_VALUE;
+                int commonWidth = 0;
+                int minPeerX = Integer.MAX_VALUE;
+                for (int k = i; k < j; k++) {
+                    PreparedRegion p = list.get(k);
+                    commonFontSize = Math.min(commonFontSize, p.font.getSize());
+                    commonWidth = Math.max(commonWidth, p.boxW);
+                    minPeerX = Math.min(minPeerX, p.boxX);
+                }
+                Font commonFont = new Font(Font.SANS_SERIF, Font.BOLD, commonFontSize);
+                FontMetrics commonMetrics = g.getFontMetrics(commonFont);
+                for (int k = i; k < j; k++) {
+                    PreparedRegion p = list.get(k);
+                    int neededW =
+                            commonMetrics.stringWidth(p.region.text()) + 2 * p.paddingX;
+                    commonWidth = Math.max(commonWidth, Math.min(maxRight - minX, neededW));
+                }
+                int unifiedX = minPeerX;
+                if (unifiedX + commonWidth > maxRight) {
+                    unifiedX = Math.max(minX, maxRight - commonWidth);
+                }
+                for (int k = i; k < j; k++) {
+                    PreparedRegion p = list.get(k);
+                    list.set(
+                            k,
+                            new PreparedRegion(
+                                    p.region,
+                                    unifiedX,
+                                    p.boxY,
+                                    commonWidth,
+                                    p.boxH,
+                                    commonFont,
+                                    List.of(p.region.text()),
+                                    p.paddingX,
+                                    p.paddingY,
+                                    p.localScale,
+                                    false));
+                }
+            }
+            i = j;
+        }
 
+        return list;
+    }
+
+    private void paintPreparedRegion(Graphics2D g, PreparedRegion item) {
+        int arc = Math.max(6, (int) Math.round(3.0 * item.localScale));
         g.setColor(BOX_BACKGROUND);
-        g.fillRoundRect(boxX, boxY, boxW, finalHeight, arc, arc);
+        g.fillRoundRect(item.boxX, item.boxY, item.boxW, item.boxH, arc, arc);
         g.setColor(BOX_BORDER);
-        g.setStroke(new BasicStroke(Math.max(1f, (float) (localScale * 0.45))));
-        g.drawRoundRect(boxX, boxY, boxW, finalHeight, arc, arc);
+        g.setStroke(new BasicStroke(Math.max(1f, (float) (item.localScale * 0.45))));
+        g.drawRoundRect(item.boxX, item.boxY, item.boxW, item.boxH, arc, arc);
 
+        g.setFont(item.font);
+        FontMetrics metrics = g.getFontMetrics();
         g.setColor(TEXT_COLOR);
         int lineHeight = metrics.getHeight();
-        int totalTextHeight = wrappedLines.size() * lineHeight;
-        int startY = boxY + Math.max(paddingY, (finalHeight - totalTextHeight) / 2) + metrics.getAscent();
-        int maxTextBottom = boxY + finalHeight - paddingY;
-        for (String line : wrappedLines) {
-            if (startY - metrics.getAscent() + lineHeight > maxTextBottom + metrics.getDescent()) {
+        int totalTextHeight = item.lines.size() * lineHeight;
+        int startY =
+                item.boxY
+                        + Math.max(item.paddingY, (item.boxH - totalTextHeight) / 2)
+                        + metrics.getAscent();
+        int maxTextBottom = item.boxY + item.boxH - item.paddingY;
+        for (String line : item.lines) {
+            if (startY - metrics.getAscent() + lineHeight
+                    > maxTextBottom + metrics.getDescent()) {
                 break;
             }
-            g.drawString(line, boxX + paddingX, startY);
+            int textX =
+                    item.centerText
+                            ? item.boxX + Math.max(item.paddingX, (item.boxW - metrics.stringWidth(line)) / 2)
+                            : item.boxX + item.paddingX;
+            g.drawString(line, textX, startY);
             startY += lineHeight;
         }
     }
+
+    private record PreparedRegion(
+            Region region,
+            int boxX,
+            int boxY,
+            int boxW,
+            int boxH,
+            Font font,
+            List<String> lines,
+            int paddingX,
+            int paddingY,
+            double localScale,
+            boolean centerText) {}
 
     private void paintFallbackBanner(Graphics2D g, Rectangle viewportBounds, double scale) {
         double localScale = Math.max(1.0, scale);

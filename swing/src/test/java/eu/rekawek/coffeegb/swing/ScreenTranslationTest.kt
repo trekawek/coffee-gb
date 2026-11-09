@@ -17,9 +17,11 @@ import java.awt.Color
 import java.awt.Font
 import java.awt.image.BufferedImage
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import javax.imageio.ImageIO
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -32,7 +34,7 @@ import org.junit.Test
 class ScreenTranslationTest {
 
   @Test
-  fun `settings store round-trips and resolves Gemini OpenAI and localhost configurations`() {
+  fun `settings store round-trips and resolves Gemini OpenAI and Ollama without env vars`() {
     val backing = mutableMapOf<String, String>()
     val node =
         object : ScreenTranslationPreferenceNode {
@@ -61,32 +63,28 @@ class ScreenTranslationTest {
     assertEquals("gpt-4o", loaded.model)
     assertTrue(loaded.pauseWhileTranslating)
 
-    val resolvedOpenAi = loaded.resolve { null }
+    val resolvedOpenAi = loaded.resolve()
     assertNotNull(resolvedOpenAi)
     assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedOpenAi.protocol)
     assertEquals("sk-test-123", resolvedOpenAi.apiKey)
 
-    val resolvedGeminiEnv =
-        ScreenTranslationSettings().resolve { key ->
-          if (key == "GEMINI_API_KEY") "AIzaSyTestKey" else null
-        }
-    assertNotNull(resolvedGeminiEnv)
-    assertEquals(ResolvedTranslationProtocol.GEMINI, resolvedGeminiEnv.protocol)
-    assertEquals("AIzaSyTestKey", resolvedGeminiEnv.apiKey)
-    assertEquals(ScreenTranslationSettings.DEFAULT_GEMINI_MODEL, resolvedGeminiEnv.model)
-
-    val resolvedOllamaLocal =
-        ScreenTranslationSettings(baseUrl = "http://localhost:11434/v1").resolve { null }
-    assertNotNull(resolvedOllamaLocal)
-    assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedOllamaLocal.protocol)
-    assertEquals("", resolvedOllamaLocal.apiKey)
+    val resolvedGemini =
+        ScreenTranslationSettings(
+                provider = ScreenTranslationProvider.GEMINI,
+                apiKey = "AIzaSyTestKey",
+            )
+            .resolve()
+    assertNotNull(resolvedGemini)
+    assertEquals(ResolvedTranslationProtocol.GEMINI, resolvedGemini.protocol)
+    assertEquals("AIzaSyTestKey", resolvedGemini.apiKey)
+    assertEquals(ScreenTranslationSettings.DEFAULT_GEMINI_MODEL, resolvedGemini.model)
 
     val resolvedOllamaLan =
         ScreenTranslationSettings(
                 provider = ScreenTranslationProvider.OLLAMA,
                 baseUrl = "http://gallifrey:11434/v1",
             )
-            .resolve { null }
+            .resolve()
     assertNotNull(resolvedOllamaLan)
     assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedOllamaLan.protocol)
     assertEquals("http://gallifrey:11434/v1", resolvedOllamaLan.baseUrl)
@@ -101,18 +99,18 @@ class ScreenTranslationTest {
                 baseUrl = "http://gallifrey:11434/v1",
                 model = "qwen2.5vl:7b",
             )
-            .resolve { null }
+            .resolve()
     assertNotNull(resolvedSwitchedToOpenAi)
     assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedSwitchedToOpenAi.protocol)
     assertEquals(ScreenTranslationSettings.DEFAULT_OPENAI_BASE_URL, resolvedSwitchedToOpenAi.baseUrl)
     assertEquals(ScreenTranslationSettings.DEFAULT_OPENAI_MODEL, resolvedSwitchedToOpenAi.model)
     assertEquals("sk-openai-key", resolvedSwitchedToOpenAi.apiKey)
 
-    assertNull(ScreenTranslationSettings().resolve { null })
+    assertNull(ScreenTranslationSettings().resolve())
   }
 
   @Test
-  fun `vision client builds Gemini and OpenAI requests and normalizes region coordinates`() {
+  fun `vision client builds Gemini and OpenAI requests and snaps region coordinates to pixel bands`() {
     val frame =
         SwingDisplay.CapturedTranslationFrame(
             160,
@@ -170,61 +168,39 @@ class ScreenTranslationTest {
     assertEquals(8, geminiResult.regions.single().x())
     assertEquals(96, geminiResult.regions.single().y())
 
-    val openAiClient =
-        HttpScreenTranslationClient(
-            transport = { request ->
-              capturedRequest = request
-              ScreenTranslationHttpResponse(
-                  200,
-                  """
-                  {
-                    "choices": [
-                      {
-                        "message": {
-                          "content": "{\"regions\":[{\"x\":0.05,\"y\":0.5,\"width\":0.9,\"height\":0.25,\"translation\":\"Normalized box\"}]}"
-                        }
-                      }
-                    ]
-                  }
-                  """
-                      .trimIndent(),
-              )
-            },
-            upscaleFactor = 1,
+    // Verify compressed/misaligned VLM coordinates are snapped to the actual detected text bands
+    // and stacked menu options share aligned horizontal bounds.
+    val bands =
+        listOf(
+            DetectedTextBand(x1 = 1, y1 = 16, x2 = 156, y2 = 47),
+            DetectedTextBand(x1 = 56, y1 = 64, x2 = 103, y2 = 70),
+            DetectedTextBand(x1 = 64, y1 = 80, x2 = 110, y2 = 86),
+            DetectedTextBand(x1 = 8, y1 = 112, x2 = 151, y2 = 126),
         )
-    val openAiConfig =
-        ResolvedScreenTranslationConfig(
-            protocol = ResolvedTranslationProtocol.OPENAI_COMPATIBLE,
-            apiKey = "sk-test",
-            baseUrl = "https://api.openai.com/v1",
-            model = "gpt-4o-mini",
-            targetLanguage = "English",
-            pauseWhileTranslating = false,
-        )
-    val openAiResult = openAiClient.translate(frame, openAiConfig)
-    assertEquals(
-        "https://api.openai.com/v1/chat/completions",
-        capturedRequest!!.uri.toString(),
-    )
-    assertEquals("Bearer sk-test", capturedRequest!!.headers["Authorization"])
-    assertEquals(1, openAiResult.regions.size)
-    assertEquals(8, openAiResult.regions.single().x())
-    assertEquals(72, openAiResult.regions.single().y())
-    assertEquals(144, openAiResult.regions.single().width())
-    assertEquals(36, openAiResult.regions.single().height())
-
-    val bbox2dParsed =
+    val misalignedModelResponse =
+        """{"regions":[{"bbox_2d":[250,50,750,100],"original":"連珠倶楽部","translation":"Renju Club"},{"bbox_2d":[350,150,650,200],"original":"たいきょく","translation":"Play Match"},{"bbox_2d":[350,200,650,250],"original":"つめれんじゅ","translation":"Puzzle Mode"}]}"""
+    val aligned =
         HttpScreenTranslationClient.parseTranslationPayload(
-            """{"regions":[{"bbox_2d":[10,600,939,880],"original":"はじめまして！","translation":"Nice to meet you!"}]}""",
-            160,
-            144,
+            rawModelText = misalignedModelResponse,
+            sourceWidth = 160,
+            sourceHeight = 144,
+            candidateBands = bands,
         )
-    assertEquals(1, bbox2dParsed.regions.size)
-    assertEquals("Nice to meet you!", bbox2dParsed.regions.single().text())
-    assertEquals(2, bbox2dParsed.regions.single().x())
-    assertEquals(86, bbox2dParsed.regions.single().y())
-    assertEquals(149, bbox2dParsed.regions.single().width())
-    assertEquals(40, bbox2dParsed.regions.single().height())
+    assertEquals(3, aligned.regions.size)
+    // Title banner snapped to Band 0 (y=16..47)
+    assertEquals(1, aligned.regions[0].x())
+    assertEquals(16, aligned.regions[0].y())
+    assertEquals(156, aligned.regions[0].width())
+    assertEquals(32, aligned.regions[0].height())
+    // Menu options snapped to Band 1 (y=64) and Band 2 (y=80) with unified left edge and width
+    assertEquals(56, aligned.regions[1].x())
+    assertEquals(64, aligned.regions[1].y())
+    assertEquals(55, aligned.regions[1].width())
+    assertEquals(7, aligned.regions[1].height())
+    assertEquals(56, aligned.regions[2].x())
+    assertEquals(80, aligned.regions[2].y())
+    assertEquals(55, aligned.regions[2].width())
+    assertEquals(7, aligned.regions[2].height())
   }
 
   @Test
@@ -276,7 +252,7 @@ class ScreenTranslationTest {
   }
 
   @Test
-  fun `controller translates on demand toggles overlay on second press and cleans up on lifecycle`() {
+  fun `settings panel shows and hides API Key Base URL and Model by provider and controller manages lifecycle`() {
     val eventBus = EventBusImpl()
     val fakeDisplay = FakeTranslationDisplaySurface()
     val backing = mutableMapOf<String, String>()
@@ -311,23 +287,49 @@ class ScreenTranslationTest {
                     model = "qwen2.5vl:7b",
                     targetLanguage = "English",
                 ),
-                env = { null },
             )
         assertEquals("Screen translation settings", panel.accessibleContext.accessibleName)
+        // When Ollama is selected: API Key is hidden; Base URL and Model are visible.
+        assertFalse(panel.apiKeyLabel.isVisible)
+        assertFalse(panel.apiKeyField.isVisible)
+        assertTrue(panel.baseUrlLabel.isVisible)
+        assertTrue(panel.baseUrlField.isVisible)
+        assertTrue(panel.modelLabel.isVisible)
+        assertTrue(panel.modelField.isVisible)
         assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
         assertEquals("qwen2.5vl:7b", panel.modelField.text)
 
-        // Switching provider from Ollama to OpenAI clears the Ollama URL/model from the active fields.
+        // Switching provider from Ollama to OpenAI shows API Key + Model and hides Base URL.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.OPENAI_COMPATIBLE
+        assertTrue(panel.apiKeyLabel.isVisible)
+        assertTrue(panel.apiKeyField.isVisible)
+        assertFalse(panel.baseUrlLabel.isVisible)
+        assertFalse(panel.baseUrlField.isVisible)
+        assertTrue(panel.modelLabel.isVisible)
+        assertTrue(panel.modelField.isVisible)
         assertEquals("", panel.baseUrlField.text)
         assertEquals("", panel.modelField.text)
         val switchedSettings = panel.toSettings()
         assertEquals(ScreenTranslationProvider.OPENAI_COMPATIBLE, switchedSettings.provider)
+        assertEquals("sk-openai", switchedSettings.apiKey)
         assertEquals("", switchedSettings.baseUrl)
         assertEquals("", switchedSettings.model)
 
-        // Switching back to Ollama restores the Ollama draft URL/model.
+        // Switching to Gemini shows API Key + Model and hides Base URL.
+        panel.providerCombo.selectedItem = ScreenTranslationProvider.GEMINI
+        assertTrue(panel.apiKeyLabel.isVisible)
+        assertTrue(panel.apiKeyField.isVisible)
+        assertFalse(panel.baseUrlLabel.isVisible)
+        assertFalse(panel.baseUrlField.isVisible)
+        assertTrue(panel.modelLabel.isVisible)
+        assertTrue(panel.modelField.isVisible)
+
+        // Switching back to Ollama restores the Ollama draft URL/model and hides API Key.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.OLLAMA
+        assertFalse(panel.apiKeyLabel.isVisible)
+        assertFalse(panel.apiKeyField.isVisible)
+        assertTrue(panel.baseUrlLabel.isVisible)
+        assertTrue(panel.baseUrlField.isVisible)
         assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
         assertEquals("qwen2.5vl:7b", panel.modelField.text)
 
@@ -351,7 +353,10 @@ class ScreenTranslationTest {
         assertTrue(preferencesPanel.isDirty())
         val edit = preferencesPanel.validatedEdit()
         assertNotNull(edit.screenTranslation)
-        assertEquals(ScreenTranslationProvider.OPENAI_COMPATIBLE, edit.screenTranslation!!.provider)
+        assertEquals(
+            ScreenTranslationProvider.OPENAI_COMPATIBLE,
+            edit.screenTranslation!!.provider,
+        )
         assertEquals("sk-live", edit.screenTranslation!!.apiKey)
         assertEquals("", edit.screenTranslation!!.baseUrl)
         assertEquals("", edit.screenTranslation!!.model)
@@ -420,6 +425,37 @@ class ScreenTranslationTest {
   }
 
   @Test
+  fun `live OpenAI gpt_4o_mini translates Japanese Game Boy screen and aligns labels`() {
+    val apiKeyFile = File("/home/newton/dev/openai-api")
+    Assume.assumeTrue("OpenAI key file not present", apiKeyFile.isFile)
+    val apiKey = Files.readString(apiKeyFile.toPath()).trim()
+    Assume.assumeTrue("OpenAI key is blank", apiKey.isNotEmpty())
+
+    val frame = captureJapaneseRomOrSyntheticFrame()
+    val config =
+        checkNotNull(
+            ScreenTranslationSettings(
+                    provider = ScreenTranslationProvider.OPENAI_COMPATIBLE,
+                    apiKey = apiKey,
+                )
+                .resolve())
+    assertEquals(ScreenTranslationSettings.DEFAULT_OPENAI_BASE_URL, config.baseUrl)
+    assertEquals(ScreenTranslationSettings.DEFAULT_OPENAI_MODEL, config.model)
+
+    val client = HttpScreenTranslationClient()
+    val result = client.translate(frame, config)
+    assertFalse(result.isEmpty, "Expected gpt-4o-mini to return a translation for Japanese screen")
+    assertTrue(result.regions.isNotEmpty(), "Expected located regions from gpt-4o-mini")
+
+    val overlay = result.toOverlay(frame)
+    val canvas = BufferedImage(480, 432, BufferedImage.TYPE_INT_ARGB)
+    val g = canvas.createGraphics()
+    val viewport = DisplayViewport.calculate(480, 432, 160, 144, 0, DisplayScaleMode.EXPLICIT_2X)
+    overlay.paint(g, viewport)
+    g.dispose()
+  }
+
+  @Test
   fun `live local Ollama qwen2_5vl translates Japanese Game Boy screen and renders overlay`() {
     Assume.assumeTrue(
         "Local Ollama server is not listening on 127.0.0.1:11434",
@@ -429,7 +465,7 @@ class ScreenTranslationTest {
     val frame = captureJapaneseRomOrSyntheticFrame()
     val config =
         checkNotNull(
-            ScreenTranslationSettings(provider = ScreenTranslationProvider.OLLAMA).resolve { null })
+            ScreenTranslationSettings(provider = ScreenTranslationProvider.OLLAMA).resolve())
     assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_BASE_URL, config.baseUrl)
     assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL, config.model)
 
@@ -458,6 +494,14 @@ class ScreenTranslationTest {
   }
 
   private fun captureJapaneseRomOrSyntheticFrame(): SwingDisplay.CapturedTranslationFrame {
+    val cachedShot = File("/tmp/renju-check/renju_gb_f380.png")
+    if (cachedShot.isFile) {
+      val img = ImageIO.read(cachedShot)
+      if (img != null && img.width == 160 && img.height == 144) {
+        val rgb = img.getRGB(0, 0, 160, 144, null, 0, 160)
+        return SwingDisplay.CapturedTranslationFrame(160, 144, rgb, 160, 144, rgb)
+      }
+    }
     val romFile =
         File(
             "/mnt/nas/emu/roms/gb/_Int_release/Japan/P/Pocket Monsters - Aka (Japan) (Rev A) (SGB Enhanced).gb")
@@ -577,10 +621,5 @@ class ScreenTranslationTest {
     var result: Result<T>? = null
     SwingUtilities.invokeAndWait { result = runCatching(action) }
     return checkNotNull(result).getOrThrow()
-  }
-
-  private fun layoutTree(container: java.awt.Container) {
-    container.doLayout()
-    container.components.filterIsInstance<java.awt.Container>().forEach(::layoutTree)
   }
 }

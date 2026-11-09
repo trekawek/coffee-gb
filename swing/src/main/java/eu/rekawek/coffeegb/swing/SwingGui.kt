@@ -579,7 +579,6 @@ class SwingGui private constructor(
               romOpen.openRecent(path, recentGameMetadataStore.read(path)?.origin)
             },
             onBessStatus = { message -> desktopUiCoordinator.warning(message) },
-            onScreenTranslationSettings = screenTranslationController::showSettingsDialog,
         )
     menu.addMenu()
 
@@ -1359,6 +1358,7 @@ class SwingGui private constructor(
         initialJoinNetplayHost: String?,
         suppressInitialAutosaveResume: Boolean,
         startMuted: Boolean,
+        @Suppress("UNUSED_PARAMETER") portableSettingsPath: Path? = null,
     ) {
       val desktopOpenFiles = DesktopOpenFilesBridge()
       prepareDesktopLaunch(
