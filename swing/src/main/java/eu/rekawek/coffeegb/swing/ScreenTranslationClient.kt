@@ -61,7 +61,7 @@ internal fun interface ScreenTranslationHttpTransport {
 internal class JdkScreenTranslationHttpTransport(
     private val client: HttpClient =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(),
-    private val requestTimeout: Duration = Duration.ofSeconds(30),
+    private val requestTimeout: Duration = Duration.ofSeconds(120),
 ) : ScreenTranslationHttpTransport {
   override fun post(request: ScreenTranslationHttpRequest): ScreenTranslationHttpResponse {
     val builder =
@@ -137,7 +137,7 @@ internal class HttpScreenTranslationClient(
   }
 
   companion object {
-    const val DEFAULT_UPSCALE_FACTOR = 3
+    const val DEFAULT_UPSCALE_FACTOR = 2
 
     private val PNG_SIGNATURE = byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10)
     private val IHDR = "IHDR".toByteArray(StandardCharsets.US_ASCII)
@@ -150,26 +150,14 @@ internal class HttpScreenTranslationClient(
         targetLanguage: String,
     ): String =
         """
-        You are translating a retro Game Boy screen (${sourceWidth}x${sourceHeight} logical pixels) into $targetLanguage.
-        1. Find all visible non-$targetLanguage text blocks (dialogue boxes, menus, signs, HUD labels).
-        2. Group lines that belong to the same dialogue box or menu panel into a single region so the translated sentence reads naturally.
-        3. Return ONLY a JSON object with this exact structure (no markdown fences):
-        {
-          "regions": [
-            {
-              "x": 8,
-              "y": 96,
-              "width": 144,
-              "height": 40,
-              "original": "original text",
-              "translation": "natural $targetLanguage translation"
-            }
-          ],
-          "summary": "combined translation of the screen"
-        }
-        Coordinate rules:
-        - x is in 0..$sourceWidth, y is in 0..$sourceHeight, width is in 1..$sourceWidth, height is in 1..$sourceHeight.
-        - If there is no non-$targetLanguage text on screen, return {"regions":[],"summary":""}.
+        Locate every visible non-$targetLanguage text block (dialogue boxes, menu panels, title banners, signs) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
+        Rules:
+        - Group lines inside the same dialogue box or menu frame into one region.
+        - Retro Japanese games often write common vocabulary in hiragana/katakana (e.g. たいきょく = Play Match, つめれんじゅ = Puzzle Mode, さいしょからはじめる = New Game, せっていをかえる = Options). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
+        - Provide `bbox_2d` as `[x1, y1, x2, y2]` in 0..1000 normalized screen coordinates covering the text box.
+        - Return ONLY valid JSON (no markdown fences) matching:
+        {"regions":[{"bbox_2d":[x1,y1,x2,y2],"original":"...","translation":"..."}]}
+        - If there is no non-$targetLanguage text on screen, return {"regions":[]}.
         """
             .trimIndent()
 
@@ -234,7 +222,8 @@ internal class HttpScreenTranslationClient(
           """
           {
             "model": ${jsonEscape(config.model)},
-            "temperature": 0.1,
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
             "messages": [
               {
                 "role": "user",
@@ -304,13 +293,31 @@ internal class HttpScreenTranslationClient(
             val map = item as? Map<*, *> ?: return@mapNotNull null
             parseRegion(map, sourceWidth, sourceHeight)
           }
+      val unlocatedTranslations =
+          if (regions.isEmpty()) {
+            rawRegions
+                .mapNotNull { item ->
+                  val map = item as? Map<*, *> ?: return@mapNotNull null
+                  ((map["translation"] as? String) ?: (map["text"] as? String))?.trim()?.takeIf {
+                    it.isNotEmpty()
+                  }
+                }
+                .joinToString("\n")
+          } else {
+            ""
+          }
       val summary =
           ((parsed["summary"] as? String)
                   ?: (parsed["translation"] as? String)
                   ?: (parsed["text"] as? String))
               ?.trim()
               .orEmpty()
-      val fallback = if (regions.isEmpty()) summary else ""
+      val fallback =
+          when {
+            regions.isNotEmpty() -> ""
+            summary.isNotEmpty() -> summary
+            else -> unlocatedTranslations
+          }
       return ScreenTranslationResult(regions = regions, fallbackText = fallback)
     }
 
@@ -319,51 +326,91 @@ internal class HttpScreenTranslationClient(
         sourceWidth: Int,
         sourceHeight: Int,
     ): ScreenTranslationOverlay.Region? {
+      val bboxList = (map["bbox_2d"] ?: map["box_2d"] ?: map["bbox"]) as? List<*>
+      val extraOriginal =
+          if (bboxList != null && bboxList.size >= 6) (bboxList[4] as? String)?.trim() else null
+      val extraTranslation =
+          when {
+            bboxList != null && bboxList.size >= 6 -> (bboxList[5] as? String)?.trim()
+            bboxList != null && bboxList.size == 5 -> (bboxList[4] as? String)?.trim()
+            else -> null
+          }
+
       val translation =
-          ((map["translation"] as? String) ?: (map["text"] as? String))?.trim().orEmpty()
+          ((map["translation"] as? String) ?: (map["text"] as? String) ?: extraTranslation)
+              ?.trim()
+              .orEmpty()
       if (translation.isEmpty()) {
         return null
       }
-      val original = ((map["original"] as? String) ?: (map["source"] as? String))?.trim().orEmpty()
-
-      val rawX = numberOrNull(map["x"])
-      val rawY = numberOrNull(map["y"])
-      val rawW = numberOrNull(map["width"]) ?: numberOrNull(map["w"])
-      val rawH = numberOrNull(map["height"]) ?: numberOrNull(map["h"])
-
-      if (rawX == null || rawY == null || rawW == null || rawH == null || rawW <= 0.0 || rawH <= 0.0) {
-        return null
-      }
-
-      // Support 0..1 fractional coordinates, 0..1000 normalized coordinates, or native source pixels.
-      val isNormalizedFraction =
-          rawX in 0.0..1.0 && rawY in 0.0..1.0 && rawW in 0.0..1.0 && rawH in 0.0..1.0 &&
-              (rawW < 1.0 || rawH < 1.0)
-      val exceedsSource =
-          rawX + rawW > sourceWidth * 1.15 || rawY + rawH > sourceHeight * 1.15
+      val original =
+          ((map["original"] as? String) ?: (map["source"] as? String) ?: extraOriginal)
+              ?.trim()
+              .orEmpty()
 
       val scaledX: Double
       val scaledY: Double
       val scaledW: Double
       val scaledH: Double
-      when {
-        isNormalizedFraction -> {
-          scaledX = rawX * sourceWidth
-          scaledY = rawY * sourceHeight
-          scaledW = rawW * sourceWidth
-          scaledH = rawH * sourceHeight
+
+      if (bboxList != null && bboxList.size >= 4) {
+        val x1 = numberOrNull(bboxList[0])
+        val y1 = numberOrNull(bboxList[1])
+        val x2 = numberOrNull(bboxList[2])
+        val y2 = numberOrNull(bboxList[3])
+        if (x1 == null || y1 == null || x2 == null || y2 == null || x2 <= x1 || y2 <= y1) {
+          return null
         }
-        exceedsSource -> {
-          scaledX = rawX * sourceWidth / 1000.0
-          scaledY = rawY * sourceHeight / 1000.0
-          scaledW = rawW * sourceWidth / 1000.0
-          scaledH = rawH * sourceHeight / 1000.0
+        val isFraction =
+            x1 in 0.0..1.0 && y1 in 0.0..1.0 && x2 in 0.0..1.0 && y2 in 0.0..1.0 &&
+                (x2 < 1.0 || y2 < 1.0)
+        if (isFraction) {
+          scaledX = x1 * sourceWidth
+          scaledY = y1 * sourceHeight
+          scaledW = (x2 - x1) * sourceWidth
+          scaledH = (y2 - y1) * sourceHeight
+        } else {
+          scaledX = x1 * sourceWidth / 1000.0
+          scaledY = y1 * sourceHeight / 1000.0
+          scaledW = (x2 - x1) * sourceWidth / 1000.0
+          scaledH = (y2 - y1) * sourceHeight / 1000.0
         }
-        else -> {
-          scaledX = rawX
-          scaledY = rawY
-          scaledW = rawW
-          scaledH = rawH
+      } else {
+        val rawX = numberOrNull(map["x"])
+        val rawY = numberOrNull(map["y"])
+        val rawW = numberOrNull(map["width"]) ?: numberOrNull(map["w"])
+        val rawH = numberOrNull(map["height"]) ?: numberOrNull(map["h"])
+
+        if (rawX == null || rawY == null || rawW == null || rawH == null || rawW <= 0.0 || rawH <= 0.0) {
+          return null
+        }
+
+        // Support 0..1 fractional coordinates, 0..1000 normalized coordinates, or native source pixels.
+        val isNormalizedFraction =
+            rawX in 0.0..1.0 && rawY in 0.0..1.0 && rawW in 0.0..1.0 && rawH in 0.0..1.0 &&
+                (rawW < 1.0 || rawH < 1.0)
+        val exceedsSource =
+            rawX + rawW > sourceWidth * 1.15 || rawY + rawH > sourceHeight * 1.15
+
+        when {
+          isNormalizedFraction -> {
+            scaledX = rawX * sourceWidth
+            scaledY = rawY * sourceHeight
+            scaledW = rawW * sourceWidth
+            scaledH = rawH * sourceHeight
+          }
+          exceedsSource -> {
+            scaledX = rawX * sourceWidth / 1000.0
+            scaledY = rawY * sourceHeight / 1000.0
+            scaledW = rawW * sourceWidth / 1000.0
+            scaledH = rawH * sourceHeight / 1000.0
+          }
+          else -> {
+            scaledX = rawX
+            scaledY = rawY
+            scaledW = rawW
+            scaledH = rawH
+          }
         }
       }
 

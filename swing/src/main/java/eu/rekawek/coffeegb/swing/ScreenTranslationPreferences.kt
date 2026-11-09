@@ -5,9 +5,10 @@ import java.util.Locale
 import java.util.prefs.Preferences
 
 internal enum class ScreenTranslationProvider(val displayName: String) {
-  AUTO("Auto (Gemini or OpenAI-compatible)"),
+  AUTO("Auto (Gemini, OpenAI, or Local Ollama)"),
   GEMINI("Google Gemini API"),
   OPENAI_COMPATIBLE("OpenAI-Compatible Vision API"),
+  OLLAMA("Ollama (Local — qwen2.5vl:7b)"),
 }
 
 internal enum class ResolvedTranslationProtocol {
@@ -55,8 +56,8 @@ internal data class ScreenTranslationSettings(
     val protocol =
         when (clean.provider) {
           ScreenTranslationProvider.GEMINI -> ResolvedTranslationProtocol.GEMINI
-          ScreenTranslationProvider.OPENAI_COMPATIBLE ->
-              ResolvedTranslationProtocol.OPENAI_COMPATIBLE
+          ScreenTranslationProvider.OPENAI_COMPATIBLE,
+          ScreenTranslationProvider.OLLAMA -> ResolvedTranslationProtocol.OPENAI_COMPATIBLE
           ScreenTranslationProvider.AUTO -> {
             val effectiveUrl = clean.baseUrl.ifEmpty { envBaseUrl.orEmpty() }
             when {
@@ -91,6 +92,7 @@ internal data class ScreenTranslationSettings(
         when {
           clean.baseUrl.isNotEmpty() -> clean.baseUrl
           !envBaseUrl.isNullOrEmpty() -> envBaseUrl
+          clean.provider == ScreenTranslationProvider.OLLAMA -> DEFAULT_OLLAMA_BASE_URL
           protocol == ResolvedTranslationProtocol.GEMINI ->
               env("GEMINI_BASE_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
                   ?: DEFAULT_GEMINI_BASE_URL
@@ -103,6 +105,8 @@ internal data class ScreenTranslationSettings(
         when {
           clean.model.isNotEmpty() -> clean.model
           !envModel.isNullOrEmpty() -> envModel
+          clean.provider == ScreenTranslationProvider.OLLAMA || isLocalEndpoint(resolvedBaseUrl) ->
+              DEFAULT_OLLAMA_MODEL
           protocol == ResolvedTranslationProtocol.GEMINI -> DEFAULT_GEMINI_MODEL
           else -> DEFAULT_OPENAI_MODEL
         }
@@ -125,8 +129,10 @@ internal data class ScreenTranslationSettings(
     const val DEFAULT_TARGET_LANGUAGE = "English"
     const val DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
     const val DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+    const val DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
     const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
     const val DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+    const val DEFAULT_OLLAMA_MODEL = "qwen2.5vl:7b"
     private const val MAX_FIELD_LENGTH = 512
     private const val MAX_MODEL_LENGTH = 128
     private const val MAX_LANGUAGE_LENGTH = 64

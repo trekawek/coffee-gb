@@ -1,24 +1,32 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
 import eu.rekawek.coffeegb.swing.io.DisplayViewport
 import eu.rekawek.coffeegb.swing.io.ScreenTranslationOverlay
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import java.awt.Color
+import java.awt.Font
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.Assume
 import org.junit.Test
 
 class ScreenTranslationTest {
@@ -177,6 +185,19 @@ class ScreenTranslationTest {
     assertEquals(72, openAiResult.regions.single().y())
     assertEquals(144, openAiResult.regions.single().width())
     assertEquals(36, openAiResult.regions.single().height())
+
+    val bbox2dParsed =
+        HttpScreenTranslationClient.parseTranslationPayload(
+            """{"regions":[{"bbox_2d":[10,600,939,880],"original":"はじめまして！","translation":"Nice to meet you!"}]}""",
+            160,
+            144,
+        )
+    assertEquals(1, bbox2dParsed.regions.size)
+    assertEquals("Nice to meet you!", bbox2dParsed.regions.single().text())
+    assertEquals(2, bbox2dParsed.regions.single().x())
+    assertEquals(86, bbox2dParsed.regions.single().y())
+    assertEquals(149, bbox2dParsed.regions.single().width())
+    assertEquals(40, bbox2dParsed.regions.single().height())
   }
 
   @Test
@@ -327,6 +348,99 @@ class ScreenTranslationTest {
     } finally {
       eventBus.close()
     }
+  }
+
+  @Test
+  fun `live local Ollama qwen2_5vl translates Japanese Game Boy screen and renders overlay`() {
+    Assume.assumeTrue(
+        "Local Ollama server is not listening on 127.0.0.1:11434",
+        ScreenTranslationController.isLocalOllamaListening(),
+    )
+
+    val frame = captureJapaneseRomOrSyntheticFrame()
+    val config =
+        checkNotNull(
+            ScreenTranslationSettings(provider = ScreenTranslationProvider.OLLAMA).resolve { null })
+    assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_BASE_URL, config.baseUrl)
+    assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL, config.model)
+
+    val client = HttpScreenTranslationClient(upscaleFactor = 1)
+    val result = client.translate(frame, config)
+    assertFalse(result.isEmpty, "Expected qwen2.5vl:7b to return a translation for Japanese screen")
+
+    val overlay = result.toOverlay(frame)
+    assertFalse(overlay.isEmpty)
+    val combinedText =
+        if (overlay.regions().isNotEmpty()) {
+          overlay.regions().joinToString("\n") { it.text() }
+        } else {
+          overlay.fallbackText()
+        }
+    assertTrue(
+        combinedText.any { it in 'A'..'Z' || it in 'a'..'z' },
+        "Expected English letters in translated text, got: $combinedText",
+    )
+
+    val canvas = BufferedImage(480, 432, BufferedImage.TYPE_INT_ARGB)
+    val g = canvas.createGraphics()
+    val viewport = DisplayViewport.calculate(480, 432, 160, 144, 0, DisplayScaleMode.EXPLICIT_2X)
+    overlay.paint(g, viewport)
+    g.dispose()
+  }
+
+  private fun captureJapaneseRomOrSyntheticFrame(): SwingDisplay.CapturedTranslationFrame {
+    val romFile =
+        File(
+            "/mnt/nas/emu/roms/gb/_Int_release/Japan/P/Pocket Monsters - Aka (Japan) (Rev A) (SGB Enhanced).gb")
+    if (romFile.isFile) {
+      val config = Gameboy.GameboyConfiguration(romFile).setSupportBatterySave(false)
+      val gb = config.build()
+      val eventBus = EventBusImpl(null, null, false)
+      val lastFrame = AtomicReference<IntArray>()
+      eventBus.register(
+          { e ->
+            val px = IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT)
+            e.toRgb(px, false)
+            lastFrame.set(px)
+          },
+          Display.DmgFrameReadyEvent::class.java,
+      )
+      gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null)
+      for (frameIdx in 0..1000) {
+        if (frameIdx == 600 || frameIdx == 850) {
+          eventBus.post(ButtonPressEvent(Button.START))
+        }
+        if (frameIdx == 620 || frameIdx == 870) {
+          eventBus.post(ButtonReleaseEvent(Button.START))
+        }
+        var ticks = 0
+        while (!gb.tick() && ticks++ < 200_000) {
+          // advance one frame
+        }
+      }
+      val rgb = checkNotNull(lastFrame.get()) { "Expected a rendered frame from ${romFile.name}" }
+      return SwingDisplay.CapturedTranslationFrame(
+          Display.DISPLAY_WIDTH,
+          Display.DISPLAY_HEIGHT,
+          rgb,
+          Display.DISPLAY_WIDTH,
+          Display.DISPLAY_HEIGHT,
+          rgb,
+      )
+    }
+
+    val image = BufferedImage(160, 144, BufferedImage.TYPE_INT_RGB)
+    val g = image.createGraphics()
+    g.color = Color(0xE0, 0xF8, 0xD0)
+    g.fillRect(0, 0, 160, 144)
+    g.color = Color(0x08, 0x18, 0x20)
+    g.drawRect(4, 92, 152, 46)
+    g.font = Font(Font.SANS_SERIF, Font.BOLD, 12)
+    g.drawString("はじめまして！", 12, 112)
+    g.drawString("せかいへ ようこそ", 12, 130)
+    g.dispose()
+    val rgb = image.getRGB(0, 0, 160, 144, null, 0, 160)
+    return SwingDisplay.CapturedTranslationFrame(160, 144, rgb, 160, 144, rgb)
   }
 
   private class FakeTranslationDisplaySurface : ScreenTranslationDisplaySurface {
