@@ -84,7 +84,6 @@ class SwingGui private constructor(
     private val initialJoinNetplayHost: String?,
     private val suppressInitialAutosaveResume: Boolean,
     private val startMuted: Boolean,
-    private val portable: Boolean,
     private val properties: EmulatorProperties,
     private val mobileAdapterConfiguration: MobileAdapterConfigurationCoordinator,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
@@ -371,7 +370,6 @@ class SwingGui private constructor(
             owner = mainWindow,
             rootEventBus = eventBus,
             initialJoinEndpoint = initialJoinNetplayHost?.let(::requireNetplayV8Endpoint),
-            localInstanceLauncher = CurrentProcessLocalNetplayInstanceLauncher(portable = portable),
             localRomPath = {
               activeRecentOrigin
                   ?.takeIf { it.kind() == RomOrigin.Kind.DIRECT_FILE }
@@ -1351,7 +1349,6 @@ class SwingGui private constructor(
             initialJoinNetplayHost,
             suppressInitialAutosaveResume,
             startMuted = false,
-            portableSettingsPath = null,
         )
 
     /** Internal launch path for child-only transient policy; keeps [run]'s published ABI intact. */
@@ -1362,7 +1359,6 @@ class SwingGui private constructor(
         initialJoinNetplayHost: String?,
         suppressInitialAutosaveResume: Boolean,
         startMuted: Boolean,
-        portableSettingsPath: java.nio.file.Path?,
     ) {
       val desktopOpenFiles = DesktopOpenFilesBridge()
       prepareDesktopLaunch(
@@ -1372,9 +1368,7 @@ class SwingGui private constructor(
       )
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
-      val properties =
-          if (portableSettingsPath == null) EmulatorProperties(settingsOverrides)
-          else EmulatorProperties(settingsOverrides, portableSettingsPath)
+      val properties = EmulatorProperties(settingsOverrides)
       val themeManager = DesktopThemeManager()
       val initialTheme =
           themeManager.apply(properties.applicationSettings.desktop.appearance.toDesktopAppearance())
@@ -1411,7 +1405,6 @@ class SwingGui private constructor(
                 initialJoinNetplayHost,
                 suppressInitialAutosaveResume,
                 startMuted,
-                portableSettingsPath != null,
                 properties,
                 mobileAdapterConfiguration,
                 mobileAdapterConfigurationUiState,
