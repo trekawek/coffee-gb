@@ -73,8 +73,28 @@ private enum class TranslationSettingsDecision {
 
 internal class ScreenTranslationSettingsPanel(
     initial: ScreenTranslationSettings,
+    private val defaults: ScreenTranslationSettings = ScreenTranslationSettings(),
     env: (String) -> String? = System::getenv,
-) : JPanel(GridBagLayout()) {
+) : JPanel(GridBagLayout()), DesktopThemeRefreshHook {
+  private val providerDrafts = mutableMapOf<ScreenTranslationProvider, Pair<String, String>>()
+  private var activeProvider: ScreenTranslationProvider = initial.provider
+  private var switchingProvider = false
+
+  val descriptionText =
+      javax.swing.JTextArea(
+              "Translate non-English dialogue and menus directly on the game screen using Google Gemini, " +
+                  "an OpenAI-compatible Vision API, or a local/LAN VLM endpoint (such as Ollama).")
+          .apply {
+            isEditable = false
+            isOpaque = false
+            lineWrap = true
+            wrapStyleWord = true
+            rows = 2
+            putClientProperty("html.disable", true)
+            getAccessibleContext().accessibleName = "Screen translation overview"
+            getAccessibleContext().accessibleDescription = text
+          }
+
   val providerCombo =
       JComboBox(ScreenTranslationProvider.entries.toTypedArray()).apply {
         selectedItem = initial.provider
@@ -108,22 +128,18 @@ internal class ScreenTranslationSettingsPanel(
             if (hasEnvKey) {
               "Leave blank to use the API key detected in your environment variables"
             } else {
-              "API key for Gemini or your OpenAI-compatible provider (leave blank for local Ollama)"
+              "API key for Gemini or your OpenAI-compatible provider (not needed for Ollama)"
             }
       }
 
   val baseUrlField =
-      JTextField(initial.baseUrl, 28).apply {
+      JTextField("", 28).apply {
         getAccessibleContext().accessibleName = "Base URL override"
-        toolTipText =
-            "Optional custom endpoint (e.g., https://api.openai.com/v1 or http://localhost:11434/v1)"
       }
 
   val modelField =
-      JTextField(initial.model, 28).apply {
+      JTextField("", 28).apply {
         getAccessibleContext().accessibleName = "Vision model name"
-        toolTipText =
-            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_MODEL} or ${ScreenTranslationSettings.DEFAULT_OPENAI_MODEL})"
       }
 
   val targetLanguageField =
@@ -140,12 +156,51 @@ internal class ScreenTranslationSettingsPanel(
           }
 
   init {
+    border = javax.swing.BorderFactory.createEmptyBorder(8, 8, 8, 8)
     getAccessibleContext().accessibleName = "Screen translation settings"
+    seedProviderDrafts(initial)
+    val initialDraft = providerDrafts[initial.provider] ?: ("" to "")
+    baseUrlField.text = initialDraft.first
+    modelField.text = initialDraft.second
+    updateProviderHints(initial.provider)
+
+    providerCombo.addActionListener {
+      if (switchingProvider) return@addActionListener
+      val nextProvider =
+          (providerCombo.selectedItem as? ScreenTranslationProvider)
+              ?: ScreenTranslationProvider.AUTO
+      if (nextProvider != activeProvider) {
+        providerDrafts[activeProvider] = baseUrlField.text.trim() to modelField.text.trim()
+        activeProvider = nextProvider
+        val nextDraft = providerDrafts[nextProvider] ?: ("" to "")
+        switchingProvider = true
+        try {
+          baseUrlField.text = nextDraft.first
+          modelField.text = nextDraft.second
+        } finally {
+          switchingProvider = false
+        }
+      }
+      updateProviderHints(nextProvider)
+    }
+
     val envNotice =
         listOf("COFFEEGB_TRANSLATE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY")
             .firstOrNull { !env(it)?.trim().isNullOrEmpty() }
 
     var row = 0
+    add(
+        descriptionText,
+        GridBagConstraints().apply {
+          gridx = 0
+          gridy = row++
+          gridwidth = 2
+          weightx = 1.0
+          fill = GridBagConstraints.HORIZONTAL
+          anchor = GridBagConstraints.WEST
+          insets = Insets(0, 4, 12, 4)
+        },
+    )
     addLabeledRow(row++, "Provider:", providerCombo)
     addLabeledRow(row++, "API Key (optional):", apiKeyField)
     if (envNotice != null) {
@@ -160,7 +215,7 @@ internal class ScreenTranslationSettingsPanel(
             gridy = row++
             anchor = GridBagConstraints.WEST
             fill = GridBagConstraints.HORIZONTAL
-            insets = Insets(0, 0, 8, 0)
+            insets = Insets(0, 4, 8, 4)
           },
       )
     }
@@ -183,15 +238,59 @@ internal class ScreenTranslationSettingsPanel(
         pauseCheckBox,
         GridBagConstraints().apply {
           gridx = 0
-          gridy = row
+          gridy = row++
           gridwidth = 2
           weightx = 1.0
           fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.WEST
-          insets = Insets(6, 0, 8, 0)
+          insets = Insets(6, 4, 8, 4)
+        },
+    )
+    add(
+        JPanel().apply { isOpaque = false },
+        GridBagConstraints().apply {
+          gridx = 0
+          gridy = row
+          gridwidth = 2
+          weightx = 1.0
+          weighty = 1.0
+          fill = GridBagConstraints.BOTH
         },
     )
   }
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    descriptionText.background = tokens.surface
+    descriptionText.foreground = tokens.secondaryText
+  }
+
+  fun restoreDefaults() {
+    switchingProvider = true
+    try {
+      providerDrafts.clear()
+      seedProviderDrafts(defaults)
+      activeProvider = defaults.provider
+      providerCombo.selectedItem = defaults.provider
+      apiKeyField.text = defaults.apiKey
+      baseUrlField.text = defaults.baseUrl
+      modelField.text = defaults.model
+      targetLanguageField.text = defaults.targetLanguage
+      pauseCheckBox.isSelected = defaults.pauseWhileTranslating
+      updateProviderHints(defaults.provider)
+    } finally {
+      switchingProvider = false
+    }
+  }
+
+  fun draftFingerprint(): List<Any?> =
+      listOf(
+          providerCombo.selectedItem,
+          String(apiKeyField.password),
+          baseUrlField.text,
+          modelField.text,
+          targetLanguageField.text,
+          pauseCheckBox.isSelected,
+      )
 
   fun toSettings(): ScreenTranslationSettings =
       ScreenTranslationSettings(
@@ -206,6 +305,48 @@ internal class ScreenTranslationSettingsPanel(
           )
           .sanitized()
 
+  private fun seedProviderDrafts(settings: ScreenTranslationSettings) {
+    val isOllamaUrl = ScreenTranslationSettings.isOllamaEndpoint(settings.baseUrl)
+    val isOllamaModel = ScreenTranslationSettings.isOllamaModel(settings.model)
+    if (settings.provider == ScreenTranslationProvider.OLLAMA || isOllamaUrl || isOllamaModel) {
+      providerDrafts[ScreenTranslationProvider.OLLAMA] = settings.baseUrl to settings.model
+    }
+    if (settings.provider != ScreenTranslationProvider.OLLAMA) {
+      val nonOllamaUrl = settings.baseUrl.takeUnless { isOllamaUrl }.orEmpty()
+      val nonOllamaModel = settings.model.takeUnless { isOllamaModel }.orEmpty()
+      providerDrafts[settings.provider] = nonOllamaUrl to nonOllamaModel
+    }
+  }
+
+  private fun updateProviderHints(provider: ScreenTranslationProvider) {
+    when (provider) {
+      ScreenTranslationProvider.GEMINI -> {
+        baseUrlField.toolTipText =
+            "Optional custom endpoint (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_BASE_URL})"
+        modelField.toolTipText =
+            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_MODEL})"
+      }
+      ScreenTranslationProvider.OPENAI_COMPATIBLE -> {
+        baseUrlField.toolTipText =
+            "Optional custom endpoint (defaults to ${ScreenTranslationSettings.DEFAULT_OPENAI_BASE_URL})"
+        modelField.toolTipText =
+            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_OPENAI_MODEL})"
+      }
+      ScreenTranslationProvider.OLLAMA -> {
+        baseUrlField.toolTipText =
+            "Optional Ollama endpoint (defaults to ${ScreenTranslationSettings.DEFAULT_OLLAMA_BASE_URL})"
+        modelField.toolTipText =
+            "Optional Ollama vision model (defaults to ${ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL})"
+      }
+      ScreenTranslationProvider.AUTO -> {
+        baseUrlField.toolTipText =
+            "Optional custom endpoint (e.g., https://api.openai.com/v1 or http://localhost:11434/v1)"
+        modelField.toolTipText =
+            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_MODEL}, ${ScreenTranslationSettings.DEFAULT_OPENAI_MODEL}, or ${ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL})"
+      }
+    }
+  }
+
   private fun addLabeledRow(row: Int, labelText: String, component: java.awt.Component) {
     val label =
         JLabel(labelText).apply {
@@ -218,7 +359,7 @@ internal class ScreenTranslationSettingsPanel(
           gridx = 0
           gridy = row
           anchor = GridBagConstraints.WEST
-          insets = Insets(0, 0, 8, 12)
+          insets = Insets(4, 4, 4, 12)
         },
     )
     add(
@@ -228,7 +369,7 @@ internal class ScreenTranslationSettingsPanel(
           gridy = row
           weightx = 1.0
           fill = GridBagConstraints.HORIZONTAL
-          insets = Insets(0, 0, 8, 0)
+          insets = Insets(4, 4, 4, 4)
         },
     )
   }
@@ -248,6 +389,7 @@ internal class ScreenTranslationController(
     private val onWarningMessage: (String) -> Unit = {},
     private val env: (String) -> String? = System::getenv,
     private val isLocalOllamaAvailable: () -> Boolean = ::isLocalOllamaListening,
+    private val openTranslationPreferences: (() -> Unit)? = null,
     private val promptForSettingsWhenUnconfigured: (ScreenTranslationSettings) -> ScreenTranslationSettings? =
         { current -> showSettingsModal(owner, dialogFactory, current, env) },
     private val executor: ExecutorService = defaultTranslationExecutor(),
@@ -311,9 +453,14 @@ internal class ScreenTranslationController(
       resolved = settings.copy(provider = ScreenTranslationProvider.OLLAMA).resolve(env)
     }
     if (resolved == null) {
-      val updated = promptForSettingsWhenUnconfigured(settings) ?: return
-      store.save(updated)
-      settings = updated
+      if (openTranslationPreferences != null) {
+        openTranslationPreferences.invoke()
+        settings = store.load()
+      } else {
+        val updated = promptForSettingsWhenUnconfigured(settings) ?: return
+        store.save(updated)
+        settings = updated
+      }
       resolved = settings.resolve(env)
       if (resolved == null &&
           settings.provider == ScreenTranslationProvider.AUTO &&
@@ -322,7 +469,7 @@ internal class ScreenTranslationController(
       }
       if (resolved == null) {
         onWarningMessage(
-            "Screen translation requires a Gemini/OpenAI API key or a localhost endpoint.")
+            "Screen translation requires a Gemini/OpenAI API key or an Ollama/custom endpoint.")
         display.showTransientNotification("API key required for translation")
         return
       }
@@ -336,7 +483,7 @@ internal class ScreenTranslationController(
 
     val generation = requestGeneration.incrementAndGet()
     display.setTranslating(true)
-    onStatusMessage("Translating screen…")
+    onStatusMessage("Translating screen with ${activeConfig.model}…")
 
     val future =
         executor.submit {
@@ -379,11 +526,21 @@ internal class ScreenTranslationController(
     }
   }
 
+  fun currentSettings(): ScreenTranslationSettings = store.load()
+
+  fun saveSettings(settings: ScreenTranslationSettings) {
+    store.save(settings)
+  }
+
   fun showSettingsDialog() {
     check(SwingUtilities.isEventDispatchThread()) {
       "Screen translation settings must open on the EDT"
     }
     if (closed) return
+    if (openTranslationPreferences != null) {
+      openTranslationPreferences.invoke()
+      return
+    }
     val current = store.load()
     val updated = showSettingsModal(owner, dialogFactory, current, env) ?: return
     store.save(updated)
@@ -451,7 +608,7 @@ internal class ScreenTranslationController(
         env: (String) -> String?,
     ): ScreenTranslationSettings? {
       val parentWindow = owner ?: return null
-      val formPanel = ScreenTranslationSettingsPanel(current, env)
+      val formPanel = ScreenTranslationSettingsPanel(current, env = env)
       val decision =
           dialogFactory.showForm(
               owner = parentWindow,

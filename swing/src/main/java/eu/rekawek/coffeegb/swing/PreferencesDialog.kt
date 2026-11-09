@@ -92,6 +92,7 @@ internal data class PreferencesEdit(
     val saves: ApplicationSettings.Saves? = null,
     val advanced: ApplicationSettings.Advanced? = null,
     val forceWindowSize: Boolean = false,
+    val screenTranslation: ScreenTranslationSettings? = null,
 ) {
   init {
     require(
@@ -154,6 +155,7 @@ internal enum class PreferencesCategory(val displayName: String) {
   SAVES_AND_REWIND("Saves & Rewind"),
   SYSTEM("System"),
   PERIPHERALS("Peripherals"),
+  TRANSLATION("Translation"),
 }
 
 /** Presentation supplied by the settings owner without coupling the dialog to its store. */
@@ -261,6 +263,8 @@ internal class PreferencesPanel private constructor(
     initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
     categoryChanged: (PreferencesCategory) -> Unit = {},
     private val draftChanged: (Boolean) -> Unit = {},
+    initialTranslation: ScreenTranslationSettings = ScreenTranslationSettings(),
+    defaultTranslation: ScreenTranslationSettings = ScreenTranslationSettings(),
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
 ) : JPanel(BorderLayout(12, 8)), DesktopThemeRefreshHook {
   constructor(
@@ -275,6 +279,8 @@ internal class PreferencesPanel private constructor(
       initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
       categoryChanged: (PreferencesCategory) -> Unit = {},
       draftChanged: (Boolean) -> Unit = {},
+      initialTranslation: ScreenTranslationSettings = ScreenTranslationSettings(),
+      defaultTranslation: ScreenTranslationSettings = ScreenTranslationSettings(),
   ) : this(
       initial,
       defaults,
@@ -286,6 +292,8 @@ internal class PreferencesPanel private constructor(
       initialCategory,
       categoryChanged,
       draftChanged,
+      initialTranslation,
+      defaultTranslation,
       requireEdt(),
   )
 
@@ -347,7 +355,7 @@ internal class PreferencesPanel private constructor(
       }
   internal val controlsRuntimeGuidance =
       JTextArea(
-              "Autofire uses separate A/B keyboard bindings or gamepad L1/R1. " +
+              "Autofire uses separate A/B keyboard bindings. Gamepad L1/R1 buttons open the on-screen UI. " +
                   "Fixed runtime controls: Backspace rewinds; I/J/K/L tilt supported cartridges. " +
                   "Application shortcuts are listed in Help > Keyboard Shortcuts and withdraw " +
                   "when an unmodified key is assigned to gameplay.")
@@ -370,6 +378,8 @@ internal class PreferencesPanel private constructor(
       AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
   internal val savesEditor =
       SavesPreferencesEditor(initial.saves, defaults.saves, saveDirectoryChooser)
+  internal val translationEditor =
+      ScreenTranslationSettingsPanel(initialTranslation, defaultTranslation)
   internal val validationSummary = JLabel(" ")
   internal val persistenceBanner =
       JLabel(persistence.message.orEmpty()).apply {
@@ -405,6 +415,8 @@ internal class PreferencesPanel private constructor(
                   PreferencesCategory.SYSTEM to categoryPage("System", systemEditor),
                   PreferencesCategory.PERIPHERALS to
                       categoryPage("Peripherals", peripheralsEditor),
+                  PreferencesCategory.TRANSLATION to
+                      categoryPage("Translation", translationEditor),
               ),
           initialCategory = initialCategory,
           categoryChanged = { category ->
@@ -438,6 +450,7 @@ internal class PreferencesPanel private constructor(
     recentCapacityError.foreground = tokens.danger
     controlsRuntimeGuidance.background = tokens.surface
     controlsRuntimeGuidance.foreground = tokens.secondaryText
+    translationEditor.desktopThemeChanged(tokens)
     persistenceBanner.border =
         BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(tokens.border),
@@ -468,6 +481,7 @@ internal class PreferencesPanel private constructor(
         PreferencesCategory.SAVES_AND_REWIND -> savesEditor.restoreDefaults()
         PreferencesCategory.SYSTEM -> systemEditor.restoreDefaults()
         PreferencesCategory.PERIPHERALS -> peripheralsEditor.restoreDefaults()
+        PreferencesCategory.TRANSLATION -> translationEditor.restoreDefaults()
       }
       clearErrors()
     }
@@ -484,6 +498,7 @@ internal class PreferencesPanel private constructor(
       savesEditor.restoreDefaults()
       systemEditor.restoreDefaults()
       peripheralsEditor.restoreDefaults()
+      translationEditor.restoreDefaults()
       clearErrors()
     }
     publishDirtyState()
@@ -573,6 +588,7 @@ internal class PreferencesPanel private constructor(
         saves = saves,
         advanced = systemEditor.validatedAdvanced(),
         forceWindowSize = displayEditor.windowScaleCommandRequested,
+        screenTranslation = translationEditor.toSettings(),
     )
   }
 
@@ -931,6 +947,7 @@ internal class PreferencesPanel private constructor(
             systemEditor.bootstrapMode.selectedItem,
             systemEditor.executionMode.selectedItem,
             peripheralsEditor.cameraDevice.selectedItem,
+            translationEditor.draftFingerprint(),
         ))
   }
 
@@ -1154,6 +1171,8 @@ internal object PreferencesDialog {
           PreferencesPersistencePresentation.PERSISTENT,
       initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
       initialBounds: Rectangle? = null,
+      initialTranslation: ScreenTranslationSettings = ScreenTranslationSettings(),
+      defaultTranslation: ScreenTranslationSettings = ScreenTranslationSettings(),
       onCategoryChanged: (PreferencesCategory) -> Unit = {},
       onBoundsChanged: (Rectangle) -> Unit = {},
       onClosed: () -> Unit = {},
@@ -1183,6 +1202,8 @@ internal object PreferencesDialog {
             initialCategory = initialCategory,
             categoryChanged = onCategoryChanged,
             draftChanged = { refreshFooter() },
+            initialTranslation = initialTranslation,
+            defaultTranslation = defaultTranslation,
         )
 
     refreshFooter = {

@@ -429,6 +429,7 @@ class SwingGui private constructor(
                 desktopUiCoordinator.warning(message)
               }
             },
+            openTranslationPreferences = { showPreferences(PreferencesCategory.TRANSLATION) },
         )
     jvmShutdown.installParticipant {
       runDesktopJvmShutdownSteps(
@@ -1216,6 +1217,7 @@ class SwingGui private constructor(
             requestedCategory
                 ?: desktopUiStateController.lastPreferencesCategory().toPreferencesCategory(),
         initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.PREFERENCES),
+        initialTranslation = screenTranslationController.currentSettings(),
         onCategoryChanged = { category ->
           desktopUiStateController.rememberPreferencesCategory(category.toDesktopCategory())
         },
@@ -1226,6 +1228,7 @@ class SwingGui private constructor(
           )
         },
     ) { edit ->
+      edit.screenTranslation?.let(screenTranslationController::saveSettings)
       val previous = properties.applicationSettings
       properties.updateApplicationSettings(edit::applyTo)
       val applied = properties.applicationSettings
@@ -1475,6 +1478,7 @@ internal fun DesktopPreferencesCategory.toPreferencesCategory(): PreferencesCate
       DesktopPreferencesCategory.SAVES_AND_REWIND -> PreferencesCategory.SAVES_AND_REWIND
       DesktopPreferencesCategory.SYSTEM -> PreferencesCategory.SYSTEM
       DesktopPreferencesCategory.PERIPHERALS -> PreferencesCategory.PERIPHERALS
+      DesktopPreferencesCategory.TRANSLATION -> PreferencesCategory.TRANSLATION
     }
 
 internal fun PreferencesCategory.toDesktopCategory(): DesktopPreferencesCategory =
@@ -1486,6 +1490,7 @@ internal fun PreferencesCategory.toDesktopCategory(): DesktopPreferencesCategory
       PreferencesCategory.SAVES_AND_REWIND -> DesktopPreferencesCategory.SAVES_AND_REWIND
       PreferencesCategory.SYSTEM -> DesktopPreferencesCategory.SYSTEM
       PreferencesCategory.PERIPHERALS -> DesktopPreferencesCategory.PERIPHERALS
+      PreferencesCategory.TRANSLATION -> DesktopPreferencesCategory.TRANSLATION
     }
 
 /**

@@ -649,6 +649,7 @@ class PreferencesDialogTest {
                 "Saves & Rewind",
                 "System",
                 "Peripherals",
+                "Translation",
             ),
             PreferencesCategory.values().map { it.displayName },
         )
@@ -1021,6 +1022,7 @@ class PreferencesDialogTest {
         assertTrue(panel.controlsRuntimeGuidance.text.contains("Backspace rewinds"))
         assertTrue(panel.controlsRuntimeGuidance.text.contains("I/J/K/L"))
         assertTrue(panel.controlsRuntimeGuidance.text.contains("L1/R1"))
+        assertTrue(panel.controlsRuntimeGuidance.text.contains("on-screen UI"))
         assertEquals(true, panel.controlsRuntimeGuidance.getClientProperty("html.disable"))
         panel.controlsPlayerSelector.selectedIndex = 1
         assertEquals(1, panel.keyboardEditor.selectedPlayer)
