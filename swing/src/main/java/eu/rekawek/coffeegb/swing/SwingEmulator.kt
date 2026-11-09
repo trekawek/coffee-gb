@@ -351,6 +351,9 @@ class SwingEmulator(
 
   fun captureDisplayImage(): StateImage = display.captureStateImage()
 
+  internal fun translationSurface(): ScreenTranslationDisplaySurface =
+      SwingDisplayTranslationSurface(display)
+
   private fun releaseForLifecycleChange() {
     portableMenu?.closeForLifecycle()
     joypad.releaseForLifecycleChange()

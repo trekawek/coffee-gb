@@ -162,6 +162,7 @@ internal class SwingMenu(
     /** Exact recent-game route; null preserves legacy hosts that only expose path opening. */
     private val onOpenRecentRom: ((Path) -> Unit)? = null,
     private val onBessStatus: (String) -> Unit = onDesktopStatus,
+    private val onScreenTranslationSettings: () -> Unit = {},
 ) {
   private var sonarSessionGeneration: Long? = null
   private var turboFileSessionGeneration: Long? = null
@@ -898,8 +899,17 @@ internal class SwingMenu(
     val screenshot = JMenuItem(desktopActions[DesktopCommand.SCREENSHOT])
     screenshot.mnemonic = KeyEvent.VK_T
     screenMenu.insert(screenshot, 1)
-    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 2)
+    val translateScreen = JMenuItem(desktopActions[DesktopCommand.TRANSLATE_SCREEN])
+    translateScreen.mnemonic = KeyEvent.VK_L
+    screenMenu.insert(translateScreen, 2)
+    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 3)
     screenMenu.addSeparator()
+    screenMenu.add(
+        JMenuItem("Screen Translation Settings…").apply {
+          getAccessibleContext().accessibleDescription =
+              "Configure the Vision API provider, model, and API key for screen translation"
+          addActionListener { onScreenTranslationSettings() }
+        })
     screenMenu.add(
         JMenuItem("More Display Settings…").apply {
           getAccessibleContext().accessibleDescription =

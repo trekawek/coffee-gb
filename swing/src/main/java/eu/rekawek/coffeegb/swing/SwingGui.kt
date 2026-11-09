@@ -127,6 +127,8 @@ class SwingGui private constructor(
 
   private lateinit var mobileAdapterWindow: MobileAdapterConfigurationWindowHost
 
+  private lateinit var screenTranslationController: ScreenTranslationController
+
   private lateinit var menu: SwingMenu
 
   private lateinit var desktopActions: DesktopActionRegistry
@@ -178,6 +180,7 @@ class SwingGui private constructor(
           runDesktopEdtStep(inputRecordingWindow::close)
           runDesktopEdtStep(netplayRecordingController::close)
           runDesktopEdtStep(stateUxController::close)
+          runDesktopEdtStep(screenTranslationController::close)
           recentGamePreviewLoader.close()
           console?.stop()
           runDesktopEdtStep(desktopUiStateController::close)
@@ -401,6 +404,32 @@ class SwingGui private constructor(
             onUpdate = ::handleRomOpenUpdate,
             recentMetadataStore = recentGameMetadataStore,
         )
+    screenTranslationController =
+        ScreenTranslationController(
+            owner = mainWindow,
+            eventBus = eventBus,
+            display = emulator.translationSurface(),
+            dialogFactory = desktopDialogFactory,
+            isGamePaused = {
+              ::desktopActions.isInitialized && desktopActions.current().paused
+            },
+            isNetplayActive = emulator::isLinkedControllerActive,
+            setGamePaused = { paused ->
+              eventBus.post(
+                  if (paused) Controller.PauseEmulationEvent()
+                  else Controller.ResumeEmulationEvent())
+            },
+            onStatusMessage = {
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.clearNotice()
+              }
+            },
+            onWarningMessage = { message ->
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.warning(message)
+              }
+            },
+        )
     jvmShutdown.installParticipant {
       runDesktopJvmShutdownSteps(
           romOpen::quiesce,
@@ -425,6 +454,11 @@ class SwingGui private constructor(
           { runDesktopEdtStep(mobileAdapterWindow::close) },
           { runDesktopEdtStep(inputRecordingWindow::close) },
           { runDesktopEdtStep(netplayRecordingController::close) },
+          {
+            if (::screenTranslationController.isInitialized) {
+              runDesktopEdtStep(screenTranslationController::close)
+            }
+          },
           {
             if (::desktopUiStateController.isInitialized) {
               runDesktopEdtStep(desktopUiStateController::close)
@@ -507,6 +541,7 @@ class SwingGui private constructor(
                   properties.applicationSettings.general.romDirectory
                 },
                 openRomPathFromPortableMenu = romOpen::openFromPortableMenu,
+                translateScreen = screenTranslationController::translateOrDismiss,
             ),
             stateCatalogRefresh = stateUxController::refreshPortableCatalog,
         )
@@ -545,6 +580,7 @@ class SwingGui private constructor(
               romOpen.openRecent(path, recentGameMetadataStore.read(path)?.origin)
             },
             onBessStatus = { message -> desktopUiCoordinator.warning(message) },
+            onScreenTranslationSettings = screenTranslationController::showSettingsDialog,
         )
     menu.addMenu()
 
