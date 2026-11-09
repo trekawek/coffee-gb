@@ -201,6 +201,52 @@ class ScreenTranslationTest {
     assertEquals(80, aligned.regions[2].y())
     assertEquals(55, aligned.regions[2].width())
     assertEquals(7, aligned.regions[2].height())
+
+    // Verify 2D band detection separates a right-side vertical menu (7 items) from a noisy 4-color
+    // overworld tilemap on the top-left and a 2-line description box on the bottom-left.
+    val multiColumnRgb = IntArray(160 * 144) { 0xF8F8F8 }
+    val overworldColors = intArrayOf(0x88E050, 0x389028, 0x185010, 0xD8F878)
+    for (y in 0 until 96) {
+      for (x in 0 until 96) {
+        multiColumnRgb[y * 160 + x] = overworldColors[(x * 3 + y * 5) and 3]
+      }
+    }
+    // Framed menu box on the right (x=98..156, y=6..114)
+    for (y in 6..114) {
+      multiColumnRgb[y * 160 + 98] = 0x000000
+      multiColumnRgb[y * 160 + 100] = 0x000000
+      multiColumnRgb[y * 160 + 156] = 0x000000
+    }
+    val rightMenuYs = intArrayOf(16, 31, 46, 60, 75, 90, 104)
+    for (baseY in rightMenuYs) {
+      for (y in baseY..(baseY + 5)) {
+        for (x in 110..142) {
+          if (((x + y) and 1) == 0) {
+            multiColumnRgb[y * 160 + x] = 0x000000
+          }
+        }
+      }
+    }
+    // Two bottom-left description lines (x=8..72 at y=104..109 and x=8..86 at y=119..124)
+    for (y in 104..109) {
+      for (x in 8..72) {
+        if (((x + y) and 1) == 0) {
+          multiColumnRgb[y * 160 + x] = 0x000000
+        }
+      }
+    }
+    for (y in 119..124) {
+      for (x in 8..86) {
+        if (((x + y) and 1) == 0) {
+          multiColumnRgb[y * 160 + x] = 0x000000
+        }
+      }
+    }
+    val detectedMultiCol =
+        HttpScreenTranslationClient.detectCandidateTextBands(multiColumnRgb, 160, 144)
+    assertEquals(9, detectedMultiCol.size)
+    assertEquals(7, detectedMultiCol.count { it.x1 >= 100 })
+    assertEquals(2, detectedMultiCol.count { it.x1 < 30 })
   }
 
   @Test
