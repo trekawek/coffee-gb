@@ -247,6 +247,46 @@ class ScreenTranslationTest {
     assertEquals(9, detectedMultiCol.size)
     assertEquals(7, detectedMultiCol.count { it.x1 >= 100 })
     assertEquals(2, detectedMultiCol.count { it.x1 < 30 })
+
+    // Verify 2x2 graphical menu buttons (including a 4-color highlighted button) are separated
+    // into 4 individual candidate bands while full-bleed top/bottom border strips are ignored.
+    val gridMenuRgb = IntArray(160 * 144) { 0x00A8F8 }
+    // Full-bleed top curtain strip (y=0..6, x=0..159)
+    for (y in 0..6) {
+      for (x in 0..159) {
+        gridMenuRgb[y * 160 + x] = if ((x and 1) == 0) 0x580000 else 0xF8A8A8
+      }
+    }
+    val buttonSpecs =
+        listOf(
+            intArrayOf(14, 68, 35, 62, 0),
+            intArrayOf(86, 142, 35, 64, 1), // 4-color selected button
+            intArrayOf(14, 68, 74, 102, 0),
+            intArrayOf(86, 142, 78, 102, 0),
+        )
+    for (spec in buttonSpecs) {
+      val (bx1, bx2, by1, by2, highlighted) = spec
+      for (y in by1..by2) {
+        for (x in bx1..bx2) {
+          val mod = ((x / 2) * 3 + (y / 3) * 2) % 5
+          gridMenuRgb[y * 160 + x] =
+              if (highlighted == 1) {
+                when (mod) {
+                  0, 1 -> 0xF81818
+                  2 -> 0xF8F800
+                  3 -> 0x000000
+                  else -> 0x00A8F8
+                }
+              } else {
+                if (mod < 2) 0x107800 else 0xB89800
+              }
+        }
+      }
+    }
+    val detectedGrid = HttpScreenTranslationClient.detectCandidateTextBands(gridMenuRgb, 160, 144)
+    assertEquals(4, detectedGrid.size)
+    assertEquals(2, detectedGrid.count { it.x1 < 40 })
+    assertEquals(2, detectedGrid.count { it.x1 > 70 })
   }
 
   @Test
@@ -276,6 +316,44 @@ class ScreenTranslationTest {
       nextScreenRgb[i] = 0xFFFFFF
     }
     assertTrue(overlay.shouldDismissForFrame(160, 144, nextScreenRgb))
+
+    // Palette-flashing text inside a translated region and background animations outside the region
+    // must NOT dismiss the overlay while the glyph edges remain intact, but clearing the text MUST
+    // dismiss it.
+    val glyphScreenRgb = IntArray(160 * 144) { 0x00A8F8 }
+    for (y in 40..64) {
+      for (x in 84..140) {
+        if (((x + y) and 1) == 0) {
+          glyphScreenRgb[y * 160 + x] = 0xF81818
+        }
+      }
+    }
+    val glyphOverlay =
+        ScreenTranslationOverlay(
+            160,
+            144,
+            listOf(ScreenTranslationOverlay.Region(84, 40, 57, 25, "Attack Mode", "アタックモード")),
+            "",
+            160,
+            144,
+            glyphScreenRgb,
+        )
+    val paletteFlashedRgb = glyphScreenRgb.clone()
+    for (y in 40..64) {
+      for (x in 84..140) {
+        if (((x + y) and 1) == 0) {
+          paletteFlashedRgb[y * 160 + x] = 0x107800 // Red -> Green palette flash
+        }
+      }
+    }
+    for (y in 0..30) {
+      for (x in 0..159) {
+        paletteFlashedRgb[y * 160 + x] = 0xFFFFFF // Scrolling clouds outside region
+      }
+    }
+    assertFalse(glyphOverlay.shouldDismissForFrame(160, 144, paletteFlashedRgb))
+    val clearedMenuRgb = IntArray(160 * 144) { 0x00A8F8 }
+    assertTrue(glyphOverlay.shouldDismissForFrame(160, 144, clearedMenuRgb))
 
     // Verify painting changes pixels inside the region bounds.
     val canvas = BufferedImage(320, 288, BufferedImage.TYPE_INT_ARGB)
