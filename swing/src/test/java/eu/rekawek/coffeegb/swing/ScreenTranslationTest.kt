@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
 import eu.rekawek.coffeegb.swing.io.DisplayViewport
 import eu.rekawek.coffeegb.swing.io.ScreenTranslationOverlay
@@ -252,6 +254,18 @@ class ScreenTranslationTest {
 
     try {
       onEdt {
+        val panel =
+            ScreenTranslationSettingsPanel(
+                ScreenTranslationSettings(
+                    provider = ScreenTranslationProvider.GEMINI,
+                    apiKey = "AIzaPanel",
+                    targetLanguage = "English",
+                ),
+                env = { null },
+            )
+        assertEquals("Screen translation settings", panel.accessibleContext.accessibleName)
+        assertEquals("AIzaPanel", panel.toSettings().apiKey)
+
         val controller =
             ScreenTranslationController(
                 owner = null,
@@ -293,6 +307,14 @@ class ScreenTranslationTest {
         assertNull(fakeDisplay.overlay)
         assertFalse(paused)
         assertEquals("Translation cleared", statuses.last())
+
+        // Re-translate and verify pressing any Game Boy button dismisses the overlay and resumes.
+        controller.translateOrDismiss()
+        assertTrue(paused)
+        assertNotNull(fakeDisplay.overlay)
+        eventBus.post(LogicalPlayerButtonPressEvent(0, Button.A))
+        assertNull(fakeDisplay.overlay)
+        assertFalse(paused)
 
         // Re-translate and verify ROM loading lifecycle clears the overlay.
         controller.translateOrDismiss()
