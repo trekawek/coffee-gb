@@ -152,14 +152,14 @@ class ScreenTranslationTest {
             protocol = ResolvedTranslationProtocol.GEMINI,
             apiKey = "AIzaTest",
             baseUrl = "https://generativelanguage.googleapis.com/v1beta",
-            model = "gemini-2.5-flash",
+            model = ScreenTranslationSettings.DEFAULT_GEMINI_MODEL,
             targetLanguage = "English",
             pauseWhileTranslating = false,
         )
     val geminiResult = geminiClient.translate(frame, geminiConfig)
     assertNotNull(capturedRequest)
     assertEquals(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
         capturedRequest!!.uri.toString(),
     )
     assertEquals("AIzaTest", capturedRequest!!.headers["x-goog-api-key"])
