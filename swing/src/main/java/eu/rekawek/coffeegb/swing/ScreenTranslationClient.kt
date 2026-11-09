@@ -124,17 +124,29 @@ internal class HttpScreenTranslationClient(
             width = frame.rotatedWidth(),
             height = frame.rotatedHeight(),
         )
+    val upscaledWidth = frame.rotatedWidth() * upscaleFactor
+    val upscaledHeight = frame.rotatedHeight() * upscaleFactor
+    val upscaledRgb =
+        upscaleNearestNeighbor(
+            frame.rotatedRgb(),
+            frame.rotatedWidth(),
+            frame.rotatedHeight(),
+            upscaleFactor,
+        )
+    if (candidateBands.isNotEmpty()) {
+      annotateCandidateBadges(
+          rgb = upscaledRgb,
+          width = upscaledWidth,
+          height = upscaledHeight,
+          candidateBands = candidateBands,
+          scale = upscaleFactor,
+      )
+    }
     val pngBytes =
         encodeRgbPng(
-            width = frame.rotatedWidth() * upscaleFactor,
-            height = frame.rotatedHeight() * upscaleFactor,
-            rgb =
-                upscaleNearestNeighbor(
-                    frame.rotatedRgb(),
-                    frame.rotatedWidth(),
-                    frame.rotatedHeight(),
-                    upscaleFactor,
-                ),
+            width = upscaledWidth,
+            height = upscaledHeight,
+            rgb = upscaledRgb,
         )
     val base64Png = Base64.getEncoder().encodeToString(pngBytes)
     val prompt =
@@ -182,6 +194,20 @@ internal class HttpScreenTranslationClient(
     private val IDAT = "IDAT".toByteArray(StandardCharsets.US_ASCII)
     private val IEND = "IEND".toByteArray(StandardCharsets.US_ASCII)
 
+    private val DIGIT_BITMAPS: Array<Array<String>> =
+        arrayOf(
+            arrayOf("111", "101", "101", "101", "111"), // 0
+            arrayOf("010", "110", "010", "010", "111"), // 1
+            arrayOf("111", "001", "111", "100", "111"), // 2
+            arrayOf("111", "001", "111", "001", "111"), // 3
+            arrayOf("101", "101", "111", "001", "001"), // 4
+            arrayOf("111", "100", "111", "001", "111"), // 5
+            arrayOf("111", "100", "111", "101", "111"), // 6
+            arrayOf("111", "001", "001", "001", "001"), // 7
+            arrayOf("111", "101", "111", "101", "111"), // 8
+            arrayOf("111", "101", "111", "001", "111"), // 9
+        )
+
     internal fun buildTranslationPrompt(
         sourceWidth: Int,
         sourceHeight: Int,
@@ -191,12 +217,14 @@ internal class HttpScreenTranslationClient(
       val candidateSection =
           if (candidateBands.isNotEmpty()) {
             val formattedBands =
-                candidateBands.joinToString("\n") { band ->
-                  val (bx1, by1, bx2, by2) = band.toNormalizedBbox(sourceWidth, sourceHeight)
-                  "- [$bx1, $by1, $bx2, $by2]"
-                }
+                candidateBands
+                    .mapIndexed { index, band ->
+                      val (bx1, by1, bx2, by2) = band.toNormalizedBbox(sourceWidth, sourceHeight)
+                      "- id=${index + 1}: bbox_2d=[$bx1, $by1, $bx2, $by2]"
+                    }
+                    .joinToString("\n")
             """
-            Detected candidate text bands (in 0..1000 [x1, y1, x2, y2] coordinates from top to bottom):
+            Detected candidate text blocks (marked with red number badges 1..${candidateBands.size} next to their left edge on the image):
             $formattedBands
             """
                 .trimIndent() + "\n"
@@ -204,17 +232,73 @@ internal class HttpScreenTranslationClient(
             ""
           }
       return """
-        Locate every visible non-$targetLanguage text block (title banners, menu options, dialogue boxes) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
+        Locate every visible non-$targetLanguage text block (title banners, menu options, description/dialogue lines) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
         ${candidateSection}Rules:
-        - Put each distinct menu option or title banner in its own region. For dialogue sentences spanning two lines inside a dialogue box, you may either keep each line as its own region or combine the lines' `bbox_2d` into `[min_x1, min_y1, max_x2, max_y2]`.
-        - Use the matching candidate `[x1, y1, x2, y2]` coordinates for each translated text block when candidate bands are listed above, and omit bands that are already in $targetLanguage (such as PUSH START or copyright lines).
-        - Retro Japanese games often write common vocabulary in hiragana/katakana (e.g. たいきょく = Play Match, つめれんじゅ = Puzzle Mode, せん手 = First Move, はじめる = Start, さいしょからはじめる = New Game, せっていをかえる = Options). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
-        - Provide `bbox_2d` as `[x1, y1, x2, y2]` in 0..1000 normalized screen coordinates covering the text block.
+        - Check every numbered candidate text block on the screen, including vertical menus on the left or right AND description/dialogue lines at the bottom. Put each distinct menu option, title banner, or description line in its own region, and do not skip any non-$targetLanguage menu item or line.
+        - Include `"id"` (when candidate blocks are listed above) and its matching `"bbox_2d"` (`[x1, y1, x2, y2]` in 0..1000 normalized screen coordinates) for each translated text block, and omit blocks that are already in $targetLanguage (such as PUSH START or copyright lines like ©1996).
+        - Retro Japanese games often write common vocabulary and names in hiragana/katakana (e.g. ポケモン = Pokémon, リュック = Bag, ポケギア = Pokégear, クリス = Kris, レポート = Save, せってい = Options, とじる = Exit, いっしょにいる = In Party, たいきょく = Play Match, つめれんじゅ = Puzzle Mode, せん手 = First Move, はじめる = Start, さいしょからはじめる = New Game, せっていをかえる = Options). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
         - Return ONLY valid JSON (no markdown fences) matching:
-        {"regions":[{"bbox_2d":[x1,y1,x2,y2],"original":"...","translation":"..."}]}
+        {"regions":[{"id":1,"bbox_2d":[x1,y1,x2,y2],"original":"...","translation":"..."}]}
         - If there is no non-$targetLanguage text on screen, return {"regions":[]}.
         """
           .trimIndent()
+    }
+
+    internal fun annotateCandidateBadges(
+        rgb: IntArray,
+        width: Int,
+        height: Int,
+        candidateBands: List<DetectedTextBand>,
+        scale: Int,
+    ) {
+      if (width <= 0 || height <= 0 || rgb.size < width * height || scale < 1) return
+      for ((idx, band) in candidateBands.withIndex()) {
+        val bx1 = (band.x1 * scale - 2).coerceAtLeast(0)
+        val by1 = (band.y1 * scale).coerceAtLeast(0)
+        val by2 = ((band.y2 + 1) * scale - 1).coerceAtMost(height - 1)
+        val numStr = (idx + 1).toString()
+        val badgeW = numStr.length * 4 + 1
+        val badgeH = 7
+        val tx: Int
+        val ty: Int
+        if (bx1 >= badgeW + 1) {
+          tx = bx1 - badgeW - 1
+          ty = ((by1 + by2 - badgeH) / 2).coerceIn(0, (height - badgeH).coerceAtLeast(0))
+        } else {
+          tx = bx1.coerceIn(0, (width - badgeW).coerceAtLeast(0))
+          ty = (by1 - badgeH - 1).coerceIn(0, (height - badgeH).coerceAtLeast(0))
+        }
+        for (dy in 0 until badgeH) {
+          val py = ty + dy
+          if (py !in 0 until height) continue
+          val rowOffset = py * width
+          for (dx in 0 until badgeW) {
+            val px = tx + dx
+            if (px in 0 until width) {
+              rgb[rowOffset + px] = 0xDC1E1E
+            }
+          }
+        }
+        var cx = tx + 1
+        for (ch in numStr) {
+          val digit = ch - '0'
+          if (digit in 0..9) {
+            val pattern = DIGIT_BITMAPS[digit]
+            for (py in 0 until 5) {
+              val yy = ty + 1 + py
+              if (yy !in 0 until height) continue
+              val rowOffset = yy * width
+              for (px in 0 until 3) {
+                val xx = cx + px
+                if (xx in 0 until width && pattern[py][px] == '1') {
+                  rgb[rowOffset + xx] = 0xFFFFFF
+                }
+              }
+            }
+          }
+          cx += 4
+        }
+      }
     }
 
     internal fun detectCandidateTextBands(
@@ -236,7 +320,8 @@ internal class HttpScreenTranslationClient(
       }
 
       // Suppress continuous vertical box border edges so blank rows inside framed boxes are not
-      // mistaken for text rows.
+      // mistaken for text rows, and record them as horizontal barriers between columns.
+      val verticalBorders = Array(width) { BooleanArray(height) }
       for (x in 1 until width) {
         var y = 0
         while (y < height) {
@@ -256,43 +341,144 @@ internal class HttpScreenTranslationClient(
           if (yEnd - y >= 14) {
             for (yy in y until yEnd) {
               trans[x][yy] = false
+              verticalBorders[x][yy] = true
             }
           }
           y = yEnd
         }
       }
 
-      val bands = mutableListOf<DetectedTextBand>()
+      // Split each scanline into horizontal transition segments separated by >16px blank gaps or
+      // vertical box borders so multi-column UIs (e.g. overworld + right-side menu) stay separate.
+      val rowSegments = Array(height) { mutableListOf<IntArray>() }
       for (y in 0 until height) {
-        var minX = -1
-        var maxX = -1
-        var count = 0
+        var segX1 = -1
+        var segX2 = -1
+        var segCount = 0
         for (x in 1 until width) {
           if (trans[x][y]) {
-            if (minX == -1) minX = x
-            maxX = x
-            count++
+            var crossedBorder = false
+            if (segX2 >= 0) {
+              for (bx in (segX2 + 1) until x) {
+                if (verticalBorders[bx][y]) {
+                  crossedBorder = true
+                  break
+                }
+              }
+            }
+            if (segX1 == -1) {
+              segX1 = x
+              segX2 = x
+              segCount = 1
+            } else if (x - segX2 <= 16 && !crossedBorder) {
+              segX2 = x
+              segCount++
+            } else {
+              if (segCount >= 5 && segX2 - segX1 >= 6) {
+                rowSegments[y].add(intArrayOf(segX1, segX2))
+              }
+              segX1 = x
+              segX2 = x
+              segCount = 1
+            }
           }
         }
-        if (count >= 6 && minX >= 0 && maxX >= minX) {
-          val last = bands.lastOrNull()
-          if (last == null || y - last.y2 > 2) {
-            bands += DetectedTextBand(x1 = minX, y1 = y, x2 = maxX, y2 = y)
-          } else {
-            bands[bands.lastIndex] =
-                DetectedTextBand(
-                    x1 = min(last.x1, minX),
-                    y1 = last.y1,
-                    x2 = max(last.x2, maxX),
-                    y2 = y,
-                )
-          }
+        if (segCount >= 5 && segX1 >= 0 && segX2 - segX1 >= 6) {
+          rowSegments[y].add(intArrayOf(segX1, segX2))
         }
       }
 
-      return bands.filter { band ->
-        band.height in 5..36 && band.width >= (band.height * 1.2).roundToInt()
+      val active = mutableListOf<DetectedTextBand>()
+      val completed = mutableListOf<DetectedTextBand>()
+      for (y in 0 until height) {
+        val stillActive = mutableListOf<DetectedTextBand>()
+        for (b in active) {
+          if (y - b.y2 <= 2) {
+            stillActive.add(b)
+          } else {
+            completed.add(b)
+          }
+        }
+        active.clear()
+        active.addAll(stillActive)
+
+        for (seg in rowSegments[y]) {
+          val sx1 = seg[0]
+          val sx2 = seg[1]
+          var matchIdx = -1
+          for (i in active.indices) {
+            val b = active[i]
+            val horizOverlap = sx1 <= b.x2 + 12 && b.x1 <= sx2 + 12
+            if (!horizOverlap) continue
+            val minEdge = min(sx2, b.x2)
+            val maxEdge = max(sx1, b.x1)
+            var crossedBorder = false
+            if (minEdge < maxEdge) {
+              for (bx in minEdge..maxEdge) {
+                if (verticalBorders[bx][y]) {
+                  crossedBorder = true
+                  break
+                }
+              }
+            }
+            if (!crossedBorder) {
+              matchIdx = i
+              break
+            }
+          }
+          if (matchIdx >= 0) {
+            val prev = active[matchIdx]
+            active[matchIdx] =
+                DetectedTextBand(
+                    x1 = min(prev.x1, sx1),
+                    y1 = prev.y1,
+                    x2 = max(prev.x2, sx2),
+                    y2 = y,
+                )
+          } else {
+            active.add(DetectedTextBand(x1 = sx1, y1 = y, x2 = sx2, y2 = y))
+          }
+        }
       }
+      completed.addAll(active)
+
+      return completed
+          .filter { band -> isTextLikeBand(band, rgb, width) }
+          .sortedWith(compareBy({ it.y1 }, { it.x1 }))
+    }
+
+    private fun isTextLikeBand(
+        band: DetectedTextBand,
+        rgb: IntArray,
+        width: Int,
+    ): Boolean {
+      if (band.height !in 5..36 || band.width < (band.height * 1.2).roundToInt()) {
+        return false
+      }
+      val colorCounts = HashMap<Int, Int>(16)
+      var total = 0
+      for (y in band.y1..band.y2) {
+        val rowOffset = y * width
+        for (x in band.x1..band.x2) {
+          val c = rgb[rowOffset + x] and 0x00FFFFFF
+          colorCounts[c] = (colorCounts[c] ?: 0) + 1
+          total++
+        }
+      }
+      if (total <= 0) return false
+      var max1 = 0
+      var max2 = 0
+      for (count in colorCounts.values) {
+        if (count >= max1) {
+          max2 = max1
+          max1 = count
+        } else if (count > max2) {
+          max2 = count
+        }
+      }
+      // Text boxes and title banners are dominated by background + glyph colors (>= 65% in top 2
+      // colors), whereas multi-color overworld grass/tree/sprite regions spread across 3-4+ colors.
+      return (max1 + max2).toDouble() / total >= 0.65
     }
 
     internal fun buildGeminiRequest(
@@ -434,7 +620,7 @@ internal class HttpScreenTranslationClient(
       val parsedRegions =
           rawRegions.mapNotNull { item ->
             val map = item as? Map<*, *> ?: return@mapNotNull null
-            parseRegion(map, sourceWidth, sourceHeight)
+            parseRegion(map, sourceWidth, sourceHeight, candidateBands)
           }
       val regions =
           alignRegionsToCandidateBands(
@@ -489,7 +675,9 @@ internal class HttpScreenTranslationClient(
         val single = sortedRegions.single()
         val exactSingle =
             candidateBands.firstOrNull { band ->
-              abs(single.y() - band.y1) <= 4 && abs(single.height() - band.height) <= 6
+              abs(single.y() - band.y1) <= 4 &&
+                  abs(single.x() - band.x1) <= 12 &&
+                  abs(single.height() - band.height) <= 6
             }
         if (exactSingle != null) {
           return listOf(snapRegionToBand(single, exactSingle, sourceWidth, sourceHeight))
@@ -506,11 +694,12 @@ internal class HttpScreenTranslationClient(
         }
       }
 
-      // Case 2: Every region already matches a candidate band closely (within 4px).
+      // Case 2: Every region already matches a candidate band closely in 2D (within 4px Y and 12px X).
       val directMatches =
           sortedRegions.map { region ->
             candidateBands.firstOrNull { band ->
               abs(region.y() - band.y1) <= 4 &&
+                  abs(region.x() - band.x1) <= 12 &&
                   abs((region.y() + region.height()) - (band.y2 + 1)) <= 6
             }
           }
@@ -666,43 +855,60 @@ internal class HttpScreenTranslationClient(
     ): List<ScreenTranslationOverlay.Region> {
       if (regions.size < 2) return regions
       val result = regions.toMutableList()
-      var i = 0
-      while (i < result.size) {
-        var j = i + 1
-        while (j < result.size) {
-          val prev = result[j - 1]
-          val curr = result[j]
+      val visited = BooleanArray(result.size)
+      val maxCompactWidth = (sourceWidth * 0.85).roundToInt()
+
+      for (start in result.indices) {
+        if (visited[start]) continue
+        val first = result[start]
+        if (first.height() > 16 || first.width() > maxCompactWidth) {
+          visited[start] = true
+          continue
+        }
+        val group = mutableListOf(start)
+        visited[start] = true
+        for (cand in (start + 1) until result.size) {
+          if (visited[cand]) continue
+          val prev = result[group.last()]
+          val curr = result[cand]
+          if (curr.height() > 16 || curr.width() > maxCompactWidth) continue
           val verticalGap = curr.y() - (prev.y() + prev.height())
           val closeLeftEdge = abs(curr.x() - prev.x()) <= 16
-          val bothCompactRows =
-              prev.height() <= 16 &&
-                  curr.height() <= 16 &&
-                  prev.width() <= (sourceWidth * 0.85).roundToInt() &&
-                  curr.width() <= (sourceWidth * 0.85).roundToInt()
-          if (verticalGap in 0..20 && closeLeftEdge && bothCompactRows) {
-            j++
-          } else {
-            break
+          if (verticalGap in 0..20 && closeLeftEdge) {
+            visited[cand] = true
+            group.add(cand)
           }
         }
-        if (j - i >= 2) {
-          val minX = (i until j).minOf { result[it].x() }
-          val maxRight = (i until j).maxOf { result[it].x() + result[it].width() }
+        if (group.size >= 2) {
+          val minX = group.minOf { result[it].x() }
+          val maxRight = group.maxOf { result[it].x() + result[it].width() }
           val commonWidth = (maxRight - minX).coerceAtLeast(8)
-          for (idx in i until j) {
+          val sortedHeights = group.map { result[it].height() }.sorted()
+          val medianHeight = sortedHeights[sortedHeights.size / 2].coerceAtLeast(7)
+          for (idx in group) {
             val r = result[idx]
+            // Normalize dakuten-inflated single-row heights to the peer stack's median height while
+            // keeping the character baseline (y + height) anchored.
+            val normalizedY: Int
+            val normalizedH: Int
+            if (r.height() > medianHeight && r.height() - medianHeight <= 4) {
+              normalizedY = (r.y() + r.height() - medianHeight).coerceAtLeast(0)
+              normalizedH = medianHeight
+            } else {
+              normalizedY = r.y()
+              normalizedH = r.height()
+            }
             result[idx] =
                 ScreenTranslationOverlay.Region(
                     minX,
-                    r.y(),
+                    normalizedY,
                     commonWidth,
-                    r.height(),
+                    normalizedH,
                     r.text(),
                     r.originalText(),
                 )
           }
         }
-        i = j
       }
       return result
     }
@@ -711,6 +917,7 @@ internal class HttpScreenTranslationClient(
         map: Map<*, *>,
         sourceWidth: Int,
         sourceHeight: Int,
+        candidateBands: List<DetectedTextBand> = emptyList(),
     ): ScreenTranslationOverlay.Region? {
       val bboxList = (map["bbox_2d"] ?: map["box_2d"] ?: map["bbox"]) as? List<*>
       val extraOriginal =
@@ -734,6 +941,14 @@ internal class HttpScreenTranslationClient(
               ?.trim()
               .orEmpty()
 
+      val bandId = numberOrNull(map["id"])?.roundToInt()
+      val idBand =
+          if (bandId != null && bandId in 1..candidateBands.size) {
+            candidateBands[bandId - 1]
+          } else {
+            null
+          }
+
       val scaledX: Double
       val scaledY: Double
       val scaledW: Double
@@ -745,6 +960,14 @@ internal class HttpScreenTranslationClient(
         val x2 = numberOrNull(bboxList[2])
         val y2 = numberOrNull(bboxList[3])
         if (x1 == null || y1 == null || x2 == null || y2 == null || x2 <= x1 || y2 <= y1) {
+          if (idBand != null) {
+            return snapRegionToBand(
+                ScreenTranslationOverlay.Region(0, 0, 8, 7, translation, original),
+                idBand,
+                sourceWidth,
+                sourceHeight,
+            )
+          }
           return null
         }
         val isFraction =
@@ -776,6 +999,14 @@ internal class HttpScreenTranslationClient(
             rawH == null ||
             rawW <= 0.0 ||
             rawH <= 0.0) {
+          if (idBand != null) {
+            return snapRegionToBand(
+                ScreenTranslationOverlay.Region(0, 0, 8, 7, translation, original),
+                idBand,
+                sourceWidth,
+                sourceHeight,
+            )
+          }
           return null
         }
 
@@ -808,6 +1039,20 @@ internal class HttpScreenTranslationClient(
             scaledW = rawY.let { rawW }
             scaledH = rawH
           }
+        }
+      }
+
+      if (idBand != null) {
+        val parsedCenterX = scaledX + scaledW / 2.0
+        val parsedCenterY = scaledY + scaledH / 2.0
+        if (abs(parsedCenterX - idBand.centerX) <= sourceWidth * 0.25 &&
+            abs(parsedCenterY - idBand.centerY) <= sourceHeight * 0.25) {
+          return snapRegionToBand(
+              ScreenTranslationOverlay.Region(0, 0, 8, 7, translation, original),
+              idBand,
+              sourceWidth,
+              sourceHeight,
+          )
         }
       }
 

@@ -195,6 +195,7 @@ public final class ScreenTranslationOverlay {
         int paddingY = Math.max(2, (int) Math.round(1.2 * localScale));
         int minBoxHeight = Math.max(14, (int) Math.round(7.5 * scaleY));
         int verticalGap = Math.max(2, (int) Math.round(scaleY));
+        int horizontalGap = Math.max(4, (int) Math.round(2.5 * scaleX));
 
         List<PreparedRegion> list = new ArrayList<>(sorted.size());
         for (int i = 0; i < sorted.size(); i++) {
@@ -223,7 +224,27 @@ public final class ScreenTranslationOverlay {
                 }
             }
 
-            int boxW = clamp(rawW, 32, maxRight - boxX);
+            int limitRight = maxRight;
+            for (int j = 0; j < sorted.size(); j++) {
+                if (j == i) {
+                    continue;
+                }
+                Region other = sorted.get(j);
+                if (other.x() < region.x() + region.width() - 4) {
+                    continue;
+                }
+                boolean verticalOverlap =
+                        other.y() < region.y() + region.height() + 4
+                                && region.y() < other.y() + other.height() + 4;
+                if (verticalOverlap) {
+                    int otherLeftX =
+                            (int) Math.round(originX + other.x() * scaleX) - horizontalGap;
+                    limitRight = Math.min(limitRight, Math.max(boxX + 32, otherLeftX));
+                }
+            }
+
+            int maxAllowedWidth = Math.max(32, limitRight - minX);
+            int boxW = clamp(rawW, 32, Math.max(32, limitRight - boxX));
             int boxH = clamp(rawH, minBoxHeight, Math.max(minBoxHeight, limitBottom - boxY));
             boolean singleLinePreferred =
                     (region.height() <= 16 || limitBottom < maxBottom)
@@ -239,9 +260,9 @@ public final class ScreenTranslationOverlay {
                     int singleLineHeight = metrics.getHeight() + 2 * paddingY;
                     chosenFont = candidate;
                     wrappedLines = List.of(region.text());
-                    if (singleLineWidth <= maxRight - minX
+                    if (singleLineWidth <= maxAllowedWidth
                             && singleLineHeight <= Math.max(boxH, limitBottom - boxY)) {
-                        boxW = Math.max(boxW, Math.min(maxRight - minX, singleLineWidth));
+                        boxW = Math.max(boxW, Math.min(maxAllowedWidth, singleLineWidth));
                         break;
                     }
                 } else {
@@ -260,11 +281,11 @@ public final class ScreenTranslationOverlay {
             if (singleLinePreferred) {
                 int neededW =
                         Math.min(
-                                maxRight - minX,
+                                maxAllowedWidth,
                                 metrics.stringWidth(region.text()) + 2 * paddingX);
                 boxW = Math.max(boxW, neededW);
-                if (boxX + boxW > maxRight) {
-                    boxX = Math.max(minX, maxRight - boxW);
+                if (boxX + boxW > limitRight) {
+                    boxX = Math.max(minX, limitRight - boxW);
                 }
             } else {
                 wrappedLines = wrapText(region.text(), metrics, Math.max(16, boxW - 2 * paddingX));
@@ -314,6 +335,7 @@ public final class ScreenTranslationOverlay {
                             boxY,
                             boxW,
                             finalHeight,
+                            limitRight,
                             chosenFont,
                             wrappedLines,
                             paddingX,
@@ -322,58 +344,75 @@ public final class ScreenTranslationOverlay {
                             isCenteredBanner));
         }
 
-        // Unify peer menu items in the same vertical stack so their left/right edges and font size
-        // match.
-        int i = 0;
-        while (i < list.size()) {
-            int j = i + 1;
-            while (j < list.size()) {
-                PreparedRegion prev = list.get(j - 1);
-                PreparedRegion curr = list.get(j);
+        // Unify peer menu items in the same vertical column stack so their left/right edges and
+        // font size match, even when another UI column has regions at overlapping Y positions.
+        boolean[] visited = new boolean[list.size()];
+        for (int start = 0; start < list.size(); start++) {
+            if (visited[start]) {
+                continue;
+            }
+            PreparedRegion first = list.get(start);
+            visited[start] = true;
+            if (first.region.height() > 16) {
+                continue;
+            }
+            List<Integer> group = new ArrayList<>();
+            group.add(start);
+            for (int cand = start + 1; cand < list.size(); cand++) {
+                if (visited[cand]) {
+                    continue;
+                }
+                PreparedRegion prev = list.get(group.get(group.size() - 1));
+                PreparedRegion curr = list.get(cand);
                 boolean sameSourceColumn =
                         prev.region.x() == curr.region.x()
                                 && prev.region.width() == curr.region.width()
-                                && prev.region.height() <= 16
                                 && curr.region.height() <= 16;
                 int sourceGap = curr.region.y() - (prev.region.y() + prev.region.height());
                 if (sameSourceColumn && sourceGap >= 0 && sourceGap <= 20) {
-                    j++;
-                } else {
-                    break;
+                    visited[cand] = true;
+                    group.add(cand);
                 }
             }
-            if (j - i >= 2) {
+            if (group.size() >= 2) {
                 int commonFontSize = Integer.MAX_VALUE;
                 int commonWidth = 0;
                 int minPeerX = Integer.MAX_VALUE;
-                for (int k = i; k < j; k++) {
-                    PreparedRegion p = list.get(k);
+                int stackLimitRight = maxRight;
+                for (int idx : group) {
+                    PreparedRegion p = list.get(idx);
                     commonFontSize = Math.min(commonFontSize, p.font.getSize());
-                    commonWidth = Math.max(commonWidth, p.boxW);
                     minPeerX = Math.min(minPeerX, p.boxX);
+                    stackLimitRight = Math.min(stackLimitRight, p.limitRight);
                 }
+                int maxStackAllowedW = Math.max(32, stackLimitRight - minX);
                 Font commonFont = new Font(Font.SANS_SERIF, Font.BOLD, commonFontSize);
                 FontMetrics commonMetrics = g.getFontMetrics(commonFont);
-                for (int k = i; k < j; k++) {
-                    PreparedRegion p = list.get(k);
+                for (int idx : group) {
+                    PreparedRegion p = list.get(idx);
                     int neededW =
                             commonMetrics.stringWidth(p.region.text()) + 2 * p.paddingX;
-                    commonWidth = Math.max(commonWidth, Math.min(maxRight - minX, neededW));
+                    commonWidth =
+                            Math.max(
+                                    commonWidth,
+                                    Math.min(maxStackAllowedW, Math.max(p.boxW, neededW)));
                 }
+                commonWidth = Math.min(commonWidth, maxStackAllowedW);
                 int unifiedX = minPeerX;
-                if (unifiedX + commonWidth > maxRight) {
-                    unifiedX = Math.max(minX, maxRight - commonWidth);
+                if (unifiedX + commonWidth > stackLimitRight) {
+                    unifiedX = Math.max(minX, stackLimitRight - commonWidth);
                 }
-                for (int k = i; k < j; k++) {
-                    PreparedRegion p = list.get(k);
+                for (int idx : group) {
+                    PreparedRegion p = list.get(idx);
                     list.set(
-                            k,
+                            idx,
                             new PreparedRegion(
                                     p.region,
                                     unifiedX,
                                     p.boxY,
                                     commonWidth,
                                     p.boxH,
+                                    stackLimitRight,
                                     commonFont,
                                     List.of(p.region.text()),
                                     p.paddingX,
@@ -382,7 +421,6 @@ public final class ScreenTranslationOverlay {
                                     false));
                 }
             }
-            i = j;
         }
 
         return list;
@@ -426,6 +464,7 @@ public final class ScreenTranslationOverlay {
             int boxY,
             int boxW,
             int boxH,
+            int limitRight,
             Font font,
             List<String> lines,
             int paddingX,
