@@ -12,6 +12,8 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.Window
 import java.awt.event.KeyEvent
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -241,6 +243,7 @@ internal class ScreenTranslationController(
     private val onStatusMessage: (String) -> Unit = {},
     private val onWarningMessage: (String) -> Unit = {},
     private val env: (String) -> String? = System::getenv,
+    private val isLocalOllamaAvailable: () -> Boolean = ::isLocalOllamaListening,
     private val promptForSettingsWhenUnconfigured: (ScreenTranslationSettings) -> ScreenTranslationSettings? =
         { current -> showSettingsModal(owner, dialogFactory, current, env) },
     private val executor: ExecutorService = defaultTranslationExecutor(),
@@ -298,11 +301,21 @@ internal class ScreenTranslationController(
 
     var settings = store.load()
     var resolved = settings.resolve(env)
+    if (resolved == null &&
+        settings.provider == ScreenTranslationProvider.AUTO &&
+        isLocalOllamaAvailable()) {
+      resolved = settings.copy(provider = ScreenTranslationProvider.OLLAMA).resolve(env)
+    }
     if (resolved == null) {
       val updated = promptForSettingsWhenUnconfigured(settings) ?: return
       store.save(updated)
       settings = updated
       resolved = settings.resolve(env)
+      if (resolved == null &&
+          settings.provider == ScreenTranslationProvider.AUTO &&
+          isLocalOllamaAvailable()) {
+        resolved = settings.copy(provider = ScreenTranslationProvider.OLLAMA).resolve(env)
+      }
       if (resolved == null) {
         onWarningMessage(
             "Screen translation requires a Gemini/OpenAI API key or a localhost endpoint.")
@@ -417,6 +430,15 @@ internal class ScreenTranslationController(
         Executors.newSingleThreadExecutor { runnable ->
           Thread(runnable, "coffee-gb-screen-translation").apply { isDaemon = true }
         }
+
+    internal fun isLocalOllamaListening(): Boolean =
+        runCatching {
+              Socket().use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", 11434), 100)
+                true
+              }
+            }
+            .getOrDefault(false)
 
     internal fun showSettingsModal(
         owner: Window?,
