@@ -348,8 +348,9 @@ internal class HttpScreenTranslationClient(
         }
       }
 
-      // Split each scanline into horizontal transition segments separated by >16px blank gaps or
-      // vertical box borders so multi-column UIs (e.g. overworld + right-side menu) stay separate.
+      // Split each scanline into horizontal transition segments separated by >14px blank gaps or
+      // vertical box borders so multi-column UIs (e.g. overworld + right-side menu, or 2x2 menus)
+      // stay separate.
       val rowSegments = Array(height) { mutableListOf<IntArray>() }
       for (y in 0 until height) {
         var segX1 = -1
@@ -370,11 +371,12 @@ internal class HttpScreenTranslationClient(
               segX1 = x
               segX2 = x
               segCount = 1
-            } else if (x - segX2 <= 16 && !crossedBorder) {
+            } else if (x - segX2 <= 14 && !crossedBorder) {
               segX2 = x
               segCount++
             } else {
-              if (segCount >= 5 && segX2 - segX1 >= 6) {
+              if ((segCount >= 5 && segX2 - segX1 >= 6) ||
+                  (segCount >= 4 && segX2 - segX1 >= 10)) {
                 rowSegments[y].add(intArrayOf(segX1, segX2))
               }
               segX1 = x
@@ -383,7 +385,8 @@ internal class HttpScreenTranslationClient(
             }
           }
         }
-        if (segCount >= 5 && segX1 >= 0 && segX2 - segX1 >= 6) {
+        if (segX1 >= 0 &&
+            ((segCount >= 5 && segX2 - segX1 >= 6) || (segCount >= 4 && segX2 - segX1 >= 10))) {
           rowSegments[y].add(intArrayOf(segX1, segX2))
         }
       }
@@ -408,8 +411,8 @@ internal class HttpScreenTranslationClient(
           var matchIdx = -1
           for (i in active.indices) {
             val b = active[i]
-            val horizOverlap = sx1 <= b.x2 + 12 && b.x1 <= sx2 + 12
-            if (!horizOverlap) continue
+            val overlap = min(sx2, b.x2) - max(sx1, b.x1)
+            if (overlap < -2) continue
             val minEdge = min(sx2, b.x2)
             val maxEdge = max(sx1, b.x1)
             var crossedBorder = false
@@ -443,29 +446,112 @@ internal class HttpScreenTranslationClient(
       completed.addAll(active)
 
       return completed
-          .filter { band -> isTextLikeBand(band, rgb, width) }
-          .sortedWith(compareBy({ it.y1 }, { it.x1 }))
+          .map { band -> trimSparseBandEdges(band, trans, width) }
+          .filter { band -> isTextLikeBand(band, rgb, trans, width) }
+          .sortedWith { a, b ->
+            if (abs(a.y1 - b.y1) <= 6) {
+              a.x1.compareTo(b.x1)
+            } else {
+              a.y1.compareTo(b.y1)
+            }
+          }
+    }
+
+    private fun trimSparseBandEdges(
+        band: DetectedTextBand,
+        trans: Array<BooleanArray>,
+        width: Int,
+    ): DetectedTextBand {
+      if (band.height < 16 || band.width <= 16) return band
+      val colCounts = IntArray(width)
+      for (x in band.x1..band.x2) {
+        var c = 0
+        for (y in band.y1..band.y2) {
+          if (trans[x][y]) c++
+        }
+        colCounts[x] = c
+      }
+      val minWindowCount = if (band.height >= 24) band.height / 4 else 2
+      var nx1 = band.x1
+      var nx2 = band.x2
+      while (nx2 - nx1 > 16) {
+        val windowMax =
+            max(
+                colCounts[nx1],
+                max(colCounts[min(nx2, nx1 + 1)], colCounts[min(nx2, nx1 + 2)]),
+            )
+        if (windowMax <= minWindowCount) nx1++ else break
+      }
+      while (nx2 - nx1 > 16) {
+        val windowMax =
+            max(
+                colCounts[nx2],
+                max(colCounts[max(nx1, nx2 - 1)], colCounts[max(nx1, nx2 - 2)]),
+            )
+        if (windowMax <= minWindowCount) nx2-- else break
+      }
+      return if (nx1 == band.x1 && nx2 == band.x2) band else band.copy(x1 = nx1, x2 = nx2)
     }
 
     private fun isTextLikeBand(
         band: DetectedTextBand,
         rgb: IntArray,
+        trans: Array<BooleanArray>,
         width: Int,
     ): Boolean {
-      if (band.height !in 5..36 || band.width < (band.height * 1.2).roundToInt()) {
+      val minWidth = max(14, (band.height * 1.2).roundToInt())
+      if (band.height !in 5..36 || band.width < minWidth) {
+        return false
+      }
+      // Full-bleed thin horizontal strips spanning from x=0 to x=width-1 are repeating background
+      // tile borders/ground (such as stage curtains or floor tiles), not text lines.
+      if (band.height <= 8 && band.x1 <= 1 && band.x2 >= width - 2) {
         return false
       }
       val colorCounts = HashMap<Int, Int>(16)
       var total = 0
+      var diagLeft = 0
+      var diagRight = 0
+      var diagTotal = 0
+      var repeatY1 = 0
+      var repeatY1Total = 0
+      var repeatY2 = 0
+      var repeatY2Total = 0
       for (y in band.y1..band.y2) {
         val rowOffset = y * width
         for (x in band.x1..band.x2) {
           val c = rgb[rowOffset + x] and 0x00FFFFFF
           colorCounts[c] = (colorCounts[c] ?: 0) + 1
           total++
+          if (y + 1 <= band.y2) {
+            repeatY1Total++
+            if (c == (rgb[(y + 1) * width + x] and 0x00FFFFFF)) repeatY1++
+          }
+          if (y + 2 <= band.y2) {
+            repeatY2Total++
+            if (c == (rgb[(y + 2) * width + x] and 0x00FFFFFF)) repeatY2++
+          }
+          if (y > band.y1 && x > band.x1 && x < band.x2) {
+            diagTotal++
+            val prevRow = (y - 1) * width
+            if (c == (rgb[prevRow + x - 1] and 0x00FFFFFF)) diagLeft++
+            if (c == (rgb[prevRow + x + 1] and 0x00FFFFFF)) diagRight++
+          }
         }
       }
       if (total <= 0) return false
+      if (repeatY2Total >= 24 &&
+          repeatY2.toDouble() / repeatY2Total >= 0.85 &&
+          (band.y1 == 0 || (repeatY1Total >= 24 && repeatY1.toDouble() / repeatY1Total >= 0.40))) {
+        return false
+      }
+      if (diagTotal >= 24) {
+        val maxDiag = max(diagLeft, diagRight).toDouble() / diagTotal
+        val diagAsym = abs(diagLeft - diagRight).toDouble() / diagTotal
+        if (maxDiag >= 0.80 && diagAsym >= 0.20) {
+          return false
+        }
+      }
       var max1 = 0
       var max2 = 0
       for (count in colorCounts.values) {
@@ -476,9 +562,9 @@ internal class HttpScreenTranslationClient(
           max2 = count
         }
       }
-      // Text boxes and title banners are dominated by background + glyph colors (>= 65% in top 2
-      // colors), whereas multi-color overworld grass/tree/sprite regions spread across 3-4+ colors.
-      return (max1 + max2).toDouble() / total >= 0.65
+      // Text boxes, title banners, and outlined graphical menu buttons have >= 55% in their top 2
+      // colors, whereas multi-color overworld grass/tree tilemaps fall well below 55%.
+      return (max1 + max2).toDouble() / total >= 0.55
     }
 
     internal fun buildGeminiRequest(
@@ -861,7 +947,7 @@ internal class HttpScreenTranslationClient(
       for (start in result.indices) {
         if (visited[start]) continue
         val first = result[start]
-        if (first.height() > 16 || first.width() > maxCompactWidth) {
+        if (first.height() > 36 || first.width() > maxCompactWidth) {
           visited[start] = true
           continue
         }
@@ -871,10 +957,18 @@ internal class HttpScreenTranslationClient(
           if (visited[cand]) continue
           val prev = result[group.last()]
           val curr = result[cand]
-          if (curr.height() > 16 || curr.width() > maxCompactWidth) continue
+          if (curr.height() > 36 || curr.width() > maxCompactWidth) continue
+          val bothSingleLine = prev.height() <= 16 && curr.height() <= 16
+          val bothGraphicalButtons =
+              prev.height() in 17..36 &&
+                  curr.height() in 17..36 &&
+                  abs(curr.height() - prev.height()) <= 8 &&
+                  prev.width() <= (sourceWidth * 0.60).roundToInt() &&
+                  curr.width() <= (sourceWidth * 0.60).roundToInt()
+          if (!bothSingleLine && !bothGraphicalButtons) continue
           val verticalGap = curr.y() - (prev.y() + prev.height())
           val closeLeftEdge = abs(curr.x() - prev.x()) <= 16
-          if (verticalGap in 0..20 && closeLeftEdge) {
+          if (verticalGap in 0..24 && closeLeftEdge) {
             visited[cand] = true
             group.add(cand)
           }
@@ -891,7 +985,7 @@ internal class HttpScreenTranslationClient(
             // keeping the character baseline (y + height) anchored.
             val normalizedY: Int
             val normalizedH: Int
-            if (r.height() > medianHeight && r.height() - medianHeight <= 4) {
+            if (r.height() <= 16 && r.height() > medianHeight && r.height() - medianHeight <= 4) {
               normalizedY = (r.y() + r.height() - medianHeight).coerceAtLeast(0)
               normalizedH = medianHeight
             } else {
@@ -940,6 +1034,9 @@ internal class HttpScreenTranslationClient(
           ((map["original"] as? String) ?: (map["source"] as? String) ?: extraOriginal)
               ?.trim()
               .orEmpty()
+      if (original.isNotEmpty() && translation.equals(original, ignoreCase = true)) {
+        return null
+      }
 
       val bandId = numberOrNull(map["id"])?.roundToInt()
       val idBand =

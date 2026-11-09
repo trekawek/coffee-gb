@@ -111,6 +111,36 @@ public final class ScreenTranslationOverlay {
                 || rawRgb.length != capturedRawRgb.length) {
             return true;
         }
+        if (!regions.isEmpty() && rawWidth == sourceWidth && rawHeight == sourceHeight) {
+            int capturedTransCount = 0;
+            int transDiffs = 0;
+            for (Region r : regions) {
+                int rx1 = Math.max(1, r.x());
+                int rx2 = Math.min(rawWidth - 1, r.x() + r.width() - 1);
+                int ry1 = Math.max(0, r.y());
+                int ry2 = Math.min(rawHeight - 1, r.y() + r.height() - 1);
+                for (int y = ry1; y <= ry2; y++) {
+                    int row = y * rawWidth;
+                    for (int x = rx1; x <= rx2; x++) {
+                        boolean wasTrans =
+                                (capturedRawRgb[row + x] & 0x00ffffff)
+                                        != (capturedRawRgb[row + x - 1] & 0x00ffffff);
+                        boolean isTrans =
+                                (rawRgb[row + x] & 0x00ffffff)
+                                        != (rawRgb[row + x - 1] & 0x00ffffff);
+                        if (wasTrans) {
+                            capturedTransCount++;
+                        }
+                        if (wasTrans != isTrans) {
+                            transDiffs++;
+                        }
+                    }
+                }
+            }
+            if (capturedTransCount >= 16) {
+                return transDiffs > Math.floor(capturedTransCount * 0.45);
+            }
+        }
         int maxAllowedDiffs = (int) Math.floor(capturedRawRgb.length * AUTO_DISMISS_DIFF_RATIO);
         int diffs = 0;
         for (int i = 0; i < capturedRawRgb.length; i++) {
@@ -299,7 +329,12 @@ public final class ScreenTranslationOverlay {
                                             (region.x() + region.width() / 2.0)
                                                     - (sourceWidth / 2.0))
                                     <= sourceWidth * 0.15;
+            boolean isGraphicalButton =
+                    !isCenteredBanner
+                            && region.height() >= 20
+                            && wrappedLines.size() <= 2;
             int finalHeight;
+            boolean centerText = false;
             if (isCenteredBanner) {
                 int pillW =
                         clamp(
@@ -319,6 +354,18 @@ public final class ScreenTranslationOverlay {
                 boxY = clamp(boxY + (boxH - pillH) / 2, minY, Math.max(minY, limitBottom - pillH));
                 boxW = pillW;
                 finalHeight = pillH;
+                centerText = true;
+            } else if (isGraphicalButton) {
+                int pillH =
+                        clamp(
+                                wrappedLines.size() * metrics.getHeight()
+                                        + 2 * paddingY
+                                        + (int) Math.round(3 * localScale),
+                                minBoxHeight,
+                                boxH);
+                boxY = clamp(boxY + (boxH - pillH) / 2, minY, Math.max(minY, limitBottom - pillH));
+                finalHeight = pillH;
+                centerText = true;
             } else {
                 int neededHeight = wrappedLines.size() * metrics.getHeight() + 2 * paddingY;
                 finalHeight =
@@ -341,7 +388,7 @@ public final class ScreenTranslationOverlay {
                             paddingX,
                             paddingY,
                             localScale,
-                            isCenteredBanner));
+                            centerText));
         }
 
         // Unify peer menu items in the same vertical column stack so their left/right edges and
@@ -353,7 +400,7 @@ public final class ScreenTranslationOverlay {
             }
             PreparedRegion first = list.get(start);
             visited[start] = true;
-            if (first.region.height() > 16) {
+            if (first.region.height() > 36) {
                 continue;
             }
             List<Integer> group = new ArrayList<>();
@@ -364,12 +411,24 @@ public final class ScreenTranslationOverlay {
                 }
                 PreparedRegion prev = list.get(group.get(group.size() - 1));
                 PreparedRegion curr = list.get(cand);
-                boolean sameSourceColumn =
+                int sourceGap = curr.region.y() - (prev.region.y() + prev.region.height());
+                boolean sameTextMenuColumn =
                         prev.region.x() == curr.region.x()
                                 && prev.region.width() == curr.region.width()
-                                && curr.region.height() <= 16;
-                int sourceGap = curr.region.y() - (prev.region.y() + prev.region.height());
-                if (sameSourceColumn && sourceGap >= 0 && sourceGap <= 20) {
+                                && prev.region.height() <= 16
+                                && curr.region.height() <= 16
+                                && sourceGap >= 0
+                                && sourceGap <= 20;
+                boolean sameGraphicalButtonColumn =
+                        prev.region.x() == curr.region.x()
+                                && prev.region.width() == curr.region.width()
+                                && prev.region.height() >= 17
+                                && prev.region.height() <= 36
+                                && curr.region.height() >= 17
+                                && curr.region.height() <= 36
+                                && sourceGap >= 0
+                                && sourceGap <= 24;
+                if (sameTextMenuColumn || sameGraphicalButtonColumn) {
                     visited[cand] = true;
                     group.add(cand);
                 }
@@ -418,7 +477,7 @@ public final class ScreenTranslationOverlay {
                                     p.paddingX,
                                     p.paddingY,
                                     p.localScale,
-                                    false));
+                                    p.centerText));
                 }
             }
         }
