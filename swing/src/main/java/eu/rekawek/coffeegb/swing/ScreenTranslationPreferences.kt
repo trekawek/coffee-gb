@@ -126,7 +126,7 @@ internal data class ScreenTranslationSettings(
     const val DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
     const val DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
     const val DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
-    const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+    const val DEFAULT_GEMINI_MODEL = "models/gemini-3.8-flash"
     const val DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
     const val DEFAULT_OLLAMA_MODEL = "qwen2.5vl:7b"
     private const val MAX_FIELD_LENGTH = 512
