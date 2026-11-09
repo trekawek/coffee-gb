@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.swing.io.ScreenTranslationOverlay
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import java.awt.GridBagConstraints
@@ -74,7 +76,7 @@ internal class ScreenTranslationSettingsPanel(
   val providerCombo =
       JComboBox(ScreenTranslationProvider.entries.toTypedArray()).apply {
         selectedItem = initial.provider
-        accessibleContext.accessibleName = "Translation provider"
+        getAccessibleContext().accessibleName = "Translation provider"
         renderer =
             object : DefaultListCellRenderer() {
               override fun getListCellRendererComponent(
@@ -96,7 +98,7 @@ internal class ScreenTranslationSettingsPanel(
 
   val apiKeyField =
       JPasswordField(initial.apiKey, 28).apply {
-        accessibleContext.accessibleName = "Vision API key"
+        getAccessibleContext().accessibleName = "Vision API key"
         val hasEnvKey =
             listOf("COFFEEGB_TRANSLATE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY")
                 .any { !env(it)?.trim().isNullOrEmpty() }
@@ -110,31 +112,31 @@ internal class ScreenTranslationSettingsPanel(
 
   val baseUrlField =
       JTextField(initial.baseUrl, 28).apply {
-        accessibleContext.accessibleName = "Base URL override"
+        getAccessibleContext().accessibleName = "Base URL override"
         toolTipText =
             "Optional custom endpoint (e.g., https://api.openai.com/v1 or http://localhost:11434/v1)"
       }
 
   val modelField =
       JTextField(initial.model, 28).apply {
-        accessibleContext.accessibleName = "Vision model name"
+        getAccessibleContext().accessibleName = "Vision model name"
         toolTipText =
             "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_MODEL} or ${ScreenTranslationSettings.DEFAULT_OPENAI_MODEL})"
       }
 
   val targetLanguageField =
       JTextField(initial.targetLanguage, 20).apply {
-        accessibleContext.accessibleName = "Target language"
+        getAccessibleContext().accessibleName = "Target language"
       }
 
   val pauseCheckBox =
       JCheckBox("Pause emulation while translating or viewing overlay", initial.pauseWhileTranslating)
           .apply {
-            accessibleContext.accessibleName = "Pause emulation while translating"
+            getAccessibleContext().accessibleName = "Pause emulation while translating"
           }
 
   init {
-    accessibleContext.accessibleName = "Screen translation settings"
+    getAccessibleContext().accessibleName = "Screen translation settings"
     val envNotice =
         listOf("COFFEEGB_TRANSLATE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY")
             .firstOrNull { !env(it)?.trim().isNullOrEmpty() }
@@ -259,6 +261,12 @@ internal class ScreenTranslationController(
     eventBus.register<ControllerOwnershipChangingEvent> {
       dispatchSwingMutation { resetForLifecycle() }
     }
+    eventBus.register<LogicalPlayerButtonPressEvent> {
+      dispatchSwingMutation { dismissOnButtonPress() }
+    }
+    eventBus.register<ButtonPressEvent> {
+      dispatchSwingMutation { dismissOnButtonPress() }
+    }
   }
 
   fun translateOrDismiss() {
@@ -334,9 +342,9 @@ internal class ScreenTranslationController(
                     val regionCount = overlay.regions().size
                     onStatusMessage(
                         if (regionCount > 0) {
-                          "Translated $regionCount text ${if (regionCount == 1) "region" else "regions"} (press Translate again or advance dialogue to clear)"
+                          "Translated $regionCount text ${if (regionCount == 1) "region" else "regions"} (press any Game Boy button or Translate again to clear)"
                         } else {
-                          "Screen translated (press Translate again or advance dialogue to clear)"
+                          "Screen translated (press any Game Boy button or Translate again to clear)"
                         })
                   }
                 },
@@ -365,6 +373,14 @@ internal class ScreenTranslationController(
     onStatusMessage("Screen translation settings saved")
   }
 
+  private fun dismissOnButtonPress() {
+    if (closed) return
+    if (display.clearTranslationOverlay()) {
+      resumeIfPausedByTranslation()
+      onStatusMessage("Translation cleared")
+    }
+  }
+
   private fun resetForLifecycle() {
     cancelInFlight()
     display.clearTranslationOverlay()
@@ -381,7 +397,7 @@ internal class ScreenTranslationController(
   private fun resumeIfPausedByTranslation() {
     if (pausedByTranslation) {
       pausedByTranslation = false
-      if (isGamePaused() && !isNetplayActive()) {
+      if (!isNetplayActive()) {
         setGamePaused(false)
       }
     }
