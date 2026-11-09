@@ -144,6 +144,7 @@ internal data class DesktopFormSpec<R>(
     val buttons: DesktopDialogButtons<R>,
     val initiallyValid: Boolean = true,
     val modality: DesktopOwnedDialogModality = DesktopOwnedDialogModality.APPLICATION,
+    val resizable: Boolean = true,
 ) {
   init {
     require(title.isNotBlank()) { "A form dialog needs a title" }
@@ -415,16 +416,16 @@ internal class DesktopFormPanel<R>(
         isVisible = false
       }
 
+  private val header =
+      JPanel(java.awt.BorderLayout(0, tokens.spacing.related)).apply {
+        add(headingText, java.awt.BorderLayout.NORTH)
+        add(descriptionText, java.awt.BorderLayout.CENTER)
+      }
   private val body =
-      JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        add(headingText)
-        add(Box.createVerticalStrut(tokens.spacing.related))
-        add(descriptionText)
-        add(Box.createVerticalStrut(tokens.spacing.section))
-        add(formContent)
-        add(Box.createVerticalStrut(tokens.spacing.related))
-        add(validationText)
+      JPanel(java.awt.BorderLayout(0, tokens.spacing.section)).apply {
+        add(header, java.awt.BorderLayout.NORTH)
+        add(formContent, java.awt.BorderLayout.CENTER)
+        add(validationText, java.awt.BorderLayout.SOUTH)
       }
 
   init {
@@ -451,10 +452,12 @@ internal class DesktopFormPanel<R>(
 
   override fun applySurfaceTheme(tokens: DesktopThemeTokens) {
     body.background = tokens.surface
+    header.background = tokens.surface
     formContent.background = tokens.surface
     styleLiteralText(headingText, tokens.surface, tokens.primaryText)
     styleLiteralText(descriptionText, tokens.surface, tokens.secondaryText)
     styleLiteralText(validationText, tokens.surface, tokens.danger)
+    (formContent as? DesktopThemeRefreshHook)?.desktopThemeChanged(tokens)
   }
 }
 
@@ -714,7 +717,7 @@ internal class DesktopDialogFactory(
           title = spec.title,
           accessibleDescription = spec.description,
           modality = spec.modality,
-          resizable = true,
+          resizable = spec.resizable,
           cancelResult = spec.buttons.cancel.result,
       ) { complete -> createFormPanel(spec, content, complete) }
 
@@ -800,6 +803,9 @@ internal class DesktopDialogFactory(
             (dialog.rootPane.defaultButton ?: panel.buttonBar.cancelButton).requestFocusInWindow()
           }
         })
+    dialog.pack()
+    // Re-pack once wrapping JTextAreas have their actual width so multi-line descriptions do not
+    // steal vertical space from the center form content.
     dialog.pack()
     dialog.setLocationRelativeTo(owner)
     constrainDesktopDialog(dialog)

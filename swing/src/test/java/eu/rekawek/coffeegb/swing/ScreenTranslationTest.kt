@@ -81,6 +81,18 @@ class ScreenTranslationTest {
     assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedOllamaLocal.protocol)
     assertEquals("", resolvedOllamaLocal.apiKey)
 
+    val resolvedOllamaLan =
+        ScreenTranslationSettings(
+                provider = ScreenTranslationProvider.OLLAMA,
+                baseUrl = "http://gallifrey:11434/v1",
+            )
+            .resolve { null }
+    assertNotNull(resolvedOllamaLan)
+    assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedOllamaLan.protocol)
+    assertEquals("http://gallifrey:11434/v1", resolvedOllamaLan.baseUrl)
+    assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL, resolvedOllamaLan.model)
+    assertEquals("", resolvedOllamaLan.apiKey)
+
     assertNull(ScreenTranslationSettings().resolve { null })
   }
 
@@ -286,6 +298,36 @@ class ScreenTranslationTest {
             )
         assertEquals("Screen translation settings", panel.accessibleContext.accessibleName)
         assertEquals("AIzaPanel", panel.toSettings().apiKey)
+
+        val dialogFactory =
+            DesktopDialogFactory { DesktopThemeTokens.capture(DesktopAppearance.LIGHT) }
+        val formSurface =
+            dialogFactory.createFormPanel(
+                DesktopFormSpec(
+                    title = "Screen Translation Settings",
+                    heading = "Configure Vision Screen Translation",
+                    description =
+                        "Translate non-English dialogue and menus directly on the game screen using Google Gemini, an OpenAI-compatible Vision API, or a local VLM endpoint (such as Ollama).",
+                    contentAccessibleName = "Screen translation settings form",
+                    buttons =
+                        DesktopDialogButtons(
+                            primary = DesktopDialogAction("Save", true),
+                            cancel = DesktopDialogAction("Cancel", false),
+                            defaultButton = DesktopDialogDefaultButton.PRIMARY,
+                        ),
+                    resizable = false,
+                ),
+                panel,
+            ) {}
+        formSurface.size = formSurface.preferredSize
+        layoutTree(formSurface)
+        formSurface.size = formSurface.preferredSize
+        layoutTree(formSurface)
+        assertEquals(panel.x, formSurface.headingText.x)
+        assertEquals(panel.x, formSurface.descriptionText.x)
+        assertEquals(panel.width, formSurface.headingText.width)
+        assertTrue(panel.pauseCheckBox.height >= panel.pauseCheckBox.preferredSize.height)
+        assertTrue(panel.pauseCheckBox.y + panel.pauseCheckBox.height <= panel.height)
 
         val controller =
             ScreenTranslationController(
@@ -508,5 +550,10 @@ class ScreenTranslationTest {
     var result: Result<T>? = null
     SwingUtilities.invokeAndWait { result = runCatching(action) }
     return checkNotNull(result).getOrThrow()
+  }
+
+  private fun layoutTree(container: java.awt.Container) {
+    container.doLayout()
+    container.components.filterIsInstance<java.awt.Container>().forEach(::layoutTree)
   }
 }

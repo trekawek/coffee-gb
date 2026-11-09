@@ -208,8 +208,13 @@ internal class HttpScreenTranslationClient(
         base64Png: String,
     ): ScreenTranslationHttpRequest {
       val base = config.baseUrl.trimEnd('/')
+      val path = runCatching { URI(base).path }.getOrNull().orEmpty()
       val endpoint =
-          if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
+          when {
+            base.endsWith("/chat/completions") -> base
+            path.isEmpty() || path == "/" -> "$base/v1/chat/completions"
+            else -> "$base/chat/completions"
+          }
       val uri = URI.create(endpoint)
       val headers = buildMap {
         put("Content-Type", "application/json; charset=utf-8")
