@@ -105,13 +105,16 @@ internal data class ScreenTranslationSettings(
         when {
           clean.model.isNotEmpty() -> clean.model
           !envModel.isNullOrEmpty() -> envModel
-          clean.provider == ScreenTranslationProvider.OLLAMA || isLocalEndpoint(resolvedBaseUrl) ->
-              DEFAULT_OLLAMA_MODEL
+          clean.provider == ScreenTranslationProvider.OLLAMA ||
+              !isOfficialCloudEndpoint(resolvedBaseUrl) -> DEFAULT_OLLAMA_MODEL
           protocol == ResolvedTranslationProtocol.GEMINI -> DEFAULT_GEMINI_MODEL
           else -> DEFAULT_OPENAI_MODEL
         }
 
-    if (resolvedKey.isEmpty() && !isLocalEndpoint(resolvedBaseUrl)) {
+    val requiresApiKey =
+        clean.provider != ScreenTranslationProvider.OLLAMA &&
+            isOfficialCloudEndpoint(resolvedBaseUrl)
+    if (requiresApiKey && resolvedKey.isEmpty()) {
       return null
     }
 
@@ -141,6 +144,12 @@ internal data class ScreenTranslationSettings(
       val host =
           runCatching { URI(baseUrl).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return false
       return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
+    internal fun isOfficialCloudEndpoint(baseUrl: String): Boolean {
+      val host =
+          runCatching { URI(baseUrl).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return false
+      return host == "generativelanguage.googleapis.com" || host == "api.openai.com"
     }
   }
 }

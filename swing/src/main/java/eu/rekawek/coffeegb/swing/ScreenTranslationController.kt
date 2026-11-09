@@ -134,7 +134,9 @@ internal class ScreenTranslationSettingsPanel(
   val pauseCheckBox =
       JCheckBox("Pause emulation while translating or viewing overlay", initial.pauseWhileTranslating)
           .apply {
+            isOpaque = false
             getAccessibleContext().accessibleName = "Pause emulation while translating"
+            minimumSize = preferredSize
           }
 
   init {
@@ -145,7 +147,7 @@ internal class ScreenTranslationSettingsPanel(
 
     var row = 0
     addLabeledRow(row++, "Provider:", providerCombo)
-    addLabeledRow(row++, "API Key:", apiKeyField)
+    addLabeledRow(row++, "API Key (optional):", apiKeyField)
     if (envNotice != null) {
       val hint =
           JLabel("Environment key detected ($envNotice). Leave API Key blank to use it.").apply {
@@ -183,8 +185,10 @@ internal class ScreenTranslationSettingsPanel(
           gridx = 0
           gridy = row
           gridwidth = 2
+          weightx = 1.0
+          fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.WEST
-          insets = Insets(6, 0, 0, 0)
+          insets = Insets(6, 0, 8, 0)
         },
     )
   }
@@ -474,6 +478,7 @@ internal class ScreenTranslationController(
                                   ),
                               defaultButton = DesktopDialogDefaultButton.PRIMARY,
                           ),
+                      resizable = false,
                   ),
               content = formPanel,
           )
