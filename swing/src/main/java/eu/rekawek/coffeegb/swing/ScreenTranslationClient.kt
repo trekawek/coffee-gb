@@ -1,5 +1,11 @@
 package eu.rekawek.coffeegb.swing
 
+import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import eu.rekawek.coffeegb.swing.io.ScreenTranslationOverlay
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import java.io.ByteArrayOutputStream
@@ -234,6 +240,7 @@ internal class HttpScreenTranslationClient(
 
   companion object {
     const val DEFAULT_UPSCALE_FACTOR = 2
+    private val GSON: Gson = GsonBuilder().disableHtmlEscaping().create()
     internal val GEMINI_FALLBACK_MODELS =
         listOf(
             "models/gemini-3.5-flash-lite",
@@ -751,30 +758,45 @@ internal class HttpScreenTranslationClient(
           put("x-goog-api-key", config.apiKey)
         }
       }
-      val body =
-          """
-          {
-            "contents": [
-              {
-                "parts": [
-                  {"text": ${jsonEscape(prompt)}},
-                  {
-                    "inline_data": {
-                      "mime_type": "image/png",
-                      "data": ${jsonEscape(base64Png)}
-                    }
-                  }
-                ]
-              }
-            ],
-            "generationConfig": {
-              "responseMimeType": "application/json",
-              "temperature": 0.1
-            }
+      val payload =
+          JsonObject().apply {
+            add(
+                "contents",
+                JsonArray().apply {
+                  add(
+                      JsonObject().apply {
+                        add(
+                            "parts",
+                            JsonArray().apply {
+                              add(JsonObject().apply { addProperty("text", prompt) })
+                              add(
+                                  JsonObject().apply {
+                                    add(
+                                        "inline_data",
+                                        JsonObject().apply {
+                                          addProperty("mime_type", "image/png")
+                                          addProperty("data", base64Png)
+                                        },
+                                    )
+                                  })
+                            },
+                        )
+                      })
+                },
+            )
+            add(
+                "generationConfig",
+                JsonObject().apply {
+                  addProperty("responseMimeType", "application/json")
+                  addProperty("temperature", 0.1)
+                },
+            )
           }
-          """
-              .trimIndent()
-      return ScreenTranslationHttpRequest(uri = uri, headers = headers, body = body)
+      return ScreenTranslationHttpRequest(
+          uri = uri,
+          headers = headers,
+          body = GSON.toJson(payload),
+      )
     }
 
     internal fun buildOpenAiRequest(
@@ -798,63 +820,83 @@ internal class HttpScreenTranslationClient(
         }
       }
       val dataUri = "data:image/png;base64,$base64Png"
-      val body =
-          """
-          {
-            "model": ${jsonEscape(config.model)},
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-              {
-                "role": "user",
-                "content": [
-                  {"type": "text", "text": ${jsonEscape(prompt)}},
-                  {"type": "image_url", "image_url": {"url": ${jsonEscape(dataUri)}}}
-                ]
-              }
-            ]
+      val payload =
+          JsonObject().apply {
+            addProperty("model", config.model)
+            addProperty("temperature", 0.0)
+            add("response_format", JsonObject().apply { addProperty("type", "json_object") })
+            add(
+                "messages",
+                JsonArray().apply {
+                  add(
+                      JsonObject().apply {
+                        addProperty("role", "user")
+                        add(
+                            "content",
+                            JsonArray().apply {
+                              add(
+                                  JsonObject().apply {
+                                    addProperty("type", "text")
+                                    addProperty("text", prompt)
+                                  })
+                              add(
+                                  JsonObject().apply {
+                                    addProperty("type", "image_url")
+                                    add(
+                                        "image_url",
+                                        JsonObject().apply { addProperty("url", dataUri) },
+                                    )
+                                  })
+                            },
+                        )
+                      })
+                },
+            )
           }
-          """
-              .trimIndent()
-      return ScreenTranslationHttpRequest(uri = uri, headers = headers, body = body)
+      return ScreenTranslationHttpRequest(
+          uri = uri,
+          headers = headers,
+          body = GSON.toJson(payload),
+      )
     }
 
     internal fun extractGeminiContentText(responseBody: String): String {
       val root =
-          MiniJson.parse(responseBody) as? Map<*, *>
+          parseJsonObjectOrNull(responseBody)
               ?: throw IOException("Invalid JSON response from Gemini")
       val candidates =
-          root["candidates"] as? List<*>
+          root.getAsJsonArrayOrNull("candidates")
               ?: throw IOException("Gemini response did not contain candidates")
-      val firstCandidate = candidates.firstOrNull() as? Map<*, *> ?: return ""
-      val content = firstCandidate["content"] as? Map<*, *> ?: return ""
-      val parts = content["parts"] as? List<*> ?: return ""
+      val firstCandidate = candidates.firstOrNull()?.asJsonObjectOrNull() ?: return ""
+      val content = firstCandidate.getAsJsonObjectOrNull("content") ?: return ""
+      val parts = content.getAsJsonArrayOrNull("parts") ?: return ""
       val nonThoughtTexts =
           parts.mapNotNull { part ->
-            val map = part as? Map<*, *> ?: return@mapNotNull null
-            if (map["thought"] == true) null else map["text"] as? String
+            val obj = part.asJsonObjectOrNull() ?: return@mapNotNull null
+            if (obj.getBooleanOrNull("thought") == true) null else obj.getStringOrNull("text")
           }
       val texts =
           nonThoughtTexts.ifEmpty {
-            parts.mapNotNull { (it as? Map<*, *>)?.get("text") as? String }
+            parts.mapNotNull { it.asJsonObjectOrNull()?.getStringOrNull("text") }
           }
       return texts.joinToString("\n").trim()
     }
 
     internal fun extractOpenAiContentText(responseBody: String): String {
       val root =
-          MiniJson.parse(responseBody) as? Map<*, *>
+          parseJsonObjectOrNull(responseBody)
               ?: throw IOException("Invalid JSON response from translation endpoint")
       val choices =
-          root["choices"] as? List<*>
+          root.getAsJsonArrayOrNull("choices")
               ?: throw IOException("Translation response did not contain choices")
-      val firstChoice = choices.firstOrNull() as? Map<*, *> ?: return ""
-      val message = firstChoice["message"] as? Map<*, *> ?: return ""
-      return when (val content = message["content"]) {
-        is String -> content.trim()
-        is List<*> ->
-            content
-                .mapNotNull { (it as? Map<*, *>)?.get("text") as? String }
+      val firstChoice = choices.firstOrNull()?.asJsonObjectOrNull() ?: return ""
+      val message = firstChoice.getAsJsonObjectOrNull("message") ?: return ""
+      val content = message.get("content") ?: return ""
+      return when {
+        content.isJsonPrimitive && content.asJsonPrimitive.isString -> content.asString.trim()
+        content.isJsonArray ->
+            content.asJsonArray
+                .mapNotNull { it.asJsonObjectOrNull()?.getStringOrNull("text") }
                 .joinToString("\n")
                 .trim()
         else -> ""
@@ -872,23 +914,20 @@ internal class HttpScreenTranslationClient(
         return ScreenTranslationResult(emptyList(), "")
       }
 
-      val parsed = runCatching { MiniJson.parse(cleaned) }.getOrNull()
-      if (parsed !is Map<*, *>) {
-        return ScreenTranslationResult(emptyList(), cleaned)
-      }
-
-      val rawRegions = parsed["regions"] as? List<*> ?: emptyList<Any?>()
+      val parsed = parseJsonObjectOrNull(cleaned) ?: return ScreenTranslationResult(emptyList(), cleaned)
+      val rawRegions = parsed.getAsJsonArrayOrNull("regions")
+      val regionObjects =
+          rawRegions?.mapNotNull { it.asJsonObjectOrNull() }.orEmpty()
       val uniqueBandIds =
-          rawRegions
-              .mapNotNull { (it as? Map<*, *>)?.get("id")?.let(::numberOrNull)?.roundToInt() }
+          regionObjects
+              .mapNotNull { numberOrNull(it.get("id"))?.roundToInt() }
               .groupingBy { it }
               .eachCount()
               .filterValues { it == 1 }
               .keys
       val parsedRegions =
-          rawRegions.mapNotNull { item ->
-            val map = item as? Map<*, *> ?: return@mapNotNull null
-            parseRegion(map, sourceWidth, sourceHeight, candidateBands, uniqueBandIds)
+          regionObjects.mapNotNull { obj ->
+            parseRegion(obj, sourceWidth, sourceHeight, candidateBands, uniqueBandIds)
           }
       val regions =
           alignRegionsToCandidateBands(
@@ -899,21 +938,20 @@ internal class HttpScreenTranslationClient(
           )
       val unlocatedTranslations =
           if (regions.isEmpty()) {
-            rawRegions
-                .mapNotNull { item ->
-                  val map = item as? Map<*, *> ?: return@mapNotNull null
-                  ((map["translation"] as? String) ?: (map["text"] as? String))?.trim()?.takeIf {
-                    it.isNotEmpty()
-                  }
+            regionObjects
+                .mapNotNull { obj ->
+                  (obj.getStringOrNull("translation") ?: obj.getStringOrNull("text"))
+                      ?.trim()
+                      ?.takeIf { it.isNotEmpty() }
                 }
                 .joinToString("\n")
           } else {
             ""
           }
       val summary =
-          ((parsed["summary"] as? String)
-                  ?: (parsed["translation"] as? String)
-                  ?: (parsed["text"] as? String))
+          (parsed.getStringOrNull("summary")
+                  ?: parsed.getStringOrNull("translation")
+                  ?: parsed.getStringOrNull("text"))
               ?.trim()
               .orEmpty()
       val fallback =
@@ -1236,39 +1274,47 @@ internal class HttpScreenTranslationClient(
     }
 
     private fun parseRegion(
-        map: Map<*, *>,
+        obj: JsonObject,
         sourceWidth: Int,
         sourceHeight: Int,
         candidateBands: List<DetectedTextBand> = emptyList(),
         uniqueBandIds: Set<Int> = emptySet(),
     ): ScreenTranslationOverlay.Region? {
-      val rawBboxList = (map["bbox_2d"] ?: map["box_2d"] ?: map["bbox"]) as? List<*>
-      val bboxList = (rawBboxList?.firstOrNull() as? List<*>) ?: rawBboxList
+      val rawBboxList =
+          obj.getAsJsonArrayOrNull("bbox_2d")
+              ?: obj.getAsJsonArrayOrNull("box_2d")
+              ?: obj.getAsJsonArrayOrNull("bbox")
+      val bboxList = rawBboxList?.firstOrNull()?.asJsonArrayOrNull() ?: rawBboxList
       val extraOriginal =
-          if (bboxList != null && bboxList.size >= 6) (bboxList[4] as? String)?.trim() else null
+          if (bboxList != null && bboxList.size() >= 6) bboxList.get(4).asStringOrNull()?.trim()
+          else null
       val extraTranslation =
           when {
-            bboxList != null && bboxList.size >= 6 -> (bboxList[5] as? String)?.trim()
-            bboxList != null && bboxList.size == 5 -> (bboxList[4] as? String)?.trim()
+            bboxList != null && bboxList.size() >= 6 -> bboxList.get(5).asStringOrNull()?.trim()
+            bboxList != null && bboxList.size() == 5 -> bboxList.get(4).asStringOrNull()?.trim()
             else -> null
           }
 
       val translation =
-          ((map["translation"] as? String) ?: (map["text"] as? String) ?: extraTranslation)
+          (obj.getStringOrNull("translation")
+                  ?: obj.getStringOrNull("text")
+                  ?: extraTranslation)
               ?.trim()
               .orEmpty()
       if (translation.isEmpty()) {
         return null
       }
       val original =
-          ((map["original"] as? String) ?: (map["source"] as? String) ?: extraOriginal)
+          (obj.getStringOrNull("original")
+                  ?: obj.getStringOrNull("source")
+                  ?: extraOriginal)
               ?.trim()
               .orEmpty()
       if (original.isNotEmpty() && translation.equals(original, ignoreCase = true)) {
         return null
       }
 
-      val bandId = numberOrNull(map["id"])?.roundToInt()
+      val bandId = numberOrNull(obj.get("id"))?.roundToInt()
       val idBand =
           if (bandId != null && bandId in 1..candidateBands.size) {
             candidateBands[bandId - 1]
@@ -1289,11 +1335,11 @@ internal class HttpScreenTranslationClient(
       val scaledW: Double
       val scaledH: Double
 
-      if (bboxList != null && bboxList.size >= 4) {
-        val x1 = numberOrNull(bboxList[0])
-        val y1 = numberOrNull(bboxList[1])
-        val x2 = numberOrNull(bboxList[2])
-        val y2 = numberOrNull(bboxList[3])
+      if (bboxList != null && bboxList.size() >= 4) {
+        val x1 = numberOrNull(bboxList.get(0))
+        val y1 = numberOrNull(bboxList.get(1))
+        val x2 = numberOrNull(bboxList.get(2))
+        val y2 = numberOrNull(bboxList.get(3))
         if (x1 == null || y1 == null || x2 == null || y2 == null || x2 <= x1 || y2 <= y1) {
           if (idBand != null) {
             return snapRegionToBand(
@@ -1323,10 +1369,10 @@ internal class HttpScreenTranslationClient(
           scaledH = (y2 - y1) * sourceHeight / 1000.0
         }
       } else {
-        val rawX = numberOrNull(map["x"])
-        val rawY = numberOrNull(map["y"])
-        val rawW = numberOrNull(map["width"]) ?: numberOrNull(map["w"])
-        val rawH = numberOrNull(map["height"]) ?: numberOrNull(map["h"])
+        val rawX = numberOrNull(obj.get("x"))
+        val rawY = numberOrNull(obj.get("y"))
+        val rawW = numberOrNull(obj.get("width")) ?: numberOrNull(obj.get("w"))
+        val rawH = numberOrNull(obj.get("height")) ?: numberOrNull(obj.get("h"))
 
         if (rawX == null ||
             rawY == null ||
@@ -1399,12 +1445,41 @@ internal class HttpScreenTranslationClient(
       return ScreenTranslationOverlay.Region(x, y, width, height, translation, original)
     }
 
-    private fun numberOrNull(value: Any?): Double? =
-        when (value) {
-          is Number -> value.toDouble().takeIf { it.isFinite() }
-          is String -> value.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
-          else -> null
-        }
+    private fun parseJsonObjectOrNull(json: String): JsonObject? =
+        runCatching { JsonParser.parseString(json) }.getOrNull()?.asJsonObjectOrNull()
+
+    private fun JsonElement?.asJsonObjectOrNull(): JsonObject? =
+        if (this != null && isJsonObject) asJsonObject else null
+
+    private fun JsonElement?.asJsonArrayOrNull(): JsonArray? =
+        if (this != null && isJsonArray) asJsonArray else null
+
+    private fun JsonElement?.asStringOrNull(): String? =
+        if (this != null && isJsonPrimitive && asJsonPrimitive.isString) asString else null
+
+    private fun JsonObject.getAsJsonObjectOrNull(memberName: String): JsonObject? =
+        get(memberName).asJsonObjectOrNull()
+
+    private fun JsonObject.getAsJsonArrayOrNull(memberName: String): JsonArray? =
+        get(memberName).asJsonArrayOrNull()
+
+    private fun JsonObject.getStringOrNull(memberName: String): String? =
+        get(memberName).asStringOrNull()
+
+    private fun JsonObject.getBooleanOrNull(memberName: String): Boolean? {
+      val elem = get(memberName) ?: return null
+      return if (elem.isJsonPrimitive && elem.asJsonPrimitive.isBoolean) elem.asBoolean else null
+    }
+
+    private fun numberOrNull(value: JsonElement?): Double? {
+      if (value == null || !value.isJsonPrimitive) return null
+      val prim = value.asJsonPrimitive
+      return when {
+        prim.isNumber -> runCatching { prim.asDouble }.getOrNull()?.takeIf { it.isFinite() }
+        prim.isString -> prim.asString.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
+        else -> null
+      }
+    }
 
     internal fun stripMarkdownCodeFences(input: String): String {
       val trimmed = input.trim()
@@ -1424,11 +1499,11 @@ internal class HttpScreenTranslationClient(
     }
 
     private fun extractErrorDetail(body: String): String {
-      val root = runCatching { MiniJson.parse(body) as? Map<*, *> }.getOrNull() ?: return ""
-      val error = root["error"]
-      return when (error) {
-        is Map<*, *> -> (error["message"] as? String)?.trim().orEmpty()
-        is String -> error.trim()
+      val root = parseJsonObjectOrNull(body) ?: return ""
+      val error = root.get("error") ?: return ""
+      return when {
+        error.isJsonObject -> error.asJsonObject.getStringOrNull("message")?.trim().orEmpty()
+        error.isJsonPrimitive && error.asJsonPrimitive.isString -> error.asString.trim()
         else -> ""
       }.take(160)
     }
@@ -1524,199 +1599,6 @@ internal class HttpScreenTranslationClient(
       target[offset + 1] = (value ushr 16).toByte()
       target[offset + 2] = (value ushr 8).toByte()
       target[offset + 3] = value.toByte()
-    }
-
-    internal fun jsonEscape(value: String): String {
-      val sb = StringBuilder(value.length + 16)
-      sb.append('"')
-      for (ch in value) {
-        when (ch) {
-          '"' -> sb.append("\\\"")
-          '\\' -> sb.append("\\\\")
-          '\b' -> sb.append("\\b")
-          '\u000C' -> sb.append("\\f")
-          '\n' -> sb.append("\\n")
-          '\r' -> sb.append("\\r")
-          '\t' -> sb.append("\\t")
-          else -> {
-            if (ch.code < 0x20) {
-              sb.append(String.format("\\u%04x", ch.code))
-            } else {
-              sb.append(ch)
-            }
-          }
-        }
-      }
-      sb.append('"')
-      return sb.toString()
-    }
-  }
-}
-
-/** Minimal dependency-free JSON parser for structured Vision LLM responses. */
-internal object MiniJson {
-  fun parse(input: String): Any? = Parser(input).parseRoot()
-
-  private class Parser(private val src: String) {
-    private var pos = 0
-
-    fun parseRoot(): Any? {
-      skipWhitespace()
-      val value = parseValue()
-      skipWhitespace()
-      if (pos != src.length) {
-        throw IllegalArgumentException("Unexpected trailing characters at position $pos")
-      }
-      return value
-    }
-
-    private fun parseValue(): Any? {
-      skipWhitespace()
-      if (pos >= src.length) throw IllegalArgumentException("Unexpected end of JSON")
-      return when (src[pos]) {
-        '{' -> parseObject()
-        '[' -> parseArray()
-        '"' -> parseString()
-        't', 'f' -> parseBoolean()
-        'n' -> parseNull()
-        '-', in '0'..'9' -> parseNumber()
-        else -> throw IllegalArgumentException("Unexpected character '${src[pos]}' at $pos")
-      }
-    }
-
-    private fun parseObject(): Map<String, Any?> {
-      expect('{')
-      skipWhitespace()
-      val map = LinkedHashMap<String, Any?>()
-      if (peek('}')) {
-        pos++
-        return map
-      }
-      while (true) {
-        skipWhitespace()
-        val key = parseString()
-        skipWhitespace()
-        expect(':')
-        val value = parseValue()
-        map[key] = value
-        skipWhitespace()
-        if (peek(',')) {
-          pos++
-        } else if (peek('}')) {
-          pos++
-          return map
-        } else {
-          throw IllegalArgumentException("Expected ',' or '}' at $pos")
-        }
-      }
-    }
-
-    private fun parseArray(): List<Any?> {
-      expect('[')
-      skipWhitespace()
-      val list = ArrayList<Any?>()
-      if (peek(']')) {
-        pos++
-        return list
-      }
-      while (true) {
-        list.add(parseValue())
-        skipWhitespace()
-        if (peek(',')) {
-          pos++
-        } else if (peek(']')) {
-          pos++
-          return list
-        } else {
-          throw IllegalArgumentException("Expected ',' or ']' at $pos")
-        }
-      }
-    }
-
-    private fun parseString(): String {
-      expect('"')
-      val sb = StringBuilder()
-      while (pos < src.length) {
-        val ch = src[pos++]
-        when (ch) {
-          '"' -> return sb.toString()
-          '\\' -> {
-            if (pos >= src.length) throw IllegalArgumentException("Unterminated escape")
-            when (val esc = src[pos++]) {
-              '"', '\\', '/' -> sb.append(esc)
-              'b' -> sb.append('\b')
-              'f' -> sb.append('\u000C')
-              'n' -> sb.append('\n')
-              'r' -> sb.append('\r')
-              't' -> sb.append('\t')
-              'u' -> {
-                if (pos + 4 > src.length) throw IllegalArgumentException("Invalid unicode escape")
-                val code = src.substring(pos, pos + 4).toInt(16)
-                pos += 4
-                sb.append(code.toChar())
-              }
-              else -> throw IllegalArgumentException("Invalid escape '\\$esc'")
-            }
-          }
-          else -> sb.append(ch)
-        }
-      }
-      throw IllegalArgumentException("Unterminated string literal")
-    }
-
-    private fun parseBoolean(): Boolean {
-      if (src.startsWith("true", pos)) {
-        pos += 4
-        return true
-      }
-      if (src.startsWith("false", pos)) {
-        pos += 5
-        return false
-      }
-      throw IllegalArgumentException("Invalid boolean at $pos")
-    }
-
-    private fun parseNull(): Any? {
-      if (src.startsWith("null", pos)) {
-        pos += 4
-        return null
-      }
-      throw IllegalArgumentException("Invalid null at $pos")
-    }
-
-    private fun parseNumber(): Number {
-      val start = pos
-      if (peek('-')) pos++
-      while (pos < src.length && src[pos] in '0'..'9') pos++
-      var isFloating = false
-      if (pos < src.length && src[pos] == '.') {
-        isFloating = true
-        pos++
-        while (pos < src.length && src[pos] in '0'..'9') pos++
-      }
-      if (pos < src.length && (src[pos] == 'e' || src[pos] == 'E')) {
-        isFloating = true
-        pos++
-        if (pos < src.length && (src[pos] == '+' || src[pos] == '-')) pos++
-        while (pos < src.length && src[pos] in '0'..'9') pos++
-      }
-      val token = src.substring(start, pos)
-      return if (isFloating) token.toDouble() else token.toLongOrNull() ?: token.toDouble()
-    }
-
-    private fun skipWhitespace() {
-      while (pos < src.length && src[pos].isWhitespace()) {
-        pos++
-      }
-    }
-
-    private fun peek(expected: Char): Boolean = pos < src.length && src[pos] == expected
-
-    private fun expect(expected: Char) {
-      if (pos >= src.length || src[pos] != expected) {
-        throw IllegalArgumentException("Expected '$expected' at $pos")
-      }
-      pos++
     }
   }
 }
