@@ -192,6 +192,52 @@ class ScreenTranslationTest {
     assertEquals(8, geminiResult.regions.single().x())
     assertEquals(96, geminiResult.regions.single().y())
 
+    // Verify Gemini 503 (high demand) automatically falls back to gemini-3.5-flash-lite and ignores
+    // thinking parts (thought: true).
+    val attemptedUris = mutableListOf<String>()
+    val fallbackClient =
+        HttpScreenTranslationClient(
+            transport = { request ->
+              attemptedUris += request.uri.toString()
+              if (attemptedUris.size == 1) {
+                ScreenTranslationHttpResponse(
+                    503,
+                    """{"error":{"code":503,"message":"This model is currently experiencing high demand."}}""",
+                )
+              } else {
+                ScreenTranslationHttpResponse(
+                    200,
+                    """
+                    {
+                      "candidates": [
+                        {
+                          "content": {
+                            "parts": [
+                              {"thought": true, "text": "Let me analyze {the text} first..."},
+                              {"text": "{\"regions\":[{\"id\":1,\"bbox_2d\":[[600,50,900,700]],\"original\":\"かいがん\",\"translation\":\"Seashore\"}]}"}
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                    """
+                        .trimIndent(),
+                )
+              }
+            },
+            upscaleFactor = 2,
+        )
+    val fallbackResult = fallbackClient.translate(frame, geminiConfig)
+    assertEquals(
+        listOf(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        ),
+        attemptedUris,
+    )
+    assertEquals(1, fallbackResult.regions.size)
+    assertEquals("Seashore", fallbackResult.regions.single().text())
+
     // Verify compressed/misaligned VLM coordinates are snapped to the actual detected text bands
     // and stacked menu options share aligned horizontal bounds.
     val bands =
