@@ -50,31 +50,131 @@ internal data class ResolvedScreenTranslationConfig(
 
 internal data class ScreenTranslationSettings(
     val provider: ScreenTranslationProvider = ScreenTranslationProvider.GEMINI,
+    val geminiApiKey: String = "",
+    val geminiModel: String = "",
+    val openAiApiKey: String = "",
+    val openAiModel: String = "",
+    val ollamaBaseUrl: String = "",
+    val ollamaModel: String = "",
     val apiKey: String = "",
     val baseUrl: String = "",
     val model: String = "",
     val targetLanguage: String = DEFAULT_TARGET_LANGUAGE,
     val pauseWhileTranslating: Boolean = false,
 ) {
-  fun sanitized(): ScreenTranslationSettings =
-      copy(
-          apiKey = apiKey.trim().take(MAX_FIELD_LENGTH),
-          baseUrl = baseUrl.trim().trimEnd('/').take(MAX_FIELD_LENGTH),
-          model = model.trim().take(MAX_MODEL_LENGTH),
-          targetLanguage =
-              targetLanguage.trim().take(MAX_LANGUAGE_LENGTH).ifEmpty { DEFAULT_TARGET_LANGUAGE },
-      )
+  fun sanitized(): ScreenTranslationSettings {
+    val cleanGeminiKey = geminiApiKey.trim().take(MAX_FIELD_LENGTH)
+    val cleanGeminiModel = geminiModel.trim().take(MAX_MODEL_LENGTH)
+    val cleanOpenAiKey = openAiApiKey.trim().take(MAX_FIELD_LENGTH)
+    val cleanOpenAiModel = openAiModel.trim().take(MAX_MODEL_LENGTH)
+    val cleanOllamaUrl = ollamaBaseUrl.trim().trimEnd('/').take(MAX_FIELD_LENGTH)
+    val cleanOllamaModel = ollamaModel.trim().take(MAX_MODEL_LENGTH)
+
+    val legacyKey = apiKey.trim().take(MAX_FIELD_LENGTH)
+    val legacyUrl = baseUrl.trim().trimEnd('/').take(MAX_FIELD_LENGTH)
+    val legacyModel = model.trim().take(MAX_MODEL_LENGTH)
+
+    val hasPerProviderKey = cleanGeminiKey.isNotEmpty() || cleanOpenAiKey.isNotEmpty()
+    val effectiveGeminiKey =
+        cleanGeminiKey.ifEmpty {
+          if (!hasPerProviderKey &&
+              (provider == ScreenTranslationProvider.GEMINI || legacyKey.startsWith("AIza"))) {
+            legacyKey
+          } else {
+            ""
+          }
+        }
+    val effectiveOpenAiKey =
+        cleanOpenAiKey.ifEmpty {
+          if (!hasPerProviderKey &&
+              (provider == ScreenTranslationProvider.OPENAI_COMPATIBLE ||
+                  (legacyKey.isNotEmpty() && !legacyKey.startsWith("AIza")))) {
+            legacyKey
+          } else {
+            ""
+          }
+        }
+
+    val hasPerProviderModel =
+        cleanGeminiModel.isNotEmpty() ||
+            cleanOpenAiModel.isNotEmpty() ||
+            cleanOllamaModel.isNotEmpty()
+    val effectiveGeminiModel =
+        cleanGeminiModel.ifEmpty {
+          if (!hasPerProviderModel &&
+              provider == ScreenTranslationProvider.GEMINI &&
+              !isOllamaModel(legacyModel)) {
+            legacyModel
+          } else {
+            ""
+          }
+        }
+    val effectiveOpenAiModel =
+        cleanOpenAiModel.ifEmpty {
+          if (!hasPerProviderModel &&
+              provider == ScreenTranslationProvider.OPENAI_COMPATIBLE &&
+              !isOllamaModel(legacyModel)) {
+            legacyModel
+          } else {
+            ""
+          }
+        }
+    val effectiveOllamaModel =
+        cleanOllamaModel.ifEmpty {
+          if (!hasPerProviderModel &&
+              (provider == ScreenTranslationProvider.OLLAMA || isOllamaModel(legacyModel))) {
+            legacyModel
+          } else {
+            ""
+          }
+        }
+
+    val effectiveOllamaUrl =
+        cleanOllamaUrl.ifEmpty {
+          if (provider == ScreenTranslationProvider.OLLAMA || isOllamaEndpoint(legacyUrl)) {
+            legacyUrl
+          } else {
+            ""
+          }
+        }
+
+    val activeApiKey =
+        when (provider) {
+          ScreenTranslationProvider.GEMINI -> effectiveGeminiKey
+          ScreenTranslationProvider.OPENAI_COMPATIBLE -> effectiveOpenAiKey
+          ScreenTranslationProvider.OLLAMA -> ""
+        }
+    val activeBaseUrl =
+        when (provider) {
+          ScreenTranslationProvider.OLLAMA -> effectiveOllamaUrl
+          ScreenTranslationProvider.GEMINI,
+          ScreenTranslationProvider.OPENAI_COMPATIBLE ->
+              legacyUrl.takeUnless { isOllamaEndpoint(it) }.orEmpty()
+        }
+    val activeModel =
+        when (provider) {
+          ScreenTranslationProvider.GEMINI -> effectiveGeminiModel
+          ScreenTranslationProvider.OPENAI_COMPATIBLE -> effectiveOpenAiModel
+          ScreenTranslationProvider.OLLAMA -> effectiveOllamaModel
+        }
+
+    return copy(
+        geminiApiKey = effectiveGeminiKey,
+        geminiModel = effectiveGeminiModel,
+        openAiApiKey = effectiveOpenAiKey,
+        openAiModel = effectiveOpenAiModel,
+        ollamaBaseUrl = effectiveOllamaUrl,
+        ollamaModel = effectiveOllamaModel,
+        apiKey = activeApiKey,
+        baseUrl = activeBaseUrl,
+        model = activeModel,
+        targetLanguage =
+            targetLanguage.trim().take(MAX_LANGUAGE_LENGTH).ifEmpty { DEFAULT_TARGET_LANGUAGE },
+    )
+  }
 
   fun resolve(): ResolvedScreenTranslationConfig? {
     val clean = sanitized()
-    val ignoreOllamaOverrides =
-        clean.provider == ScreenTranslationProvider.GEMINI ||
-            clean.provider == ScreenTranslationProvider.OPENAI_COMPATIBLE
-    val effectiveBaseUrl =
-        clean.baseUrl.takeUnless { ignoreOllamaOverrides && isOllamaEndpoint(it) }.orEmpty()
-    val effectiveModel =
-        clean.model.takeUnless { ignoreOllamaOverrides && isOllamaModel(it) }.orEmpty()
-
     val protocol =
         when (clean.provider) {
           ScreenTranslationProvider.GEMINI -> ResolvedTranslationProtocol.GEMINI
@@ -85,28 +185,32 @@ internal data class ScreenTranslationSettings(
     val resolvedBaseUrl =
         when (clean.provider) {
           ScreenTranslationProvider.GEMINI ->
-              effectiveBaseUrl.ifEmpty { DEFAULT_GEMINI_BASE_URL }
+              clean.baseUrl.takeUnless { isOllamaEndpoint(it) }.orEmpty().ifEmpty {
+                DEFAULT_GEMINI_BASE_URL
+              }
           ScreenTranslationProvider.OPENAI_COMPATIBLE ->
-              effectiveBaseUrl.ifEmpty { DEFAULT_OPENAI_BASE_URL }
+              clean.baseUrl.takeUnless { isOllamaEndpoint(it) }.orEmpty().ifEmpty {
+                DEFAULT_OPENAI_BASE_URL
+              }
           ScreenTranslationProvider.OLLAMA ->
-              clean.baseUrl.ifEmpty { DEFAULT_OLLAMA_BASE_URL }
+              clean.ollamaBaseUrl.ifEmpty { DEFAULT_OLLAMA_BASE_URL }
         }
 
     val resolvedModel =
         when (clean.provider) {
           ScreenTranslationProvider.GEMINI ->
-              effectiveModel.ifEmpty { DEFAULT_GEMINI_MODEL }
+              clean.geminiModel.ifEmpty { DEFAULT_GEMINI_MODEL }
           ScreenTranslationProvider.OPENAI_COMPATIBLE ->
-              effectiveModel.ifEmpty { DEFAULT_OPENAI_MODEL }
+              clean.openAiModel.ifEmpty { DEFAULT_OPENAI_MODEL }
           ScreenTranslationProvider.OLLAMA ->
-              clean.model.ifEmpty { DEFAULT_OLLAMA_MODEL }
+              clean.ollamaModel.ifEmpty { DEFAULT_OLLAMA_MODEL }
         }
 
     val resolvedKey =
-        if (clean.provider.requiresApiKey) {
-          clean.apiKey
-        } else {
-          ""
+        when (clean.provider) {
+          ScreenTranslationProvider.GEMINI -> clean.geminiApiKey
+          ScreenTranslationProvider.OPENAI_COMPATIBLE -> clean.openAiApiKey
+          ScreenTranslationProvider.OLLAMA -> ""
         }
 
     if (clean.provider.requiresApiKey &&
@@ -192,6 +296,12 @@ internal class ScreenTranslationPreferencesStore(
   fun load(): ScreenTranslationSettings =
       runCatching {
             val providerName = get(KEY_PROVIDER)
+            val geminiApiKey = get(KEY_GEMINI_API_KEY).orEmpty()
+            val geminiModel = get(KEY_GEMINI_MODEL).orEmpty()
+            val openAiApiKey = get(KEY_OPENAI_API_KEY).orEmpty()
+            val openAiModel = get(KEY_OPENAI_MODEL).orEmpty()
+            val ollamaBaseUrl = get(KEY_OLLAMA_BASE_URL).orEmpty()
+            val ollamaModel = get(KEY_OLLAMA_MODEL).orEmpty()
             val apiKey = get(KEY_API_KEY).orEmpty()
             val baseUrl = get(KEY_BASE_URL).orEmpty()
             val model = get(KEY_MODEL).orEmpty()
@@ -200,6 +310,12 @@ internal class ScreenTranslationPreferencesStore(
                     ?: inferProvider(apiKey, baseUrl, model)
             ScreenTranslationSettings(
                     provider = provider,
+                    geminiApiKey = geminiApiKey,
+                    geminiModel = geminiModel,
+                    openAiApiKey = openAiApiKey,
+                    openAiModel = openAiModel,
+                    ollamaBaseUrl = ollamaBaseUrl,
+                    ollamaModel = ollamaModel,
                     apiKey = apiKey,
                     baseUrl = baseUrl,
                     model = model,
@@ -216,6 +332,12 @@ internal class ScreenTranslationPreferencesStore(
     val clean = settings.sanitized()
     runCatching {
       put(KEY_PROVIDER, clean.provider.name)
+      put(KEY_GEMINI_API_KEY, clean.geminiApiKey)
+      put(KEY_GEMINI_MODEL, clean.geminiModel)
+      put(KEY_OPENAI_API_KEY, clean.openAiApiKey)
+      put(KEY_OPENAI_MODEL, clean.openAiModel)
+      put(KEY_OLLAMA_BASE_URL, clean.ollamaBaseUrl)
+      put(KEY_OLLAMA_MODEL, clean.ollamaModel)
       put(KEY_API_KEY, clean.apiKey)
       put(KEY_BASE_URL, clean.baseUrl)
       put(KEY_MODEL, clean.model)
@@ -251,6 +373,12 @@ internal class ScreenTranslationPreferencesStore(
 
   companion object {
     internal const val KEY_PROVIDER = "provider"
+    internal const val KEY_GEMINI_API_KEY = "gemini-api-key"
+    internal const val KEY_GEMINI_MODEL = "gemini-model"
+    internal const val KEY_OPENAI_API_KEY = "openai-api-key"
+    internal const val KEY_OPENAI_MODEL = "openai-model"
+    internal const val KEY_OLLAMA_BASE_URL = "ollama-base-url"
+    internal const val KEY_OLLAMA_MODEL = "ollama-model"
     internal const val KEY_API_KEY = "api-key"
     internal const val KEY_BASE_URL = "base-url"
     internal const val KEY_MODEL = "model"
@@ -260,6 +388,12 @@ internal class ScreenTranslationPreferencesStore(
     private val ALLOWED_KEYS =
         setOf(
             KEY_PROVIDER,
+            KEY_GEMINI_API_KEY,
+            KEY_GEMINI_MODEL,
+            KEY_OPENAI_API_KEY,
+            KEY_OPENAI_MODEL,
+            KEY_OLLAMA_BASE_URL,
+            KEY_OLLAMA_MODEL,
             KEY_API_KEY,
             KEY_BASE_URL,
             KEY_MODEL,
