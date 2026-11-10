@@ -18,6 +18,7 @@ import java.awt.Font
 import java.awt.image.BufferedImage
 import java.io.File
 import java.nio.file.Files
+import java.time.Duration
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -693,6 +694,10 @@ class ScreenTranslationTest {
   @Test
   fun `live local Ollama qwen2_5vl translates Japanese Game Boy screen and renders overlay`() {
     Assume.assumeTrue(
+        "Enable with -DcoffeeGb.liveOllamaTest=true",
+        java.lang.Boolean.getBoolean("coffeeGb.liveOllamaTest"),
+    )
+    Assume.assumeTrue(
         "Local Ollama server is not listening on 127.0.0.1:11434",
         ScreenTranslationController.isLocalOllamaListening(),
     )
@@ -704,7 +709,11 @@ class ScreenTranslationTest {
     assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_BASE_URL, config.baseUrl)
     assertEquals(ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL, config.model)
 
-    val client = HttpScreenTranslationClient(upscaleFactor = 1)
+    val client =
+        HttpScreenTranslationClient(
+            transport = JdkScreenTranslationHttpTransport(requestTimeout = Duration.ofSeconds(45)),
+            upscaleFactor = 1,
+        )
     val result = client.translate(frame, config)
     assertFalse(result.isEmpty, "Expected qwen2.5vl:7b to return a translation for Japanese screen")
 
