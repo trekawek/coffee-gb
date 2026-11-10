@@ -30,7 +30,7 @@ public final class ScreenTranslationOverlay {
      */
     private static final double AUTO_DISMISS_DIFF_RATIO = 0.05;
 
-    private static final Color BOX_BACKGROUND = new Color(16, 18, 24, 232);
+    private static final Color BOX_BACKGROUND = new Color(16, 18, 24, 248);
 
     private static final Color BOX_BORDER = new Color(255, 255, 255, 195);
 
@@ -331,7 +331,9 @@ public final class ScreenTranslationOverlay {
                                     <= sourceWidth * 0.15;
             boolean isGraphicalButton =
                     !isCenteredBanner
+                            && region.width() <= sourceWidth * 0.55
                             && region.height() >= 20
+                            && region.height() <= 36
                             && wrappedLines.size() <= 2;
             int finalHeight;
             boolean centerText = false;
