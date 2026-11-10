@@ -50,14 +50,24 @@ class ScreenTranslationTest {
     val saved =
         ScreenTranslationSettings(
             provider = ScreenTranslationProvider.OPENAI_COMPATIBLE,
-            apiKey = "  sk-test-123  ",
+            geminiApiKey = "  AIzaSyGeminiKey  ",
+            geminiModel = "models/gemini-3.8-flash",
+            openAiApiKey = "  sk-test-123  ",
+            openAiModel = "gpt-4o",
+            ollamaBaseUrl = "http://gallifrey:11434/v1/",
+            ollamaModel = "qwen2.5vl:7b",
             baseUrl = "https://api.openai.com/v1/",
-            model = "gpt-4o",
             targetLanguage = "English",
             pauseWhileTranslating = true,
         )
     store.save(saved)
     val loaded = store.load()
+    assertEquals("AIzaSyGeminiKey", loaded.geminiApiKey)
+    assertEquals("models/gemini-3.8-flash", loaded.geminiModel)
+    assertEquals("sk-test-123", loaded.openAiApiKey)
+    assertEquals("gpt-4o", loaded.openAiModel)
+    assertEquals("http://gallifrey:11434/v1", loaded.ollamaBaseUrl)
+    assertEquals("qwen2.5vl:7b", loaded.ollamaModel)
     assertEquals("sk-test-123", loaded.apiKey)
     assertEquals("https://api.openai.com/v1", loaded.baseUrl)
     assertEquals("gpt-4o", loaded.model)
@@ -67,6 +77,20 @@ class ScreenTranslationTest {
     assertNotNull(resolvedOpenAi)
     assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedOpenAi.protocol)
     assertEquals("sk-test-123", resolvedOpenAi.apiKey)
+    assertEquals("gpt-4o", resolvedOpenAi.model)
+
+    val resolvedSwitchedGemini = loaded.copy(provider = ScreenTranslationProvider.GEMINI).resolve()
+    assertNotNull(resolvedSwitchedGemini)
+    assertEquals(ResolvedTranslationProtocol.GEMINI, resolvedSwitchedGemini.protocol)
+    assertEquals("AIzaSyGeminiKey", resolvedSwitchedGemini.apiKey)
+    assertEquals("models/gemini-3.8-flash", resolvedSwitchedGemini.model)
+
+    val resolvedSwitchedOllama = loaded.copy(provider = ScreenTranslationProvider.OLLAMA).resolve()
+    assertNotNull(resolvedSwitchedOllama)
+    assertEquals(ResolvedTranslationProtocol.OPENAI_COMPATIBLE, resolvedSwitchedOllama.protocol)
+    assertEquals("http://gallifrey:11434/v1", resolvedSwitchedOllama.baseUrl)
+    assertEquals("qwen2.5vl:7b", resolvedSwitchedOllama.model)
+    assertEquals("", resolvedSwitchedOllama.apiKey)
 
     val resolvedGemini =
         ScreenTranslationSettings(
@@ -436,68 +460,64 @@ class ScreenTranslationTest {
             ScreenTranslationSettingsPanel(
                 ScreenTranslationSettings(
                     provider = ScreenTranslationProvider.OLLAMA,
-                    apiKey = "sk-openai",
-                    baseUrl = "http://gallifrey:11434/v1",
-                    model = "qwen2.5vl:7b",
+                    geminiApiKey = "AIza-gemini",
+                    geminiModel = "models/gemini-3.8-flash",
+                    openAiApiKey = "sk-openai",
+                    openAiModel = "gpt-4o-mini",
+                    ollamaBaseUrl = "http://gallifrey:11434/v1",
+                    ollamaModel = "qwen2.5vl:7b",
                     targetLanguage = "English",
                 ),
                 openUri = { uri -> openedUris += uri.toString() },
             )
         assertEquals("Screen translation settings", panel.accessibleContext.accessibleName)
-        // When Ollama is selected: API Key + Get API Key button are hidden; Base URL and Model are visible.
-        assertFalse(panel.apiKeyLabel.isVisible)
-        assertFalse(panel.apiKeyField.isVisible)
-        assertFalse(panel.getApiKeyButton.isVisible)
-        assertTrue(panel.baseUrlLabel.isVisible)
-        assertTrue(panel.baseUrlField.isVisible)
-        assertTrue(panel.modelLabel.isVisible)
-        assertTrue(panel.modelField.isVisible)
-        assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
-        assertEquals("qwen2.5vl:7b", panel.modelField.text)
+        assertEquals(3, panel.providerTabs.tabCount)
+        assertEquals(
+            listOf("Google Gemini", "OpenAI", "Ollama (Local)"),
+            (0 until panel.providerTabs.tabCount).map(panel.providerTabs::getTitleAt),
+        )
+        assertEquals(ScreenTranslationProvider.OLLAMA.ordinal, panel.providerTabs.selectedIndex)
+        assertEquals("http://gallifrey:11434/v1", panel.ollamaBaseUrlField.text)
+        assertEquals("qwen2.5vl:7b", panel.ollamaModelField.text)
+        assertEquals("AIza-gemini", String(panel.geminiApiKeyField.password))
+        assertEquals("sk-openai", String(panel.openAiApiKeyField.password))
 
-        // Switching provider from Ollama to OpenAI shows API Key + Get API Key + Model and hides Base URL.
+        // Switching provider dropdown to OpenAI switches the selected tab and preserves all 3 configs.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.OPENAI_COMPATIBLE
-        assertTrue(panel.apiKeyLabel.isVisible)
-        assertTrue(panel.apiKeyField.isVisible)
-        assertTrue(panel.getApiKeyButton.isVisible)
-        panel.getApiKeyButton.doClick()
+        assertEquals(
+            ScreenTranslationProvider.OPENAI_COMPATIBLE.ordinal,
+            panel.providerTabs.selectedIndex,
+        )
+        panel.openAiGetApiKeyButton.doClick()
         assertEquals(listOf("https://platform.openai.com/api-keys"), openedUris)
-        assertFalse(panel.baseUrlLabel.isVisible)
-        assertFalse(panel.baseUrlField.isVisible)
-        assertTrue(panel.modelLabel.isVisible)
-        assertTrue(panel.modelField.isVisible)
-        assertEquals("", panel.baseUrlField.text)
-        assertEquals("", panel.modelField.text)
-        val switchedSettings = panel.toSettings()
-        assertEquals(ScreenTranslationProvider.OPENAI_COMPATIBLE, switchedSettings.provider)
-        assertEquals("sk-openai", switchedSettings.apiKey)
-        assertEquals("", switchedSettings.baseUrl)
-        assertEquals("", switchedSettings.model)
+        val switchedOpenAi = panel.toSettings()
+        assertEquals(ScreenTranslationProvider.OPENAI_COMPATIBLE, switchedOpenAi.provider)
+        assertEquals("sk-openai", switchedOpenAi.openAiApiKey)
+        assertEquals("AIza-gemini", switchedOpenAi.geminiApiKey)
+        assertEquals("http://gallifrey:11434/v1", switchedOpenAi.ollamaBaseUrl)
+        assertEquals("qwen2.5vl:7b", switchedOpenAi.ollamaModel)
+        assertEquals("sk-openai", switchedOpenAi.apiKey)
 
-        // Switching to Gemini shows API Key + Get API Key + Model and hides Base URL.
+        // Switching provider dropdown to Gemini selects the Gemini tab and preserves OpenAI + Ollama.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.GEMINI
-        assertTrue(panel.apiKeyLabel.isVisible)
-        assertTrue(panel.apiKeyField.isVisible)
-        assertTrue(panel.getApiKeyButton.isVisible)
-        panel.getApiKeyButton.doClick()
+        assertEquals(ScreenTranslationProvider.GEMINI.ordinal, panel.providerTabs.selectedIndex)
+        panel.geminiGetApiKeyButton.doClick()
         assertEquals(
             listOf("https://platform.openai.com/api-keys", "https://aistudio.google.com/apikey"),
             openedUris,
         )
-        assertFalse(panel.baseUrlLabel.isVisible)
-        assertFalse(panel.baseUrlField.isVisible)
-        assertTrue(panel.modelLabel.isVisible)
-        assertTrue(panel.modelField.isVisible)
+        val switchedGemini = panel.toSettings()
+        assertEquals(ScreenTranslationProvider.GEMINI, switchedGemini.provider)
+        assertEquals("AIza-gemini", switchedGemini.geminiApiKey)
+        assertEquals("sk-openai", switchedGemini.openAiApiKey)
+        assertEquals("http://gallifrey:11434/v1", switchedGemini.ollamaBaseUrl)
+        assertEquals("AIza-gemini", switchedGemini.apiKey)
 
-        // Switching back to Ollama restores the Ollama draft URL/model and hides API Key.
+        // Switching back to Ollama selects the Ollama tab and retains its URL/model.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.OLLAMA
-        assertFalse(panel.apiKeyLabel.isVisible)
-        assertFalse(panel.apiKeyField.isVisible)
-        assertFalse(panel.getApiKeyButton.isVisible)
-        assertTrue(panel.baseUrlLabel.isVisible)
-        assertTrue(panel.baseUrlField.isVisible)
-        assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
-        assertEquals("qwen2.5vl:7b", panel.modelField.text)
+        assertEquals(ScreenTranslationProvider.OLLAMA.ordinal, panel.providerTabs.selectedIndex)
+        assertEquals("http://gallifrey:11434/v1", panel.ollamaBaseUrlField.text)
+        assertEquals("qwen2.5vl:7b", panel.ollamaModelField.text)
 
         // Verify ScreenTranslationSettingsPanel is hosted in PreferencesPanel under TRANSLATION.
         val preferencesPanel =
@@ -507,15 +527,16 @@ class ScreenTranslationTest {
                 initialTranslation =
                     ScreenTranslationSettings(
                         provider = ScreenTranslationProvider.OLLAMA,
-                        baseUrl = "http://gallifrey:11434/v1",
-                        model = "qwen2.5vl:7b",
+                        ollamaBaseUrl = "http://gallifrey:11434/v1",
+                        ollamaModel = "qwen2.5vl:7b",
                     ),
             )
         assertEquals(PreferencesCategory.TRANSLATION, preferencesPanel.categories.selectedCategory)
         assertFalse(preferencesPanel.isDirty())
+        preferencesPanel.translationEditor.geminiApiKeyField.text = "AIza-saved"
+        preferencesPanel.translationEditor.openAiApiKeyField.text = "sk-live"
         preferencesPanel.translationEditor.providerCombo.selectedItem =
             ScreenTranslationProvider.OPENAI_COMPATIBLE
-        preferencesPanel.translationEditor.apiKeyField.text = "sk-live"
         assertTrue(preferencesPanel.isDirty())
         val edit = preferencesPanel.validatedEdit()
         assertNotNull(edit.screenTranslation)
@@ -523,9 +544,11 @@ class ScreenTranslationTest {
             ScreenTranslationProvider.OPENAI_COMPATIBLE,
             edit.screenTranslation!!.provider,
         )
+        assertEquals("AIza-saved", edit.screenTranslation!!.geminiApiKey)
+        assertEquals("sk-live", edit.screenTranslation!!.openAiApiKey)
+        assertEquals("http://gallifrey:11434/v1", edit.screenTranslation!!.ollamaBaseUrl)
+        assertEquals("qwen2.5vl:7b", edit.screenTranslation!!.ollamaModel)
         assertEquals("sk-live", edit.screenTranslation!!.apiKey)
-        assertEquals("", edit.screenTranslation!!.baseUrl)
-        assertEquals("", edit.screenTranslation!!.model)
 
         val controller =
             ScreenTranslationController(

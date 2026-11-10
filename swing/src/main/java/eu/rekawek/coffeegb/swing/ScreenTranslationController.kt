@@ -30,6 +30,7 @@ import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JPasswordField
+import javax.swing.JTabbedPane
 import javax.swing.JTextField
 import javax.swing.SwingUtilities
 
@@ -80,9 +81,7 @@ internal class ScreenTranslationSettingsPanel(
     private val defaults: ScreenTranslationSettings = ScreenTranslationSettings(),
     private val openUri: (URI) -> Unit = ::openBrowserUri,
 ) : JPanel(GridBagLayout()), DesktopThemeRefreshHook {
-  private val providerDrafts = mutableMapOf<ScreenTranslationProvider, Pair<String, String>>()
-  private var activeProvider: ScreenTranslationProvider = initial.provider
-  private var switchingProvider = false
+  private val initialClean = initial.sanitized()
 
   val descriptionText =
       javax.swing.JTextArea(
@@ -101,7 +100,7 @@ internal class ScreenTranslationSettingsPanel(
 
   val providerCombo =
       JComboBox(ScreenTranslationProvider.entries.toTypedArray()).apply {
-        selectedItem = initial.provider
+        selectedItem = initialClean.provider
         getAccessibleContext().accessibleName = "Translation provider"
         renderer =
             object : DefaultListCellRenderer() {
@@ -122,43 +121,84 @@ internal class ScreenTranslationSettingsPanel(
             }
       }
 
-  val apiKeyField =
-      JPasswordField(initial.apiKey, 24).apply {
-        getAccessibleContext().accessibleName = "Vision API key"
-        toolTipText = "API key for Google Gemini or OpenAI"
+  val geminiApiKeyField =
+      JPasswordField(initialClean.geminiApiKey, 24).apply {
+        getAccessibleContext().accessibleName = "Google Gemini API key"
+        toolTipText = "Google Gemini API key"
       }
 
-  val getApiKeyButton =
+  val geminiGetApiKeyButton =
       JButton("Get API Key…").apply {
-        getAccessibleContext().accessibleName = "Get API key in browser"
+        getAccessibleContext().accessibleName = "Get Google Gemini API key in browser"
+        toolTipText =
+            "Open Google Gemini API key page (${ScreenTranslationProvider.GEMINI.apiKeyCreationUrl})"
         addActionListener {
-          val provider =
-              (providerCombo.selectedItem as? ScreenTranslationProvider)
-                  ?: ScreenTranslationProvider.GEMINI
-          val url = provider.apiKeyCreationUrl ?: return@addActionListener
+          val url = ScreenTranslationProvider.GEMINI.apiKeyCreationUrl ?: return@addActionListener
           runCatching { openUri(URI.create(url)) }
         }
       }
 
-  val baseUrlField =
-      JTextField("", 28).apply {
-        getAccessibleContext().accessibleName = "Base URL override"
+  val geminiModelField =
+      JTextField(initialClean.geminiModel, 28).apply {
+        getAccessibleContext().accessibleName = "Google Gemini model name"
+        toolTipText =
+            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_MODEL})"
       }
 
-  val modelField =
-      JTextField("", 28).apply {
-        getAccessibleContext().accessibleName = "Vision model name"
+  val openAiApiKeyField =
+      JPasswordField(initialClean.openAiApiKey, 24).apply {
+        getAccessibleContext().accessibleName = "OpenAI API key"
+        toolTipText = "OpenAI API key"
+      }
+
+  val openAiGetApiKeyButton =
+      JButton("Get API Key…").apply {
+        getAccessibleContext().accessibleName = "Get OpenAI API key in browser"
+        toolTipText =
+            "Open OpenAI API key page (${ScreenTranslationProvider.OPENAI_COMPATIBLE.apiKeyCreationUrl})"
+        addActionListener {
+          val url =
+              ScreenTranslationProvider.OPENAI_COMPATIBLE.apiKeyCreationUrl
+                  ?: return@addActionListener
+          runCatching { openUri(URI.create(url)) }
+        }
+      }
+
+  val openAiModelField =
+      JTextField(initialClean.openAiModel, 28).apply {
+        getAccessibleContext().accessibleName = "OpenAI model name"
+        toolTipText =
+            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_OPENAI_MODEL})"
+      }
+
+  val ollamaBaseUrlField =
+      JTextField(initialClean.ollamaBaseUrl, 28).apply {
+        getAccessibleContext().accessibleName = "Ollama base URL"
+        toolTipText =
+            "Ollama endpoint URL (defaults to ${ScreenTranslationSettings.DEFAULT_OLLAMA_BASE_URL})"
+      }
+
+  val ollamaModelField =
+      JTextField(initialClean.ollamaModel, 28).apply {
+        getAccessibleContext().accessibleName = "Ollama vision model name"
+        toolTipText =
+            "Ollama vision model (defaults to ${ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL})"
+      }
+
+  val providerTabs =
+      JTabbedPane().apply {
+        getAccessibleContext().accessibleName = "Provider configuration tabs"
       }
 
   val targetLanguageField =
-      JTextField(initial.targetLanguage, 20).apply {
+      JTextField(initialClean.targetLanguage, 20).apply {
         getAccessibleContext().accessibleName = "Target language"
       }
 
   val pauseCheckBox =
       JCheckBox(
               "Pause emulation while translating or viewing overlay",
-              initial.pauseWhileTranslating,
+              initialClean.pauseWhileTranslating,
           )
           .apply {
             isOpaque = false
@@ -167,18 +207,82 @@ internal class ScreenTranslationSettingsPanel(
           }
 
   val providerLabel = createRowLabel("Provider:", providerCombo)
-  val apiKeyLabel = createRowLabel("API Key:", apiKeyField)
-  val baseUrlLabel = createRowLabel("Base URL:", baseUrlField)
-  val modelLabel = createRowLabel("Model:", modelField)
+  val geminiApiKeyLabel = createRowLabel("API Key:", geminiApiKeyField)
+  val geminiModelLabel = createRowLabel("Model:", geminiModelField)
+  val openAiApiKeyLabel = createRowLabel("API Key:", openAiApiKeyField)
+  val openAiModelLabel = createRowLabel("Model:", openAiModelField)
+  val ollamaBaseUrlLabel = createRowLabel("Base URL:", ollamaBaseUrlField)
+  val ollamaModelLabel = createRowLabel("Model:", ollamaModelField)
   val targetLanguageLabel = createRowLabel("Target Language:", targetLanguageField)
+
+  val apiKeyField: JPasswordField
+    get() =
+        when (selectedProvider()) {
+          ScreenTranslationProvider.OPENAI_COMPATIBLE -> openAiApiKeyField
+          ScreenTranslationProvider.GEMINI,
+          ScreenTranslationProvider.OLLAMA -> geminiApiKeyField
+        }
+
+  val getApiKeyButton: JButton
+    get() =
+        when (selectedProvider()) {
+          ScreenTranslationProvider.OPENAI_COMPATIBLE -> openAiGetApiKeyButton
+          ScreenTranslationProvider.GEMINI,
+          ScreenTranslationProvider.OLLAMA -> geminiGetApiKeyButton
+        }
+
+  val baseUrlField: JTextField
+    get() = ollamaBaseUrlField
+
+  val modelField: JTextField
+    get() =
+        when (selectedProvider()) {
+          ScreenTranslationProvider.GEMINI -> geminiModelField
+          ScreenTranslationProvider.OPENAI_COMPATIBLE -> openAiModelField
+          ScreenTranslationProvider.OLLAMA -> ollamaModelField
+        }
 
   init {
     border = BorderFactory.createEmptyBorder(8, 4, 8, 4)
     getAccessibleContext().accessibleName = "Screen translation settings"
-    seedProviderDrafts(initial)
-    val initialDraft = providerDrafts[initial.provider] ?: ("" to "")
-    baseUrlField.text = initialDraft.first
-    modelField.text = initialDraft.second
+
+    providerTabs.addTab(
+        ScreenTranslationProvider.GEMINI.displayName,
+        createApiKeyProviderTabPanel(
+            apiKeyLabel = geminiApiKeyLabel,
+            apiKeyField = geminiApiKeyField,
+            getApiKeyButton = geminiGetApiKeyButton,
+            modelLabel = geminiModelLabel,
+            modelField = geminiModelField,
+        ),
+    )
+    providerTabs.setToolTipTextAt(
+        ScreenTranslationProvider.GEMINI.ordinal,
+        "Configure Google Gemini API key and model.",
+    )
+    providerTabs.addTab(
+        ScreenTranslationProvider.OPENAI_COMPATIBLE.displayName,
+        createApiKeyProviderTabPanel(
+            apiKeyLabel = openAiApiKeyLabel,
+            apiKeyField = openAiApiKeyField,
+            getApiKeyButton = openAiGetApiKeyButton,
+            modelLabel = openAiModelLabel,
+            modelField = openAiModelField,
+        ),
+    )
+    providerTabs.setToolTipTextAt(
+        ScreenTranslationProvider.OPENAI_COMPATIBLE.ordinal,
+        "Configure OpenAI API key and model.",
+    )
+    providerTabs.addTab(
+        ScreenTranslationProvider.OLLAMA.displayName,
+        createOllamaTabPanel(),
+    )
+    providerTabs.setToolTipTextAt(
+        ScreenTranslationProvider.OLLAMA.ordinal,
+        "Configure local or LAN Ollama endpoint URL and vision model.",
+    )
+    providerTabs.selectedIndex = initialClean.provider.ordinal
 
     var row = 0
     add(
@@ -186,24 +290,33 @@ internal class ScreenTranslationSettingsPanel(
         GridBagConstraints().apply {
           gridx = 0
           gridy = row++
-          gridwidth = 3
+          gridwidth = 2
           weightx = 1.0
           fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.LINE_START
           insets = Insets(0, 4, 12, 4)
         },
     )
-    addRow(row++, providerLabel, providerCombo)
-    addApiKeyRow(row++, apiKeyLabel, apiKeyField, getApiKeyButton)
-    addRow(row++, baseUrlLabel, baseUrlField)
-    addRow(row++, modelLabel, modelField)
-    addRow(row++, targetLanguageLabel, targetLanguageField)
+    addRow(this, row++, providerLabel, providerCombo)
+    add(
+        providerTabs,
+        GridBagConstraints().apply {
+          gridx = 0
+          gridy = row++
+          gridwidth = 2
+          weightx = 1.0
+          fill = GridBagConstraints.HORIZONTAL
+          anchor = GridBagConstraints.LINE_START
+          insets = Insets(6, 4, 8, 4)
+        },
+    )
+    addRow(this, row++, targetLanguageLabel, targetLanguageField)
     add(
         pauseCheckBox,
         GridBagConstraints().apply {
           gridx = 1
           gridy = row++
-          gridwidth = 2
+          gridwidth = 1
           weightx = 1.0
           fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.LINE_START
@@ -215,33 +328,18 @@ internal class ScreenTranslationSettingsPanel(
         GridBagConstraints().apply {
           gridx = 0
           gridy = row
-          gridwidth = 3
+          gridwidth = 2
           weightx = 1.0
           weighty = 1.0
           fill = GridBagConstraints.BOTH
         },
     )
 
-    updateProviderVisibilityAndHints(initial.provider)
-
     providerCombo.addActionListener {
-      if (switchingProvider) return@addActionListener
-      val nextProvider =
-          (providerCombo.selectedItem as? ScreenTranslationProvider)
-              ?: ScreenTranslationProvider.GEMINI
-      if (nextProvider != activeProvider) {
-        providerDrafts[activeProvider] = baseUrlField.text.trim() to modelField.text.trim()
-        activeProvider = nextProvider
-        val nextDraft = providerDrafts[nextProvider] ?: ("" to "")
-        switchingProvider = true
-        try {
-          baseUrlField.text = nextDraft.first
-          modelField.text = nextDraft.second
-        } finally {
-          switchingProvider = false
-        }
+      val nextProvider = selectedProvider()
+      if (providerTabs.selectedIndex != nextProvider.ordinal) {
+        providerTabs.selectedIndex = nextProvider.ordinal
       }
-      updateProviderVisibilityAndHints(nextProvider)
     }
   }
 
@@ -251,93 +349,95 @@ internal class ScreenTranslationSettingsPanel(
   }
 
   fun restoreDefaults() {
-    switchingProvider = true
-    try {
-      providerDrafts.clear()
-      seedProviderDrafts(defaults)
-      activeProvider = defaults.provider
-      providerCombo.selectedItem = defaults.provider
-      apiKeyField.text = defaults.apiKey
-      baseUrlField.text = defaults.baseUrl
-      modelField.text = defaults.model
-      targetLanguageField.text = defaults.targetLanguage
-      pauseCheckBox.isSelected = defaults.pauseWhileTranslating
-      updateProviderVisibilityAndHints(defaults.provider)
-    } finally {
-      switchingProvider = false
-    }
+    val cleanDefaults = defaults.sanitized()
+    providerCombo.selectedItem = cleanDefaults.provider
+    providerTabs.selectedIndex = cleanDefaults.provider.ordinal
+    geminiApiKeyField.text = cleanDefaults.geminiApiKey
+    geminiModelField.text = cleanDefaults.geminiModel
+    openAiApiKeyField.text = cleanDefaults.openAiApiKey
+    openAiModelField.text = cleanDefaults.openAiModel
+    ollamaBaseUrlField.text = cleanDefaults.ollamaBaseUrl
+    ollamaModelField.text = cleanDefaults.ollamaModel
+    targetLanguageField.text = cleanDefaults.targetLanguage
+    pauseCheckBox.isSelected = cleanDefaults.pauseWhileTranslating
   }
 
   fun draftFingerprint(): List<Any?> =
       listOf(
           providerCombo.selectedItem,
-          String(apiKeyField.password),
-          baseUrlField.text,
-          modelField.text,
+          String(geminiApiKeyField.password),
+          geminiModelField.text,
+          String(openAiApiKeyField.password),
+          openAiModelField.text,
+          ollamaBaseUrlField.text,
+          ollamaModelField.text,
           targetLanguageField.text,
           pauseCheckBox.isSelected,
       )
 
   fun toSettings(): ScreenTranslationSettings {
-    val provider =
-        (providerCombo.selectedItem as? ScreenTranslationProvider)
-            ?: ScreenTranslationProvider.GEMINI
+    val provider = selectedProvider()
     return ScreenTranslationSettings(
             provider = provider,
-            apiKey = if (provider.requiresApiKey) String(apiKeyField.password) else "",
-            baseUrl = if (provider.supportsCustomBaseUrl) baseUrlField.text else "",
-            model = if (provider.supportsModelSelection) modelField.text else "",
+            geminiApiKey = String(geminiApiKeyField.password),
+            geminiModel = geminiModelField.text,
+            openAiApiKey = String(openAiApiKeyField.password),
+            openAiModel = openAiModelField.text,
+            ollamaBaseUrl = ollamaBaseUrlField.text,
+            ollamaModel = ollamaModelField.text,
             targetLanguage = targetLanguageField.text,
             pauseWhileTranslating = pauseCheckBox.isSelected,
         )
         .sanitized()
   }
 
-  private fun seedProviderDrafts(settings: ScreenTranslationSettings) {
-    val isOllamaUrl = ScreenTranslationSettings.isOllamaEndpoint(settings.baseUrl)
-    val isOllamaModel = ScreenTranslationSettings.isOllamaModel(settings.model)
-    if (settings.provider == ScreenTranslationProvider.OLLAMA || isOllamaUrl || isOllamaModel) {
-      providerDrafts[ScreenTranslationProvider.OLLAMA] = settings.baseUrl to settings.model
-    }
-    if (settings.provider != ScreenTranslationProvider.OLLAMA) {
-      val nonOllamaUrl = settings.baseUrl.takeUnless { isOllamaUrl }.orEmpty()
-      val nonOllamaModel = settings.model.takeUnless { isOllamaModel }.orEmpty()
-      providerDrafts[settings.provider] = nonOllamaUrl to nonOllamaModel
-    }
-  }
+  private fun selectedProvider(): ScreenTranslationProvider =
+      (providerCombo.selectedItem as? ScreenTranslationProvider)
+          ?: ScreenTranslationProvider.GEMINI
 
-  private fun updateProviderVisibilityAndHints(provider: ScreenTranslationProvider) {
-    apiKeyLabel.isVisible = provider.requiresApiKey
-    apiKeyField.isVisible = provider.requiresApiKey
-    getApiKeyButton.isVisible = provider.apiKeyCreationUrl != null
-    getApiKeyButton.toolTipText =
-        provider.apiKeyCreationUrl?.let { "Open ${provider.displayName} API key page ($it)" }
-    baseUrlLabel.isVisible = provider.supportsCustomBaseUrl
-    baseUrlField.isVisible = provider.supportsCustomBaseUrl
-    modelLabel.isVisible = provider.supportsModelSelection
-    modelField.isVisible = provider.supportsModelSelection
+  private fun createApiKeyProviderTabPanel(
+      apiKeyLabel: JLabel,
+      apiKeyField: JPasswordField,
+      getApiKeyButton: JButton,
+      modelLabel: JLabel,
+      modelField: JTextField,
+  ): JPanel =
+      JPanel(GridBagLayout()).apply {
+        isOpaque = false
+        border = BorderFactory.createEmptyBorder(8, 6, 8, 6)
+        addApiKeyRow(this, 0, apiKeyLabel, apiKeyField, getApiKeyButton)
+        addRow(this, 1, modelLabel, modelField, fieldGridWidth = 2)
+        add(
+            JPanel().apply { isOpaque = false },
+            GridBagConstraints().apply {
+              gridx = 0
+              gridy = 2
+              gridwidth = 3
+              weightx = 1.0
+              weighty = 1.0
+              fill = GridBagConstraints.BOTH
+            },
+        )
+      }
 
-    when (provider) {
-      ScreenTranslationProvider.GEMINI -> {
-        apiKeyField.toolTipText = "Google Gemini API key"
-        modelField.toolTipText =
-            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_GEMINI_MODEL})"
+  private fun createOllamaTabPanel(): JPanel =
+      JPanel(GridBagLayout()).apply {
+        isOpaque = false
+        border = BorderFactory.createEmptyBorder(8, 6, 8, 6)
+        addRow(this, 0, ollamaBaseUrlLabel, ollamaBaseUrlField)
+        addRow(this, 1, ollamaModelLabel, ollamaModelField)
+        add(
+            JPanel().apply { isOpaque = false },
+            GridBagConstraints().apply {
+              gridx = 0
+              gridy = 2
+              gridwidth = 2
+              weightx = 1.0
+              weighty = 1.0
+              fill = GridBagConstraints.BOTH
+            },
+        )
       }
-      ScreenTranslationProvider.OPENAI_COMPATIBLE -> {
-        apiKeyField.toolTipText = "OpenAI API key"
-        modelField.toolTipText =
-            "Optional model override (defaults to ${ScreenTranslationSettings.DEFAULT_OPENAI_MODEL})"
-      }
-      ScreenTranslationProvider.OLLAMA -> {
-        baseUrlField.toolTipText =
-            "Ollama endpoint URL (defaults to ${ScreenTranslationSettings.DEFAULT_OLLAMA_BASE_URL})"
-        modelField.toolTipText =
-            "Ollama vision model (defaults to ${ScreenTranslationSettings.DEFAULT_OLLAMA_MODEL})"
-      }
-    }
-    revalidate()
-    repaint()
-  }
 
   private fun createRowLabel(labelText: String, component: java.awt.Component): JLabel =
       JLabel(labelText).apply {
@@ -345,8 +445,14 @@ internal class ScreenTranslationSettingsPanel(
         labelFor = component
       }
 
-  private fun addRow(row: Int, label: JLabel, component: java.awt.Component) {
-    add(
+  private fun addRow(
+      container: JPanel,
+      row: Int,
+      label: JLabel,
+      component: java.awt.Component,
+      fieldGridWidth: Int = 1,
+  ) {
+    container.add(
         label,
         GridBagConstraints().apply {
           gridx = 0
@@ -359,12 +465,12 @@ internal class ScreenTranslationSettingsPanel(
           insets = Insets(4, 4, 4, 4)
         },
     )
-    add(
+    container.add(
         component,
         GridBagConstraints().apply {
           gridx = 1
           gridy = row
-          gridwidth = 2
+          gridwidth = fieldGridWidth
           weightx = 1.0
           weighty = 0.0
           anchor = GridBagConstraints.LINE_START
@@ -375,12 +481,13 @@ internal class ScreenTranslationSettingsPanel(
   }
 
   private fun addApiKeyRow(
+      container: JPanel,
       row: Int,
       label: JLabel,
       field: java.awt.Component,
       button: java.awt.Component,
   ) {
-    add(
+    container.add(
         label,
         GridBagConstraints().apply {
           gridx = 0
@@ -393,7 +500,7 @@ internal class ScreenTranslationSettingsPanel(
           insets = Insets(4, 4, 4, 4)
         },
     )
-    add(
+    container.add(
         field,
         GridBagConstraints().apply {
           gridx = 1
@@ -406,7 +513,7 @@ internal class ScreenTranslationSettingsPanel(
           insets = Insets(4, 4, 4, 4)
         },
     )
-    add(
+    container.add(
         button,
         GridBagConstraints().apply {
           gridx = 2
