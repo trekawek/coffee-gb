@@ -287,6 +287,35 @@ class ScreenTranslationTest {
     assertEquals(4, detectedGrid.size)
     assertEquals(2, detectedGrid.count { it.x1 < 40 })
     assertEquals(2, detectedGrid.count { it.x1 > 70 })
+
+    // Verify a 3-line bottom RPG dialogue box with dakuten rows (2px above lines 1 and 3) expands
+    // to cover the dakuten and merges into one full-sentence dialogue region.
+    val dialogueRgb = IntArray(160 * 144) { 0xF8E0B0 }
+    for (baseY in intArrayOf(96, 112, 128)) {
+      for (y in baseY..(baseY + 7)) {
+        for (x in 8..108) {
+          if (((x + y) and 1) == 0) {
+            dialogueRgb[y * 160 + x] = 0x201850
+          }
+        }
+      }
+    }
+    // Dakuten marks 2..3 rows above line 1 (y=93..94) and line 3 (y=125..126)
+    for (y in 93..94) {
+      dialogueRgb[y * 160 + 85] = 0x201850
+      dialogueRgb[y * 160 + 87] = 0x201850
+      dialogueRgb[y * 160 + 109] = 0x201850
+      dialogueRgb[y * 160 + 111] = 0x201850
+    }
+    for (y in 125..126) {
+      dialogueRgb[y * 160 + 69] = 0x201850
+      dialogueRgb[y * 160 + 71] = 0x201850
+    }
+    val detectedDialogue =
+        HttpScreenTranslationClient.detectCandidateTextBands(dialogueRgb, 160, 144)
+    assertEquals(1, detectedDialogue.size)
+    assertEquals(92, detectedDialogue.single().y1)
+    assertEquals(135, detectedDialogue.single().y2)
   }
 
   @Test
@@ -402,6 +431,7 @@ class ScreenTranslationTest {
 
     try {
       onEdt {
+        val openedUris = mutableListOf<String>()
         val panel =
             ScreenTranslationSettingsPanel(
                 ScreenTranslationSettings(
@@ -411,11 +441,13 @@ class ScreenTranslationTest {
                     model = "qwen2.5vl:7b",
                     targetLanguage = "English",
                 ),
+                openUri = { uri -> openedUris += uri.toString() },
             )
         assertEquals("Screen translation settings", panel.accessibleContext.accessibleName)
-        // When Ollama is selected: API Key is hidden; Base URL and Model are visible.
+        // When Ollama is selected: API Key + Get API Key button are hidden; Base URL and Model are visible.
         assertFalse(panel.apiKeyLabel.isVisible)
         assertFalse(panel.apiKeyField.isVisible)
+        assertFalse(panel.getApiKeyButton.isVisible)
         assertTrue(panel.baseUrlLabel.isVisible)
         assertTrue(panel.baseUrlField.isVisible)
         assertTrue(panel.modelLabel.isVisible)
@@ -423,10 +455,13 @@ class ScreenTranslationTest {
         assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)
         assertEquals("qwen2.5vl:7b", panel.modelField.text)
 
-        // Switching provider from Ollama to OpenAI shows API Key + Model and hides Base URL.
+        // Switching provider from Ollama to OpenAI shows API Key + Get API Key + Model and hides Base URL.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.OPENAI_COMPATIBLE
         assertTrue(panel.apiKeyLabel.isVisible)
         assertTrue(panel.apiKeyField.isVisible)
+        assertTrue(panel.getApiKeyButton.isVisible)
+        panel.getApiKeyButton.doClick()
+        assertEquals(listOf("https://platform.openai.com/api-keys"), openedUris)
         assertFalse(panel.baseUrlLabel.isVisible)
         assertFalse(panel.baseUrlField.isVisible)
         assertTrue(panel.modelLabel.isVisible)
@@ -439,10 +474,16 @@ class ScreenTranslationTest {
         assertEquals("", switchedSettings.baseUrl)
         assertEquals("", switchedSettings.model)
 
-        // Switching to Gemini shows API Key + Model and hides Base URL.
+        // Switching to Gemini shows API Key + Get API Key + Model and hides Base URL.
         panel.providerCombo.selectedItem = ScreenTranslationProvider.GEMINI
         assertTrue(panel.apiKeyLabel.isVisible)
         assertTrue(panel.apiKeyField.isVisible)
+        assertTrue(panel.getApiKeyButton.isVisible)
+        panel.getApiKeyButton.doClick()
+        assertEquals(
+            listOf("https://platform.openai.com/api-keys", "https://aistudio.google.com/apikey"),
+            openedUris,
+        )
         assertFalse(panel.baseUrlLabel.isVisible)
         assertFalse(panel.baseUrlField.isVisible)
         assertTrue(panel.modelLabel.isVisible)
@@ -452,6 +493,7 @@ class ScreenTranslationTest {
         panel.providerCombo.selectedItem = ScreenTranslationProvider.OLLAMA
         assertFalse(panel.apiKeyLabel.isVisible)
         assertFalse(panel.apiKeyField.isVisible)
+        assertFalse(panel.getApiKeyButton.isVisible)
         assertTrue(panel.baseUrlLabel.isVisible)
         assertTrue(panel.baseUrlField.isVisible)
         assertEquals("http://gallifrey:11434/v1", panel.baseUrlField.text)

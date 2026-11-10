@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.swing.io.ScreenTranslationOverlay
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
+import java.awt.Desktop
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
@@ -14,6 +15,7 @@ import java.awt.Window
 import java.awt.event.KeyEvent
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.URI
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -21,6 +23,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.BorderFactory
 import javax.swing.DefaultListCellRenderer
+import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JLabel
@@ -75,6 +78,7 @@ private enum class TranslationSettingsDecision {
 internal class ScreenTranslationSettingsPanel(
     initial: ScreenTranslationSettings,
     private val defaults: ScreenTranslationSettings = ScreenTranslationSettings(),
+    private val openUri: (URI) -> Unit = ::openBrowserUri,
 ) : JPanel(GridBagLayout()), DesktopThemeRefreshHook {
   private val providerDrafts = mutableMapOf<ScreenTranslationProvider, Pair<String, String>>()
   private var activeProvider: ScreenTranslationProvider = initial.provider
@@ -119,9 +123,21 @@ internal class ScreenTranslationSettingsPanel(
       }
 
   val apiKeyField =
-      JPasswordField(initial.apiKey, 28).apply {
+      JPasswordField(initial.apiKey, 24).apply {
         getAccessibleContext().accessibleName = "Vision API key"
         toolTipText = "API key for Google Gemini or OpenAI"
+      }
+
+  val getApiKeyButton =
+      JButton("Get API Key…").apply {
+        getAccessibleContext().accessibleName = "Get API key in browser"
+        addActionListener {
+          val provider =
+              (providerCombo.selectedItem as? ScreenTranslationProvider)
+                  ?: ScreenTranslationProvider.GEMINI
+          val url = provider.apiKeyCreationUrl ?: return@addActionListener
+          runCatching { openUri(URI.create(url)) }
+        }
       }
 
   val baseUrlField =
@@ -170,7 +186,7 @@ internal class ScreenTranslationSettingsPanel(
         GridBagConstraints().apply {
           gridx = 0
           gridy = row++
-          gridwidth = 2
+          gridwidth = 3
           weightx = 1.0
           fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.LINE_START
@@ -178,7 +194,7 @@ internal class ScreenTranslationSettingsPanel(
         },
     )
     addRow(row++, providerLabel, providerCombo)
-    addRow(row++, apiKeyLabel, apiKeyField)
+    addApiKeyRow(row++, apiKeyLabel, apiKeyField, getApiKeyButton)
     addRow(row++, baseUrlLabel, baseUrlField)
     addRow(row++, modelLabel, modelField)
     addRow(row++, targetLanguageLabel, targetLanguageField)
@@ -187,7 +203,7 @@ internal class ScreenTranslationSettingsPanel(
         GridBagConstraints().apply {
           gridx = 1
           gridy = row++
-          gridwidth = 1
+          gridwidth = 2
           weightx = 1.0
           fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.LINE_START
@@ -199,7 +215,7 @@ internal class ScreenTranslationSettingsPanel(
         GridBagConstraints().apply {
           gridx = 0
           gridy = row
-          gridwidth = 2
+          gridwidth = 3
           weightx = 1.0
           weighty = 1.0
           fill = GridBagConstraints.BOTH
@@ -293,6 +309,9 @@ internal class ScreenTranslationSettingsPanel(
   private fun updateProviderVisibilityAndHints(provider: ScreenTranslationProvider) {
     apiKeyLabel.isVisible = provider.requiresApiKey
     apiKeyField.isVisible = provider.requiresApiKey
+    getApiKeyButton.isVisible = provider.apiKeyCreationUrl != null
+    getApiKeyButton.toolTipText =
+        provider.apiKeyCreationUrl?.let { "Open ${provider.displayName} API key page ($it)" }
     baseUrlLabel.isVisible = provider.supportsCustomBaseUrl
     baseUrlField.isVisible = provider.supportsCustomBaseUrl
     modelLabel.isVisible = provider.supportsModelSelection
@@ -345,6 +364,40 @@ internal class ScreenTranslationSettingsPanel(
         GridBagConstraints().apply {
           gridx = 1
           gridy = row
+          gridwidth = 2
+          weightx = 1.0
+          weighty = 0.0
+          anchor = GridBagConstraints.LINE_START
+          fill = GridBagConstraints.HORIZONTAL
+          insets = Insets(4, 4, 4, 4)
+        },
+    )
+  }
+
+  private fun addApiKeyRow(
+      row: Int,
+      label: JLabel,
+      field: java.awt.Component,
+      button: java.awt.Component,
+  ) {
+    add(
+        label,
+        GridBagConstraints().apply {
+          gridx = 0
+          gridy = row
+          gridwidth = 1
+          weightx = 0.0
+          weighty = 0.0
+          anchor = GridBagConstraints.LINE_START
+          fill = GridBagConstraints.NONE
+          insets = Insets(4, 4, 4, 4)
+        },
+    )
+    add(
+        field,
+        GridBagConstraints().apply {
+          gridx = 1
+          gridy = row
           gridwidth = 1
           weightx = 1.0
           weighty = 0.0
@@ -353,6 +406,30 @@ internal class ScreenTranslationSettingsPanel(
           insets = Insets(4, 4, 4, 4)
         },
     )
+    add(
+        button,
+        GridBagConstraints().apply {
+          gridx = 2
+          gridy = row
+          gridwidth = 1
+          weightx = 0.0
+          weighty = 0.0
+          anchor = GridBagConstraints.LINE_END
+          fill = GridBagConstraints.NONE
+          insets = Insets(4, 4, 4, 4)
+        },
+    )
+  }
+
+  companion object {
+    private fun openBrowserUri(uri: URI) {
+      if (Desktop.isDesktopSupported()) {
+        val desktop = Desktop.getDesktop()
+        if (desktop.isSupported(Desktop.Action.BROWSE)) {
+          desktop.browse(uri)
+        }
+      }
+    }
   }
 }
 

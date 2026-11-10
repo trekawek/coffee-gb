@@ -232,11 +232,11 @@ internal class HttpScreenTranslationClient(
             ""
           }
       return """
-        Locate every visible non-$targetLanguage text block (title banners, menu options, description/dialogue lines) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
+        Locate every visible non-$targetLanguage text block (title banners, menu options, dialogue boxes, description lines) on this retro Game Boy screen (${sourceWidth}x${sourceHeight} logical aspect) and translate its meaning into natural $targetLanguage.
         ${candidateSection}Rules:
-        - Check every numbered candidate text block on the screen, including vertical menus on the left or right AND description/dialogue lines at the bottom. Put each distinct menu option, title banner, or description line in its own region, and do not skip any non-$targetLanguage menu item or line.
+        - Check every candidate text block on the screen, including vertical/grid menus AND bottom dialogue/description boxes. Keep each distinct menu option in its own region, and when a candidate block spans a multi-line dialogue box, read all lines inside that box together (including dakuten/handakuten diacritics) and translate the full sentence coherently as one region for that candidate block.
         - Include `"id"` (when candidate blocks are listed above) and its matching `"bbox_2d"` (`[x1, y1, x2, y2]` in 0..1000 normalized screen coordinates) for each translated text block, and omit blocks that are already in $targetLanguage (such as PUSH START or copyright lines like ©1996).
-        - Retro Japanese games often write common vocabulary and names in hiragana/katakana (e.g. ポケモン = Pokémon, リュック = Bag, ポケギア = Pokégear, クリス = Kris, レポート = Save, せってい = Options, とじる = Exit, いっしょにいる = In Party, たいきょく = Play Match, つめれんじゅ = Puzzle Mode, せん手 = First Move, はじめる = Start, さいしょからはじめる = New Game, せっていをかえる = Options). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
+        - Retro Japanese games often write common vocabulary and names in hiragana/katakana and place dakuten/handakuten (゛/゜) on the scanlines just above the kana tile (e.g. ポケモン = Pokémon, リュック = Bag, ポケギア = Pokégear, クリス = Kris, レポート = Save, せってい = Options, とじる = Exit, いっしょにいる = In Party, たいきょく = Play Match, つめれんじゅ = Puzzle Mode, せん手 = First Move, はじめる = Start, さいしょからはじめる = New Game, せっていをかえる = Options, せかいじゅうで おこっている こんらんは = the chaos happening all over the world, おまえのあに = your elder brother). Always translate their meaning into $targetLanguage; never output romaji/phonetics.
         - Return ONLY valid JSON (no markdown fences) matching:
         {"regions":[{"id":1,"bbox_2d":[x1,y1,x2,y2],"original":"...","translation":"..."}]}
         - If there is no non-$targetLanguage text on screen, return {"regions":[]}.
@@ -252,6 +252,7 @@ internal class HttpScreenTranslationClient(
         scale: Int,
     ) {
       if (width <= 0 || height <= 0 || rgb.size < width * height || scale < 1) return
+      if (candidateBands.size <= 1) return
       for ((idx, band) in candidateBands.withIndex()) {
         val bx1 = (band.x1 * scale - 2).coerceAtLeast(0)
         val by1 = (band.y1 * scale).coerceAtLeast(0)
@@ -445,16 +446,130 @@ internal class HttpScreenTranslationClient(
       }
       completed.addAll(active)
 
-      return completed
-          .map { band -> trimSparseBandEdges(band, trans, width) }
-          .filter { band -> isTextLikeBand(band, rgb, trans, width) }
-          .sortedWith { a, b ->
-            if (abs(a.y1 - b.y1) <= 6) {
-              a.x1.compareTo(b.x1)
-            } else {
-              a.y1.compareTo(b.y1)
+      val filtered =
+          completed
+              .map { band -> trimSparseBandEdges(band, trans, width) }
+              .filter { band -> isTextLikeBand(band, rgb, trans, width) }
+              .sortedWith { a, b ->
+                if (abs(a.y1 - b.y1) <= 6) {
+                  a.x1.compareTo(b.x1)
+                } else {
+                  a.y1.compareTo(b.y1)
+                }
+              }
+      val withDiacritics = expandDiacriticRows(filtered, trans, width)
+      return mergeMultiLineDialogueBands(withDiacritics, width, height)
+    }
+
+    private fun expandDiacriticRows(
+        bands: List<DetectedTextBand>,
+        trans: Array<BooleanArray>,
+        width: Int,
+    ): List<DetectedTextBand> {
+      if (bands.isEmpty()) return bands
+      return bands.map { band ->
+        if (band.height !in 5..10 || band.y1 < 3) {
+          band
+        } else {
+          var prevBottom = -2
+          for (other in bands) {
+            if (other !== band &&
+                other.y2 < band.y1 &&
+                min(band.x2, other.x2) >= max(band.x1, other.x1)) {
+              prevBottom = max(prevBottom, other.y2)
             }
           }
+          val minCheckY = max(1, max(prevBottom + 2, band.y1 - 3))
+          var topY = band.y1
+          var maxTransX = band.x2
+          val maxCheckX = min(width - 1, band.x2 + 2)
+          for (y in (band.y1 - 1) downTo minCheckY) {
+            var rowTrans = 0
+            var rowMaxX = band.x2
+            for (x in band.x1..maxCheckX) {
+              if (trans[x][y]) {
+                rowTrans++
+                rowMaxX = max(rowMaxX, x)
+              }
+            }
+            if (rowTrans in 1..20) {
+              topY = y
+              maxTransX = max(maxTransX, rowMaxX)
+            } else if (rowTrans > 20) {
+              topY = band.y1
+              break
+            }
+          }
+          if (topY < band.y1) {
+            val guardY = topY - 1
+            var guardTrans = 0
+            if (guardY >= 0) {
+              for (x in band.x1..maxCheckX) {
+                if (trans[x][guardY]) guardTrans++
+              }
+            }
+            if (guardTrans == 0) {
+              band.copy(y1 = (topY - 1).coerceAtLeast(0), x2 = maxTransX)
+            } else {
+              band
+            }
+          } else {
+            band
+          }
+        }
+      }
+    }
+
+    private fun mergeMultiLineDialogueBands(
+        bands: List<DetectedTextBand>,
+        width: Int,
+        height: Int,
+    ): List<DetectedTextBand> {
+      if (bands.size < 2) return bands
+      val result = mutableListOf<DetectedTextBand>()
+      val minWideDialogueWidth = (width * 0.56).roundToInt()
+      var i = 0
+      while (i < bands.size) {
+        val first = bands[i]
+        if (first.y1 >= height / 2 && first.x1 <= 24 && first.height in 5..13) {
+          val group = mutableListOf(first)
+          var j = i + 1
+          while (j < bands.size && group.size < 4) {
+            val prev = group.last()
+            val curr = bands[j]
+            val vGap = curr.y1 - prev.y2 - 1
+            if (abs(curr.x1 - first.x1) <= 6 &&
+                curr.height in 5..13 &&
+                vGap in 1..12) {
+              group.add(curr)
+              j++
+            } else {
+              break
+            }
+          }
+          val maxGroupWidth = group.maxOf { it.width }
+          val groupTop = group.first().y1
+          val groupBottom = group.last().y2
+          val hasSideOverlap =
+              bands.any { other ->
+                other !in group && other.y1 <= groupBottom && other.y2 >= groupTop
+              }
+          if (group.size >= 2 && maxGroupWidth >= minWideDialogueWidth && !hasSideOverlap) {
+            val minX1 = group.minOf { it.x1 }
+            val maxX2 =
+                max(
+                    group.maxOf { it.x2 },
+                    min(width - 16, (width * 0.89).roundToInt()),
+                )
+            result.add(DetectedTextBand(x1 = minX1, y1 = groupTop, x2 = maxX2, y2 = groupBottom))
+            i = j
+            continue
+          }
+        }
+        result.add(first)
+        i++
+      }
+      return result
     }
 
     private fun trimSparseBandEdges(
@@ -754,7 +869,13 @@ internal class HttpScreenTranslationClient(
         return alignStackedPeerColumns(regions, sourceWidth)
       }
 
-      val sortedRegions = regions.sortedWith(compareBy({ it.y() }, { it.x() }))
+      val sortedRegions =
+          consolidateDialogueBandRegions(
+              regions.sortedWith(compareBy({ it.y() }, { it.x() })),
+              candidateBands,
+              sourceWidth,
+              sourceHeight,
+          )
 
       // Case 1: Single region that merges 2+ closely spaced lines inside one menu/dialogue box.
       if (sortedRegions.size == 1 && candidateBands.size >= 2) {
@@ -854,6 +975,46 @@ internal class HttpScreenTranslationClient(
       }
 
       return alignStackedPeerColumns(sortedRegions, sourceWidth)
+    }
+
+    private fun consolidateDialogueBandRegions(
+        regions: List<ScreenTranslationOverlay.Region>,
+        candidateBands: List<DetectedTextBand>,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ): List<ScreenTranslationOverlay.Region> {
+      if (regions.size < 2 || candidateBands.isEmpty()) return regions
+      val minWideDialogueWidth = (sourceWidth * 0.56).roundToInt()
+      val dialogueBands =
+          candidateBands.filter { band ->
+            band.y1 >= sourceHeight / 2 && band.height >= 20 && band.width >= minWideDialogueWidth
+          }
+      if (dialogueBands.isEmpty()) return regions
+
+      val remaining = regions.toMutableList()
+      val merged = mutableListOf<ScreenTranslationOverlay.Region>()
+      for (band in dialogueBands) {
+        val inside =
+            remaining.filter { r ->
+              val cy = r.y() + r.height() / 2.0
+              cy >= band.y1 - 4 && cy <= band.y2 + 4
+            }
+        if (inside.size >= 2) {
+          remaining.removeAll(inside)
+          val combinedText = inside.joinToString(" ") { it.text().trim() }.trim()
+          val combinedOriginal =
+              inside.map { it.originalText().trim() }.filter { it.isNotEmpty() }.joinToString(" ")
+          merged.add(
+              snapRegionToBand(
+                  ScreenTranslationOverlay.Region(0, 0, 8, 7, combinedText, combinedOriginal),
+                  band,
+                  sourceWidth,
+                  sourceHeight,
+              ))
+        }
+      }
+      if (merged.isEmpty()) return regions
+      return (remaining + merged).sortedWith(compareBy({ it.y() }, { it.x() }))
     }
 
     private fun clusterAdjacentParagraphBands(

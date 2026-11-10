@@ -9,24 +9,28 @@ internal enum class ScreenTranslationProvider(
     val requiresApiKey: Boolean,
     val supportsCustomBaseUrl: Boolean,
     val supportsModelSelection: Boolean,
+    val apiKeyCreationUrl: String?,
 ) {
   GEMINI(
       displayName = "Google Gemini",
       requiresApiKey = true,
       supportsCustomBaseUrl = false,
       supportsModelSelection = true,
+      apiKeyCreationUrl = "https://aistudio.google.com/apikey",
   ),
   OPENAI_COMPATIBLE(
       displayName = "OpenAI",
       requiresApiKey = true,
       supportsCustomBaseUrl = false,
       supportsModelSelection = true,
+      apiKeyCreationUrl = "https://platform.openai.com/api-keys",
   ),
   OLLAMA(
       displayName = "Ollama (Local)",
       requiresApiKey = false,
       supportsCustomBaseUrl = true,
       supportsModelSelection = true,
+      apiKeyCreationUrl = null,
   ),
 }
 
