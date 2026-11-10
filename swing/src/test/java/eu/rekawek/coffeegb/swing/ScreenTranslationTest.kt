@@ -183,7 +183,7 @@ class ScreenTranslationTest {
     val geminiResult = geminiClient.translate(frame, geminiConfig)
     assertNotNull(capturedRequest)
     assertEquals(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
         capturedRequest!!.uri.toString(),
     )
     assertEquals("AIzaTest", capturedRequest!!.headers["x-goog-api-key"])
@@ -192,8 +192,8 @@ class ScreenTranslationTest {
     assertEquals(8, geminiResult.regions.single().x())
     assertEquals(96, geminiResult.regions.single().y())
 
-    // Verify Gemini 503 (high demand) automatically falls back to gemini-3.5-flash-lite and ignores
-    // thinking parts (thought: true).
+    // Verify Gemini 503 (high demand) automatically falls back to gemini-flash-lite-latest and
+    // ignores thinking parts (thought: true).
     val attemptedUris = mutableListOf<String>()
     val fallbackClient =
         HttpScreenTranslationClient(
@@ -230,8 +230,8 @@ class ScreenTranslationTest {
     val fallbackResult = fallbackClient.translate(frame, geminiConfig)
     assertEquals(
         listOf(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
         ),
         attemptedUris,
     )
