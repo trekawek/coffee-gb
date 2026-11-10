@@ -78,7 +78,7 @@ internal data class ScreenTranslationSettings(
     val effectiveGeminiKey =
         cleanGeminiKey.ifEmpty {
           if (!hasPerProviderKey &&
-              (provider == ScreenTranslationProvider.GEMINI || legacyKey.startsWith("AIza"))) {
+              (provider == ScreenTranslationProvider.GEMINI || isGeminiKeyPrefix(legacyKey))) {
             legacyKey
           } else {
             ""
@@ -88,7 +88,7 @@ internal data class ScreenTranslationSettings(
         cleanOpenAiKey.ifEmpty {
           if (!hasPerProviderKey &&
               (provider == ScreenTranslationProvider.OPENAI_COMPATIBLE ||
-                  (legacyKey.isNotEmpty() && !legacyKey.startsWith("AIza")))) {
+                  (legacyKey.isNotEmpty() && !isGeminiKeyPrefix(legacyKey)))) {
             legacyKey
           } else {
             ""
@@ -269,6 +269,11 @@ internal data class ScreenTranslationSettings(
           lower.startsWith("minicpm") ||
           lower.startsWith("moondream")
     }
+
+    internal fun isGeminiKeyPrefix(apiKey: String): Boolean {
+      val trimmed = apiKey.trim()
+      return trimmed.startsWith("AIza") || trimmed.startsWith("AQ.")
+    }
   }
 }
 
@@ -354,7 +359,7 @@ internal class ScreenTranslationPreferencesStore(
       when {
         ScreenTranslationSettings.isOllamaEndpoint(baseUrl) ||
             ScreenTranslationSettings.isOllamaModel(model) -> ScreenTranslationProvider.OLLAMA
-        apiKey.trim().startsWith("AIza") -> ScreenTranslationProvider.GEMINI
+        ScreenTranslationSettings.isGeminiKeyPrefix(apiKey) -> ScreenTranslationProvider.GEMINI
         apiKey.isNotBlank() -> ScreenTranslationProvider.OPENAI_COMPATIBLE
         baseUrl.contains("openai", ignoreCase = true) ->
             ScreenTranslationProvider.OPENAI_COMPATIBLE

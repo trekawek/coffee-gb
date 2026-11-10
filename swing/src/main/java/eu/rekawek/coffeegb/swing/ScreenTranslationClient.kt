@@ -91,7 +91,7 @@ internal fun interface ScreenTranslationHttpTransport {
 internal class JdkScreenTranslationHttpTransport(
     private val client: HttpClient =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(),
-    private val requestTimeout: Duration = Duration.ofSeconds(120),
+    private val requestTimeout: Duration = Duration.ofSeconds(15),
 ) : ScreenTranslationHttpTransport {
   override fun post(request: ScreenTranslationHttpRequest): ScreenTranslationHttpResponse {
     val builder =
@@ -157,14 +157,13 @@ internal class HttpScreenTranslationClient(
             candidateBands = candidateBands,
         )
 
-    val httpRequest =
+    val response =
         when (config.protocol) {
-          ResolvedTranslationProtocol.GEMINI -> buildGeminiRequest(config, prompt, base64Png)
+          ResolvedTranslationProtocol.GEMINI ->
+              executeGeminiWithFallback(config, prompt, base64Png)
           ResolvedTranslationProtocol.OPENAI_COMPATIBLE ->
-              buildOpenAiRequest(config, prompt, base64Png)
+              transport.post(buildOpenAiRequest(config, prompt, base64Png))
         }
-
-    val response = transport.post(httpRequest)
     if (response.statusCode !in 200..299) {
       val detail = extractErrorDetail(response.body)
       throw IOException(
@@ -186,8 +185,63 @@ internal class HttpScreenTranslationClient(
     )
   }
 
+  private fun executeGeminiWithFallback(
+      config: ResolvedScreenTranslationConfig,
+      prompt: String,
+      base64Png: String,
+  ): ScreenTranslationHttpResponse {
+    val modelsToTry =
+        buildList {
+          add(config.model)
+          for (fallback in GEMINI_FALLBACK_MODELS) {
+            if (none { normalizeGeminiModelName(it) == normalizeGeminiModelName(fallback) }) {
+              add(fallback)
+            }
+          }
+        }
+    var lastResponse: ScreenTranslationHttpResponse? = null
+    var lastError: IOException? = null
+    for ((index, model) in modelsToTry.withIndex()) {
+      val request = buildGeminiRequest(config.copy(model = model), prompt, base64Png)
+      val attempt = runCatching { transport.post(request) }
+      val response = attempt.getOrNull()
+      if (response != null) {
+        if (response.statusCode in 200..299) {
+          return response
+        }
+        lastResponse = response
+        // Do not retry on auth/billing/invalid-argument client errors (400..403).
+        val retryableStatus =
+            response.statusCode == 404 ||
+                response.statusCode == 408 ||
+                response.statusCode == 429 ||
+                response.statusCode in 500..599
+        if (!retryableStatus || index == modelsToTry.lastIndex) {
+          return response
+        }
+      } else {
+        val cause = attempt.exceptionOrNull()
+        if (cause is InterruptedException) throw cause
+        lastError =
+            (cause as? IOException) ?: IOException(cause?.message ?: "Gemini request failed", cause)
+        if (index == modelsToTry.lastIndex) {
+          throw lastError
+        }
+      }
+    }
+    return lastResponse ?: throw (lastError ?: IOException("Gemini request failed"))
+  }
+
   companion object {
     const val DEFAULT_UPSCALE_FACTOR = 2
+    internal val GEMINI_FALLBACK_MODELS =
+        listOf(
+            "models/gemini-3.5-flash-lite",
+            "models/gemini-flash-lite-latest",
+        )
+
+    private fun normalizeGeminiModelName(model: String): String =
+        model.trim().removePrefix("models/")
 
     private val PNG_SIGNATURE = byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10)
     private val IHDR = "IHDR".toByteArray(StandardCharsets.US_ASCII)
@@ -775,10 +829,16 @@ internal class HttpScreenTranslationClient(
       val firstCandidate = candidates.firstOrNull() as? Map<*, *> ?: return ""
       val content = firstCandidate["content"] as? Map<*, *> ?: return ""
       val parts = content["parts"] as? List<*> ?: return ""
-      return parts
-          .mapNotNull { (it as? Map<*, *>)?.get("text") as? String }
-          .joinToString("\n")
-          .trim()
+      val nonThoughtTexts =
+          parts.mapNotNull { part ->
+            val map = part as? Map<*, *> ?: return@mapNotNull null
+            if (map["thought"] == true) null else map["text"] as? String
+          }
+      val texts =
+          nonThoughtTexts.ifEmpty {
+            parts.mapNotNull { (it as? Map<*, *>)?.get("text") as? String }
+          }
+      return texts.joinToString("\n").trim()
     }
 
     internal fun extractOpenAiContentText(responseBody: String): String {
@@ -818,10 +878,17 @@ internal class HttpScreenTranslationClient(
       }
 
       val rawRegions = parsed["regions"] as? List<*> ?: emptyList<Any?>()
+      val uniqueBandIds =
+          rawRegions
+              .mapNotNull { (it as? Map<*, *>)?.get("id")?.let(::numberOrNull)?.roundToInt() }
+              .groupingBy { it }
+              .eachCount()
+              .filterValues { it == 1 }
+              .keys
       val parsedRegions =
           rawRegions.mapNotNull { item ->
             val map = item as? Map<*, *> ?: return@mapNotNull null
-            parseRegion(map, sourceWidth, sourceHeight, candidateBands)
+            parseRegion(map, sourceWidth, sourceHeight, candidateBands, uniqueBandIds)
           }
       val regions =
           alignRegionsToCandidateBands(
@@ -1173,8 +1240,10 @@ internal class HttpScreenTranslationClient(
         sourceWidth: Int,
         sourceHeight: Int,
         candidateBands: List<DetectedTextBand> = emptyList(),
+        uniqueBandIds: Set<Int> = emptySet(),
     ): ScreenTranslationOverlay.Region? {
-      val bboxList = (map["bbox_2d"] ?: map["box_2d"] ?: map["bbox"]) as? List<*>
+      val rawBboxList = (map["bbox_2d"] ?: map["box_2d"] ?: map["bbox"]) as? List<*>
+      val bboxList = (rawBboxList?.firstOrNull() as? List<*>) ?: rawBboxList
       val extraOriginal =
           if (bboxList != null && bboxList.size >= 6) (bboxList[4] as? String)?.trim() else null
       val extraTranslation =
@@ -1206,6 +1275,14 @@ internal class HttpScreenTranslationClient(
           } else {
             null
           }
+      if (idBand != null && bandId in uniqueBandIds) {
+        return snapRegionToBand(
+            ScreenTranslationOverlay.Region(0, 0, 8, 7, translation, original),
+            idBand,
+            sourceWidth,
+            sourceHeight,
+        )
+      }
 
       val scaledX: Double
       val scaledY: Double

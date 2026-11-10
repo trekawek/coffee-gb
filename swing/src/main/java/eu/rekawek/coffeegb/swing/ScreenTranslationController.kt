@@ -670,7 +670,11 @@ internal class ScreenTranslationController(
                 onFailure = { error ->
                   resumeIfPausedByTranslation()
                   val reason = error.message?.takeIf { it.isNotBlank() } ?: "Request failed"
-                  display.showTransientNotification("Translation failed")
+                  val shortReason =
+                      reason
+                          .removePrefix("Translation service returned ")
+                          .take(56)
+                  display.showTransientNotification("Translation failed: $shortReason")
                   onWarningMessage("Screen translation failed: $reason")
                 },
             )
