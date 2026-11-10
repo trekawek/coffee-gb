@@ -82,6 +82,7 @@ Default keyboard controls:
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Take screenshot | <kbd>F12</kbd> |
+| Translate screen | <kbd>Ctrl/Cmd</kbd>+<kbd>T</kbd> |
 | Start input recording | <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
 | Toggle fullscreen | <kbd>F11</kbd> |
@@ -155,6 +156,27 @@ and selects **Join game**. Netplay uses a direct, unencrypted TCP connection, so
 play only with people and networks you trust. When a game is running under an
 SGB or SGB2 profile, starting or joining netplay restarts that game in DMG mode
 for the current session without changing the saved hardware-profile preference.
+
+## Screen translation
+
+<p align="center">
+  <img src="doc/screen-translation.png" width="486" alt="Coffee GB translating Star Ocean: Blue Sphere">
+</p>
+
+Press <kbd>Ctrl/Cmd</kbd>+<kbd>T</kbd> (or choose **View > Translate Screen**) to
+translate on-screen dialogue and menus directly over the game viewport. Configure
+your preferred provider in **File > Preferences… > Translation**:
+
+- **Google Gemini**: create a free or paid API key in
+  [Google AI Studio](https://aistudio.google.com/apikey) and paste it into the
+  **Google Gemini** tab.
+- **OpenAI**: create an API key in the
+  [OpenAI Platform dashboard](https://platform.openai.com/api-keys) and paste it
+  into the **OpenAI** tab.
+- **Ollama (Local)**: no API key is required. Install [Ollama](https://ollama.com/),
+  pull a vision-capable model (for example `ollama pull qwen2.5vl:7b`), and keep
+  the server URL set to `http://127.0.0.1:11434/v1` (or point it at another machine
+  on your LAN).
 
 ## Project history
 
