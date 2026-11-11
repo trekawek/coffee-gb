@@ -142,6 +142,8 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
+                    <!-- The assembled JAR merges dependencies and is not a Java module. -->
+                    <useModulePath>false</useModulePath>
                     <includes>
                         <include>**/NativeArtifactIT.java</include>
                         <include>**/NativePackageIT.java</include>
