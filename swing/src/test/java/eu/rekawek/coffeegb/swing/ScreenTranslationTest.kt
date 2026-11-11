@@ -17,7 +17,6 @@ import java.awt.Color
 import java.awt.Font
 import java.awt.image.BufferedImage
 import java.io.File
-import java.nio.file.Files
 import java.time.Duration
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.TimeUnit
@@ -662,10 +661,11 @@ class ScreenTranslationTest {
 
   @Test
   fun `live OpenAI gpt_4o_mini translates Japanese Game Boy screen and aligns labels`() {
-    val apiKeyFile = File("/home/newton/dev/openai-api")
-    Assume.assumeTrue("OpenAI key file not present", apiKeyFile.isFile)
-    val apiKey = Files.readString(apiKeyFile.toPath()).trim()
-    Assume.assumeTrue("OpenAI key is blank", apiKey.isNotEmpty())
+    val apiKey = System.getenv("COFFEE_GB_LIVE_OPENAI_API_KEY")?.trim().orEmpty()
+    Assume.assumeTrue(
+        "Set COFFEE_GB_LIVE_OPENAI_API_KEY to run the live OpenAI test",
+        apiKey.isNotEmpty(),
+    )
 
     val frame = captureJapaneseRomOrSyntheticFrame()
     val config =
