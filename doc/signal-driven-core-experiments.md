@@ -848,7 +848,7 @@ explicit falsifiers.
 
 An isolated production-cut attempt makes that boundary quantitative. The following numbers are
 **discarded-worktree measurements**, not branch-reproducible acceptance evidence: both candidates
-were reverted and `/tmp/coffee-gb-noise-production-cut` is clean at base `49e1276b`. The correctness
+were reverted and `coffee-gb-noise-production-cut` is clean at base `49e1276b`. The correctness
 run used:
 
 ```sh

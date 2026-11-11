@@ -2,9 +2,9 @@
 
 Implementation spec for the emulator's sound package, for **DMG only** (not CGB).
 Derived from Furrtek's reverse-engineered DMG-CPU-B schematics
-(`/home/newton/dev/dmg-schematics/dmg_cpu_b/*.kicad_sch`, signal/cell names quoted below are
+(`dmg_cpu_b/*.kicad_sch` in the dmg-schematics repository, signal/cell names quoted below are
 the actual labels in those sheets), the wavedrom timing diagrams in
-`/home/newton/dev/dmg-schematics/doc/wave_diagrams.html` (sections *APU Clocks*, *APU Channel 1*,
+`doc/wave_diagrams.html` in that repository (sections *APU Clocks*, *APU Channel 1*,
 *APU Channel 3 - Wave RAM*), and the behaviors verified on real DMG hardware by blargg's
 `dmg_sound-2` test ROMs (01-registers … 12-wave write while on).
 

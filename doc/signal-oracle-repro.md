@@ -66,7 +66,7 @@ Do not substitute a repository or home-directory path for these artifact roots.
 | SameBoy | `https://github.com/LIJI32/SameBoy.git` at `213a12ce93d66b105a113debd9396306066a7cfc` | **VERIFIED** clean tracked tree, local harness build, and result | Expat for `Core/`; harness remains local because it synthesizes a probe image |
 | SM83 binutils | `https://github.com/msinger/binutils-sm83.git` at `32a405949ca49563370108273a10285a17ade344` | **VERIFIED** revision, config arguments, tool versions, and probe rebuild | Build tool only; generated probe artifacts remain external |
 | Icarus Verilog | `https://github.com/steveicarus/iverilog.git` at `1d2aa1b6fa0add7723c99d624a9df01d3dec9282` | **VERIFIED** revision and installed version `14.0 (devel) (1d2aa1b)`; HALT gate compile and three runs completed, while the retained OAM compile below was only dry-run | GPLv2 tool; VVP output remains external |
-| FST converter source | `https://github.com/gtkwave/gtkwave.git` at `7d7b4db9e2f5485afe2aeeab0ad112f5b6a9b94b` | **OBSERVED** nearby checkout and `/tmp/coffee-gb-fst2vcd`; binary-to-revision provenance is not cryptographically established | Tool and waveform remain external |
+| FST converter source | `https://github.com/gtkwave/gtkwave.git` at `7d7b4db9e2f5485afe2aeeab0ad112f5b6a9b94b` | **OBSERVED** nearby checkout and `coffee-gb-fst2vcd`; binary-to-revision provenance is not cryptographically established | Tool and waveform remain external |
 
 Recorded host: Linux `7.0.0-29-generic` x86-64, GCC `15.2.0`, GNU Make `4.4.1`, Git
 `2.53.0`. These versions describe the successful local run; they are not yet a minimum-version
@@ -356,7 +356,7 @@ physical DMG, and CGB remain explicit falsifiers.
 Status: **VERIFIED** at DMG-model revision
 `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5` with Icarus
 `14.0 (devel) (1d2aa1b)`. The isolated checkout was
-`/tmp/coffee-gb-dmg-sim-timer`. All external source, assembled probe images, generated VVP, and
+`coffee-gb-dmg-sim-timer`. All external source, assembled probe images, generated VVP, and
 terminal traces remained outside Coffee GB.
 
 The one tracked temporary patch is identified without embedding CC BY-SA source:
@@ -532,7 +532,7 @@ timestamp.
 
 ## DMG CH1 restart and serial-adder probe
 
-A **VERIFIED external gate-model run** in isolated checkout `/tmp/coffee-gb-dmg-sim-ch1` used
+A **VERIFIED external gate-model run** in isolated checkout `coffee-gb-dmg-sim-ch1` used
 revision `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`, Icarus 14.0-devel `1d2aa1b`, and both
 `TIMING=default` and `TIMING=nodelay`. The external harness modifies only
 `dmg_cpu_b_gameboy.sv` (136 insertions, 2 deletions); its binary-diff SHA-256 is
@@ -603,7 +603,7 @@ is production-differential only.
 Status: **VERIFIED** at DMG-model revision
 `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5` with Icarus
 `14.0 (devel) (1d2aa1b)`. All build products and traces remained in
-`/tmp/coffee-gb-halt-sim`; no external source, ROM image, save, waveform, or generated artifact was
+`coffee-gb-halt-sim`; no external source, ROM image, save, waveform, or generated artifact was
 copied into Coffee GB.
 
 The probe used an isolated clone so that the retained OAM experiment remained untouched. Its one
@@ -727,7 +727,7 @@ GB repository intentionally retains only this manifest and independently written
 
 Status: **VERIFIED external default- and nodelay-model traces with manual transition reduction**,
 not silicon evidence and not checker-verified automation. The isolated checkout is
-`/tmp/coffee-gb-dmg-sim-irq`, pinned at
+`coffee-gb-dmg-sim-irq`, pinned at
 `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`. Icarus was
 `14.0 (devel) (1d2aa1b)` and the SM83 assembler was GNU Binutils
 `2.31.1-sm83-r0`.
@@ -971,7 +971,7 @@ current patch but do not reconstruct it automatically.
 ### Tool builds
 
 The SM83 tool configuration below is **OBSERVED** in
-`/tmp/coffee-gb-binutils-sm83-build/config.log`; the final build/install commands are
+`coffee-gb-binutils-sm83-build/config.log`; the final build/install commands are
 **RECONSTRUCTED**:
 
 ```sh
@@ -1127,7 +1127,7 @@ relationships.
 
 The retained ordinary/PUSH traces establish sticky row selection and ordinary read feedback, but
 they cannot establish the fitted directional sample/write-back split. A separate **VERIFIED** packed
-probe in isolated checkout `/tmp/coffee-gb-dmg-sim-oam-directional` tested that boundary directly.
+probe in isolated checkout `coffee-gb-dmg-sim-oam-directional` tested that boundary directly.
 The checkout remained at `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`; the tracked diagnostic diff
 over `generic_sram.sv` and `dmg_cpu_b_gameboy.sv` has binary-diff SHA-256
 `dfe5eb724f03174f0e133b57947cb2f88e266cc2f2b9ed099b30bb66f160b2e0` and numstat `7/1` plus
@@ -1180,7 +1180,7 @@ checkout, the dynamic OAM claims are `OBSERVED`, not fully reproducible.
 ## STAT/LY gate waveform
 
 A dedicated **VERIFIED external gate-model run** replaced the earlier unretained STAT observation.
-It used isolated checkout `/tmp/coffee-gb-dmg-sim-stat`, detached at
+It used isolated checkout `coffee-gb-dmg-sim-stat`, detached at
 `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`, Icarus 14.0-devel `1d2aa1b`, and the retained
 binutils-sm83 `32a405949ca49563370108273a10285a17ade344`. The tracked instrumentation changes only
 `dmg_cpu_b_gameboy.sv` (51 insertions, 2 deletions): it moves `vid_dump` after wildcard declarations

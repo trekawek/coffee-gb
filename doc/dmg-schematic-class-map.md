@@ -1,7 +1,7 @@
 # DMG-CPU-B schematic to Coffee GB class map
 
-This document maps the complete internal DMG circuit source in the sibling
-`/home/newton/dev/dmg-schematics` checkout to Coffee GB's production model. It is an architecture
+This document maps the complete internal DMG circuit source in a
+`dmg-schematics` checkout to Coffee GB's production model. It is an architecture
 cross-reference, not a claim that Coffee GB is a gate-level transcription.
 
 The source examined here is the clean [dmg-schematics repository](https://github.com/msinger/dmg-schematics)
@@ -11,12 +11,12 @@ Furrtek's DMG-CPU-Inside work. The source is licensed
 [CC BY-SA 4.0](https://github.com/msinger/dmg-schematics/blob/02399f96e0893783c130cf6f03fad7a1148ae60a/LICENSE), while Coffee GB
 remains MIT. No schematic geometry, cell-level wire graph, generated RTL, or copied circuit
 implementation is stored here. The repository-local `scripts/index-dmg-schematics.py` reader emits
-only structural metadata, including sheet hierarchy and interface labels, and can reproduce the
-inventory:
+only structural metadata, including sheet hierarchy and interface labels. Set
+`DMG_SCHEMATICS_DIR` to the external checkout's location to reproduce the inventory:
 
 ```sh
-scripts/index-dmg-schematics.py /home/newton/dev/dmg-schematics --check
-scripts/index-dmg-schematics.py /home/newton/dev/dmg-schematics > /tmp/dmg-schematic-index.json
+scripts/index-dmg-schematics.py "$DMG_SCHEMATICS_DIR" --check
+scripts/index-dmg-schematics.py "$DMG_SCHEMATICS_DIR" > dmg-schematic-index.json
 ```
 
 Where this document cites SameBoy, the independent source is
