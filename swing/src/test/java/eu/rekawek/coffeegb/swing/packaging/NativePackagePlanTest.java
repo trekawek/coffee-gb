@@ -30,7 +30,7 @@ public class NativePackagePlanTest {
         assertEquals(app.toString(), jdeps.get(jdeps.size() - 1));
 
         plan.verifyJdepsModules(
-                "java.base,java.compiler,java.desktop,java.logging,java.management,java.prefs,"
+                "java.base,java.desktop,java.management,java.net.http,java.prefs,java.sql,"
                         + "jdk.unsupported");
         assertThrows(
                 IllegalArgumentException.class,
@@ -54,12 +54,14 @@ public class NativePackagePlanTest {
 
         plan.verifyLinkedModules(
                 "java.base@21\n"
-                        + "java.compiler@21\n"
                         + "java.datatransfer@21\n"
                         + "java.desktop@21\n"
                         + "java.logging@21\n"
                         + "java.management@21\n"
+                        + "java.net.http@21\n"
                         + "java.prefs@21\n"
+                        + "java.sql@21\n"
+                        + "java.transaction.xa@21\n"
                         + "java.xml@21\n"
                         + "jdk.crypto.ec@21\n"
                         + "jdk.unsupported@21\n");
