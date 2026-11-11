@@ -41,31 +41,33 @@ public final class NativePackageMetadata {
      */
     public static final List<String> RUNTIME_ROOT_MODULES = List.of(
             "java.base",
-            "java.compiler",
             "java.desktop",
-            "java.logging",
             "java.management",
+            "java.net.http",
             "java.prefs",
+            "java.sql",
             "jdk.crypto.ec",
             "jdk.unsupported");
 
     public static final Set<String> JDEPS_MODULES = Set.of(
             "java.base",
-            "java.compiler",
             "java.desktop",
-            "java.logging",
             "java.management",
+            "java.net.http",
             "java.prefs",
+            "java.sql",
             "jdk.unsupported");
 
     public static final Set<String> LINKED_RUNTIME_MODULES = Set.of(
             "java.base",
-            "java.compiler",
             "java.datatransfer",
             "java.desktop",
             "java.logging",
             "java.management",
+            "java.net.http",
             "java.prefs",
+            "java.sql",
+            "java.transaction.xa",
             "java.xml",
             "jdk.crypto.ec",
             "jdk.unsupported");

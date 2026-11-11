@@ -113,15 +113,15 @@ public class NativePackageMetadataTest {
         assertEquals(
                 Set.of(
                         "java.base",
-                        "java.compiler",
                         "java.desktop",
-                        "java.logging",
                         "java.management",
+                        "java.net.http",
                         "java.prefs",
+                        "java.sql",
                         "jdk.crypto.ec",
                         "jdk.unsupported"),
                 Set.copyOf(NativePackageMetadata.RUNTIME_ROOT_MODULES));
-        assertEquals(10, NativePackageMetadata.LINKED_RUNTIME_MODULES.size());
+        assertEquals(12, NativePackageMetadata.LINKED_RUNTIME_MODULES.size());
         assertTrue(
                 NativePackageMetadata.LINKED_RUNTIME_MODULES.containsAll(
                         NativePackageMetadata.RUNTIME_ROOT_MODULES));
