@@ -473,7 +473,7 @@ distributed through every hot state machine.
 
 ## Role of the DMG schematic and netlist
 
-The sibling `/home/newton/dev/dmg-schematics` checkout contains parsable cells/wires and can emit
+A `dmg-schematics` checkout contains parsable cells/wires and can emit
 SystemVerilog through `nlconv`. It is unusually useful, but it should not become a naively
 interpreted production core.
 

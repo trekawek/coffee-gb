@@ -37,7 +37,7 @@ public final class CommonMenuGalleryMain {
         }
 
         controller.setPage(new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB",
-                "1/3  /MNT/NAS/EMU/ROMS/GBC", "", "", List.of(), List.of(
+                "1/3  /GAMES/GBC", "", "", List.of(), List.of(
                         MenuPageSpec.Item.button("parent", "..", "", true),
                         MenuPageSpec.Item.button("directory", "FAVORITES/", "", true),
                         MenuPageSpec.Item.button("long-rom",

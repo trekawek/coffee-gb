@@ -94,10 +94,10 @@ Every executor must follow these rules:
 The harness is versioned on `master`. Invoke these scripts from the repository root of the checkout
 being measured.
 
-Use this exact ROM environment value:
+Set the ROM path to your local copy of Harry Potter and the Sorcerer's Stone:
 
 ```bash
-export HARRY_POTTER_ROM="/mnt/nas/emu/roms/gbc/H/Harry Potter and the Sorcerer's Stone (USA, Europe) (En,Fr,De,Es,It,Nl,Pt,Sv,No,Da,Fi).gbc"
+export HARRY_POTTER_ROM="path/to/harry-potter.gbc"
 ```
 
 Before editing a PR, record a short parent result:

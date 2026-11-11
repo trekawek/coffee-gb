@@ -1,5 +1,7 @@
 # Performance coverage implementation and validation
 
+Artifact names below identify historical local outputs; they are not repository files.
+
 Baseline: `b162c357422b4f277a5ec1f66a8d7f9aec695595`.
 The [original plan](performance-coverage-plan.md) records the pre-change audit;
 [the workload guide](performance-workload-coverage.md) describes the implemented APIs,
@@ -16,14 +18,14 @@ cap-63, the terminal FF40 retry hint, the combined GPU path, serial denial fallb
 safe-peek mapper path, and the LCDC poll-retry path; all new union test classes are installed in
 the tree. Full core validation is **3,180 passes with 8 existing skips**: **2,273 unit slots**
 (**2,265 passed + 8 skips**), plus **640 timing/graphics**, **54 Blargg** and **221 GBC hardware**
-passes. The union receipt `/tmp/coffee-gb-union-validation-prep-20260909/union-validation-receipt.json`
+passes. The union receipt `coffee-gb-union-validation-prep-20260909/union-validation-receipt.json`
 also records controller **978 slots / 2 skips**, CLI **42**, Swing **854 slots / 1 skip**, and
 **297 Android JVM passes**. The frozen source snapshot produced union APK `aad7ce01…` with
 profile `0bc7fef5…`; installation verification and arm64 ART `speed-profile` are recorded in
-`/tmp/coffee-gb-candidate-union-20260909/installed-verification.json`. DeviceOps completed
+`coffee-gb-candidate-union-20260909/installed-verification.json`. DeviceOps completed
 the three union-artifact short classifications (LCDC, OAM and STAT). Each is explicitly
 `INCONCLUSIVE_SHORT_DIAGNOSTIC` in
-`/tmp/coffee-gb-candidate-union-20260909/union-device-evidence-receipt.json`: the short
+`coffee-gb-candidate-union-20260909/union-device-evidence-receipt.json`: the short
 collector is diagnostic evidence, not sustained device acceptance. The long soak, strict M2,
 battery and gameplay gates remain separate.
 The installed `58cc3bf2…` artifact and isolated measurements below remain historical or
@@ -31,20 +33,20 @@ candidate-specific evidence.
 
 The final async ordinary-soak candidate passed **303/303** benchmark Android unit tests,
 `assembleBenchmark`, debug lint, and release Java compilation. The installed pair is APK
-`/tmp/coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.apk`
+`coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.apk`
 (SHA-256 `45e39a47…`) and same-stem API-31+ DM
-`/tmp/coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.dm`
+`coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.dm`
 (SHA-256 `b464ac36…`); the R8 mapping is `29a5196c…`. Final lineage and signature evidence are in
-`/tmp/coffee-gb-candidate-async-soak-20260909/final-validation-receipt.json` and
+`coffee-gb-candidate-async-soak-20260909/final-validation-receipt.json` and
 `final-deployment-handoff.json`; package/profile verification with arm64 `speed-profile` /
-`install-dm` is recorded in `/tmp/coffee-gb-device-handoff-20260909/package-final.txt`.
+`install-dm` is recorded in `coffee-gb-device-handoff-20260909/package-final.txt`.
 The root-reviewed `short-v2-after-55ish.log` contains 83 app-only samples, all fresh, drop-free
 and sequence-contiguous with ordered clocks and maximum snapshot age **4.053769 ms**. After its
 25 s warmup, the **57.466552311 s** app interval recorded **59.7216965693 FPS**,
 **48,004.4841619 Hz** consumed PCM, zero new underruns, and work-p95 row median/max
 **14.7670765/18.834154 ms**. The log has no paired SurfaceFlinger raw stream and is diagnostic
 only, not sustained acceptance; the root-reviewed classification is recorded in
-`/tmp/coffee-gb-device-handoff-20260909/short-v2-diagnostic-receipt.json`. The later `short-v2-final.log`
+`coffee-gb-device-handoff-20260909/short-v2-diagnostic-receipt.json`. The later `short-v2-final.log`
 contains the user-muted tail. Live ordinary collection requires
 `coffee-gb-soak-app-v2`; app-v1 remains an offline historical parser format. The collector rejects
 dropped, stale, incoherent, unavailable, or snapshots from a replaced generation and has no
@@ -57,7 +59,7 @@ current mute therefore defers canonical M2 audio certification.
 
 The final45e app-v2 LCDC ordinary soak used native CGB ×2, ordinary `PERFORMANCE`, visible
 presentation, priority 0 and hints off; it is complete and failed the sustained gate. Raw data is
-`/tmp/coffee-gb-lcdc-ordinary-soak-20260909.jsonl` (SHA-256
+`coffee-gb-lcdc-ordinary-soak-20260909.jsonl` (SHA-256
 `fdfc4ea580104b1d280be8679ec8c3fdb485359b82d0ad4ad08c3c2da13ac20c`); the authoritative parser
 overlap was **975.6705330255 s**, with **972** app samples that were fresh, drop-free and ordered.
 Its stable window covered app clock **379.644040..980.941129** (**601.301142497 s**) at
@@ -71,9 +73,9 @@ conditions and consecutive samples below 95% of native cadence. A burst from
 397.855–410.929 s contributed all +39 underruns, with four consecutive one-second FPS values
 **51.059/52.754/53.199/54.880**; no new underrun followed. This is an intermittent failure,
 not a constant below-native pattern, and does not justify relaxing the gate. The verified long-run
-receipt is `/tmp/coffee-gb-lcdc-ordinary-soak-20260909-receipt.json` (SHA-256
+receipt is `coffee-gb-lcdc-ordinary-soak-20260909-receipt.json` (SHA-256
 `0dd0d0e0cc6fdc5faf42ed71b14f8c749dafbe59909876daf70b98c1575ef3ee`), and the report is
-`/tmp/coffee-gb-lcdc-ordinary-soak-20260909-report.json` (SHA-256
+`coffee-gb-lcdc-ordinary-soak-20260909-report.json` (SHA-256
 `2c34e92613b986603b4a05636ce730bdee3e790f98bca2eb931e71d917d7db95`). The retained empty
 errors log contains no relevant ART, GC, runtime or audio errors for the interval, but cannot
 exclude GC or identify the burst cause.
@@ -86,7 +88,7 @@ baseline: **36 fresh JVMs**, **18 paired comparisons**, and **3 reversed pairs p
 assertions disabled. All semantic frame, tick, speed and clock-accounting contracts matched; epoch
 and bulk counters were intentionally excluded because the selected owners change those counters.
 The raw validation receipt is
-`/tmp/coffee-gb-union-catalogue-cost-run-20260909/result-validation.json`.
+`coffee-gb-union-catalogue-cost-run-20260909/result-validation.json`.
 
 | Opaque case | Profile | Candidate/control changes by reversed trial | Median | Reading |
 | --- | --- | --- | ---: | --- |
@@ -116,7 +118,7 @@ over-union changes were **−0.300% / +1.681% / −3.666%** (042, median **−0.
 **+2.717% / +1.829% / +0.102%** (063, median **+1.829%**). No repeatable greater-than-3%
 diagnostic tax appeared in these three rows; the erased-diagnostics overlay remains unselected and
 does not close every possible device-specific overhead question. Receipt:
-`/tmp/coffee-gb-union-erased-diagnostics-stage-20260909/result-validation.json`.
+`coffee-gb-union-erased-diagnostics-stage-20260909/result-validation.json`.
 
 ### Historical installed 58cc validation status
 
@@ -129,10 +131,10 @@ does not close every possible device-specific overhead question. Receipt:
 | Prior 5bf Controller/CLI/Swing evidence | Controller: **978** with 2 existing skips; CLI: **42**; Swing: **854** with 1 existing skip; no failures/errors; the current 2,255 core slots cover the new stack |
 | Android JVM suite | **297 passed**, 0 failures/errors/skips |
 
-The historical candidate is `/tmp/coffee-gb-candidate-terminal-retry-hint-20260909/candidate.apk`,
+The historical candidate is `coffee-gb-candidate-terminal-retry-hint-20260909/candidate.apk`,
 SHA-256 `58cc3bf2f47eb1aaf7b08bef63c16f7ec3900ca9641b5a60c5fa4e67ceade01d`, with matching API-35
 `.dm` and R8 mapping recorded in the private device receipt. Its historical source/APK mapping is
-recorded in `/tmp/coffee-gb-candidate-terminal-retry-hint-20260909/deployment.json`.
+recorded in `coffee-gb-candidate-terminal-retry-hint-20260909/deployment.json`.
 
 Long-warm controls cleared **13 of the 15 initial flags**. `SPEED_SWITCH/CGB` remained
 **+15.777% / +5.853%** in the persistent first observation, while `TIMER/CGB_X2` was
@@ -155,8 +157,8 @@ p95 values are the median and maximum of reported row p95 values, not a pooled f
 | STAT | 53.435195 s | 59.717196 | 59.689822 | 48,004.316 | +0 | 16.331462 / 20.525308 ms | inconclusive short diagnostic |
 
 The union short and long receipts are
-`/tmp/coffee-gb-candidate-union-20260909/union-device-evidence-receipt.json` and
-`/tmp/coffee-gb-candidate-union-20260909/lcdc-union-plugged-soak.jsonl`. The union LCDC soak ran
+`coffee-gb-candidate-union-20260909/union-device-evidence-receipt.json` and
+`coffee-gb-candidate-union-20260909/lcdc-union-plugged-soak.jsonl`. The union LCDC soak ran
 1167.144318 s and **failed** its 600 s stable gate. Its stable window measured **59.711467 FPS**,
 **47,985.474 Hz** audio playback, native ratio **0.9997096**, presented ratio **0.9997352**,
 rolling ten-second minimum **0.9885526**, and **+14** stable-window underruns (absolute audio
@@ -174,8 +176,8 @@ by one 779.293–786.362 s burst contributing **+81**. The collector's 59.727500
 the native target, not the measured result. The soak recorded six long presentation gaps, 144
 pacing-debt samples and a 33.479384 ms maximum reported row p95. It establishes no sustained
 acceptance; the raw receipt and read-only burst analysis are
-`/tmp/coffee-gb-candidate-terminal-retry-hint-20260909/long-device-evidence-receipt.json` and
-`/tmp/coffee-gb-candidate-terminal-retry-hint-20260909/lcdc-soak-analysis-20260909.md`.
+`coffee-gb-candidate-terminal-retry-hint-20260909/long-device-evidence-receipt.json` and
+`coffee-gb-candidate-terminal-retry-hint-20260909/lcdc-soak-analysis-20260909.md`.
 
 A second sidecar-instrumented LCDC USB soak on the same historical 58cc candidate ran
 1209.475691 s and also **failed** its 600 s stable gate. Its final collector stable
@@ -185,10 +187,10 @@ and `headroomRisk=true`. Rendered and submitted frame ratios were 1.0 relative t
 the native frames produced by the app; there were no presentation long gaps or
 compositor drops. It provides diagnostic context only and establishes no sustained
 acceptance. The immutable raw receipt is
-`/tmp/coffee-gb-final-soak-sidecar-run-20260909-58cc-v1/final-receipt.json`
+`coffee-gb-final-soak-sidecar-run-20260909-58cc-v1/final-receipt.json`
 (SHA-256 `8c6b022398a5e1e387961797ef62a62c7cb8fec65422941d7dc55f80b7f79d46`);
 the corrected burst-boundary erratum is
-`/tmp/coffee-gb-final-soak-sidecar-run-20260909-58cc-v1/erratum-burst-boundary-v1.json`
+`coffee-gb-final-soak-sidecar-run-20260909-58cc-v1/erratum-burst-boundary-v1.json`
 (SHA-256 `b169de93b3a78843eeba46b5874d73cdabd24f6e398c84f462c20de180755c82`).
 
 ### Profile and stall-context review
@@ -196,7 +198,7 @@ the corrected burst-boundary erratum is
 A 20 s simpleperf profile of historical 58cc used the ordinary visible LCDC scene and
 `PERFORMANCE`, native CGB x2, priority 0, hints off and volume 8/unmuted. The raw profile and
 mapped controller reports are retained under
-`/tmp/coffee-gb-terminal-retry-hint-simpleperf-20260909/`; the receipt is
+`coffee-gb-terminal-retry-hint-simpleperf-20260909/`; the receipt is
 `simpleperf-receipt.json`. Controller-normalized mapped self attribution led with
 `Gameboy.tryPerformanceEpochOrDetailedReplay` **8.57%**,
 `Cpu.tickPerformanceEpochInstructionPipelineAtMachineCycle` **7.69%**, and `Gpu.tick` **6.24%**;
@@ -248,8 +250,8 @@ Barcode DMG (median **−33.137%**) and **−19.450%**, **−14.175%** and **−
 Barcode CGB ×2 (median **−16.281%**), with the same 134,217,728/33,554,432 tick windows.
 All paired rows returned with exact structural tick/frame/state contracts. The finite workload sends
 one scan and then measures quiet completion; it is not a sustained scan-cost claim. Receipts are
-`/tmp/coffee-gb-serial-denied-scalar-fallback-cost-prep-20260909/cost-run/result-summary.json` and
-`/tmp/coffee-gb-serial-denied-scalar-fallback-finite-cost-prep-20260909/cost-run/result-summary.json`.
+`coffee-gb-serial-denied-scalar-fallback-cost-prep-20260909/cost-run/result-summary.json` and
+`coffee-gb-serial-denied-scalar-fallback-finite-cost-prep-20260909/cost-run/result-summary.json`.
 These are isolated fallback-overlay values and do not establish the frozen union's cost.
 
 ### Sachen safe peek
@@ -267,8 +269,8 @@ and its two memento/state nested classes. It then ran three reversed pairs again
 the other accounting fields. Overlay/control host-time changes were **−0.509%**, **−10.410%** and
 **−11.332%**; the median was **−10.410%**. Epoch counts changed from 1,806,012 to 1,487,099 and
 must not be treated as an invariant. Receipts are
-`/tmp/coffee-gb-sachen-peek-stage-20260909/validation-20260909a/sachen-proof-receipt.json` and
-`/tmp/coffee-gb-sachen-case010-cost-run-20260909/cost-validation-receipt.json`.
+`coffee-gb-sachen-peek-stage-20260909/validation-20260909a/sachen-proof-receipt.json` and
+`coffee-gb-sachen-case010-cost-run-20260909/cost-validation-receipt.json`.
 This is an isolated mapper-overlay result, not a final union measurement.
 
 ### LCDC poll retry
@@ -282,22 +284,22 @@ candidate/control changes by fork were **−3.703%**, **−6.544%** and **+2.217
 **−3.703%**); CPU control changes were **−2.346%**, **−1.124%** and **+3.104%** (median
 **−1.124%**). Tick accounting matched in every window, while LCDC replay counters were allowed
 to change by design. The cost receipt is
-`/tmp/coffee-gb-lcdc-poll-retry-cost-run-20260909-v2/final-cost-receipt-v1.json`; focused and
+`coffee-gb-lcdc-poll-retry-cost-run-20260909-v2/final-cost-receipt-v1.json`; focused and
 untimed proof details are in
-`/tmp/coffee-gb-lcdc-poll-retry-stage-20260909/validation-receipt-v3.json`.
+`coffee-gb-lcdc-poll-retry-stage-20260909/validation-receipt-v3.json`.
 These are candidate-stage measurements and do not certify the frozen union.
 
 ### Original b162 scalar/batched attribution
 
 A clean original-b162 case-010 oracle was run with the exact CGB FAST_FORWARD/input protocol. Its
-execution classpath used `/tmp/coffee-gb-performance-baseline/core/target/classes`, rather than the
+execution classpath used `coffee-gb-performance-baseline/core/target/classes`, rather than the
 separate immutable snapshot directory; all 774 class hashes were independently verified against
 that snapshot before and after execution. The scalar `runTicksUntilStop` path and batched
 `runTicks` path already diverged at the warmup full-state comparison at
 `soundMemento.allModeMementos[0].freqDivider`. The process returned 1, the measured window never
 started, and no state field was normalized or excluded. This is preexisting b162 behavior, not a
 candidate cost result. The path-only receipt is
-`/tmp/coffee-gb-b162-case010-scalar-batched-stage-20260909/execution-20260909/execution-receipt.json`.
+`coffee-gb-b162-case010-scalar-batched-stage-20260909/execution-20260909/execution-receipt.json`.
 
 ## Implemented coverage
 
@@ -461,9 +463,9 @@ current/previous-dot Timer read contract is accepted; other bus transactions and
 machine state remain compared. The portable 39-case runner and separate 60-case polling
 manifest are checked by the combined 24-test Python suite. The four separate host matrices
 then executed 126 cases × 3 trials with matching frame and diagnostic accounting. The immutable
-run receipt is `/tmp/coffee-gb-retained-fence-stage.uRQeLT/final-host-matrix/four-matrix-run-receipt.json`;
+run receipt is `coffee-gb-retained-fence-stage.uRQeLT/final-host-matrix/four-matrix-run-receipt.json`;
 the stale preparation flag is corrected by
-`/tmp/coffee-gb-device-coverage-review-20260908/host-matrix-execution-erratum.json`. Long
+`coffee-gb-device-coverage-review-20260908/host-matrix-execution-erratum.json`. Long
 controls have run: 13 of the 15 initial flags cleared. The subsequent three-variant speed
 controls did not reproduce a stable tax, while the latest selected Timer controls were mixed;
 these remaining timer/CPU controls stay unselected pending attribution. Results apply to the
@@ -481,9 +483,9 @@ complete.
 The selected-source host comparison has executed the four separate 39/60/15/12 matrices:
 126 cases × 3 trials, with separate alternated baseline/candidate JVMs, warmup before timing,
 and matching frame and diagnostic accounting. The receipt is
-`/tmp/coffee-gb-retained-fence-stage.uRQeLT/final-host-matrix/four-matrix-run-receipt.json`,
+`coffee-gb-retained-fence-stage.uRQeLT/final-host-matrix/four-matrix-run-receipt.json`,
 with execution bookkeeping corrected by
-`/tmp/coffee-gb-device-coverage-review-20260908/host-matrix-execution-erratum.json`.
+`coffee-gb-device-coverage-review-20260908/host-matrix-execution-erratum.json`.
 The approved longer paired controls have run and cleared 13 of the 15 initial flags. The later
 three-variant speed controls did not reproduce a stable tax; the latest selected Timer controls
 were **+3.845% / +1.913%** and mixed, and the timer/CPU controls do not favor the overlay. Any
@@ -1105,25 +1107,25 @@ consumption, faults, work headroom and power conditions.
 The union source is integrated and frozen, and full core validation is complete at **3,180 passes
 with 8 existing skips**: **2,273 unit slots** (**2,265 passed + 8 skips**), plus **640
 timing/graphics**, **54 Blargg** and **221 GBC hardware** passes. The union validation receipt
-`/tmp/coffee-gb-union-validation-prep-20260909/union-validation-receipt.json` verifies the frozen
+`coffee-gb-union-validation-prep-20260909/union-validation-receipt.json` verifies the frozen
 source snapshot, core class set and union APK `aad7ce01…` with profile `0bc7fef5…`; the
 installation verification and arm64 ART `speed-profile` record are retained at
-`/tmp/coffee-gb-candidate-union-20260909/installed-verification.json`. The authoritative DeviceOps
+`coffee-gb-candidate-union-20260909/installed-verification.json`. The authoritative DeviceOps
 receipt classifies the LCDC, OAM and STAT short checks **INCONCLUSIVE_SHORT_DIAGNOSTIC**; the long
 union soak failed and no sustained device acceptance is claimed. The installed 58cc artifact and
 its short/soak data are historical.
 
 The final async ordinary-soak candidate passed **303/303** benchmark Android unit tests,
 `assembleBenchmark`, debug lint and release Java compilation. Its staged install pair is
-`/tmp/coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.apk`
+`coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.apk`
 (SHA-256 `45e39a47…`) and same-stem API-31+ DM
-`/tmp/coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.dm`
+`coffee-gb-candidate-async-soak-20260909/artifacts-final/app-benchmark-async-final.dm`
 (SHA-256 `b464ac36…`), with R8 mapping `29a5196c…`. It was installed and verified with arm64
 `speed-profile` / `install-dm`; the package receipt is
-`/tmp/coffee-gb-device-handoff-20260909/package-final.txt`. The root-reviewed app-v2 short
+`coffee-gb-device-handoff-20260909/package-final.txt`. The root-reviewed app-v2 short
 diagnostic is recorded above; no sustained ordinary, battery, or M2 gate is claimed. The final
 source/build/signature receipt is
-`/tmp/coffee-gb-candidate-async-soak-20260909/final-validation-receipt.json`; live collection
+`coffee-gb-candidate-async-soak-20260909/final-validation-receipt.json`; live collection
 requires app-v2 asynchronous telemetry, while app-v1 remains an offline historical parser format.
 
 The current soak collector reports thermal status and sensor means, work p95/max and
@@ -1141,10 +1143,10 @@ of host-clock span), observed app cadence was **59.727303659 FPS** (native ratio
 Rendered/submitted ratios were 1, presented ratio **1.00000639144162**, and there were zero
 suppressed frames, compositor drops, long gaps, or new underruns across the run. Thermal delta was
 **[0.0, −0.1166666667] °C**, with `headroomRisk=true`. Raw app/device data is
-`/tmp/coffee-gb-commercial-usb-soak-v2-20260909.jsonl` (SHA-256
+`coffee-gb-commercial-usb-soak-v2-20260909.jsonl` (SHA-256
 `66825216e67c50511b751ccfb2399e720c7908d75102d026e400496eab44e24c`); the input and orchestration
-timelines are `/tmp/coffee-gb-commercial-usb-input-v2-20260909.jsonl` and
-`/tmp/coffee-gb-commercial-usb-orchestration-v2-20260909.jsonl`. This is plugged diagnostic
+timelines are `coffee-gb-commercial-usb-input-v2-20260909.jsonl` and
+`coffee-gb-commercial-usb-orchestration-v2-20260909.jsonl`. This is plugged diagnostic
 evidence: it does not certify audible playback; the battery result is recorded separately below.
 
 A final45e commercial battery v3 ordinary-gameplay capture used actual unplugged power with the
@@ -1159,20 +1161,20 @@ Native ratio was **0.999999061609**, rolling minimum **0.999615423816**, present
 compositor drops, long gaps, pacing-debt samples, or new underruns in the whole and stable runs.
 Thermal delta was
 **[1.0, 0.95] °C**, with `headroomRisk=true`. Raw app/device data is
-`/tmp/coffee-gb-commercial-battery-soak-v3-20260909.jsonl` (SHA-256
+`coffee-gb-commercial-battery-soak-v3-20260909.jsonl` (SHA-256
 `574afef27e684744026991530b3560cd4ec792c8093393a1b2ea4d3c34e5e88c`); input and orchestration
-timelines are `/tmp/coffee-gb-commercial-battery-input-v3-20260909.jsonl` and
-`/tmp/coffee-gb-commercial-battery-orchestration-v3-20260909.jsonl`. This is valid unplugged
+timelines are `coffee-gb-commercial-battery-input-v3-20260909.jsonl` and
+`coffee-gb-commercial-battery-orchestration-v3-20260909.jsonl`. This is valid unplugged
 cadence/PCM evidence for the run, but it does not certify audible playback. The earlier battery v2
 setup remains an inconclusive missing-live-work attempt, and the earlier short USB setup remains a
 separate inconclusive setup record; neither is cadence evidence. Full audible, canonical M2, and
 broader validation remain open.
 
-The final operator receipt is `/tmp/coffee-gb-commercial-validation-receipt-20260909.json`
+The final operator receipt is `coffee-gb-commercial-validation-receipt-20260909.json`
 (SHA-256 `0e69a9c0446fd077f06ecfd26c825ffd2d10941cf2abc1fc958e5725edbe465c`), with child USB
-receipt `/tmp/coffee-gb-commercial-usb-soak-receipt-20260909.json` (SHA-256
+receipt `coffee-gb-commercial-usb-soak-receipt-20260909.json` (SHA-256
 `8333682a08290d816ac8032d2b060233b6760d79dd46d751bf5aefe660d600cc`) and battery receipt
-`/tmp/coffee-gb-commercial-battery-soak-receipt-20260909.json` (SHA-256
+`coffee-gb-commercial-battery-soak-receipt-20260909.json` (SHA-256
 `f355b4e77a6ec782bf009d2b321d4b54a57f57cc53c3475a43d19d01cd7578a8`). It verifies restoration of
 the original 60,000 ms screen timeout after the temporary 1,800,000 ms setup value, muted system
 audio, 96% battery after the run, released inputs, no remaining helper/collector processes, and
@@ -1184,7 +1186,7 @@ cleanup: at 12:28:17 local time, a redundant soak-off intent while the phone was
 triggered `BackgroundServiceStartNotAllowedException` in `MainActivity.onStart` through
 `EmulationService.start`; PID 13713 died; Coffee GB was no longer running and the launcher was
 foregrounded. The separate erratum is
-`/tmp/coffee-gb-device-handoff-20260909/post-cleanup-exit-erratum-20260909.json`.
+`coffee-gb-device-handoff-20260909/post-cleanup-exit-erratum-20260909.json`.
 The service-start path is unchanged from b162; the current diff only adds soak fields and intent
 handling. This incident was outside both captures and did not affect their raw data or cadence
 windows. The collector already disables itself on exit; do not repeat cleanup `am start` once the
